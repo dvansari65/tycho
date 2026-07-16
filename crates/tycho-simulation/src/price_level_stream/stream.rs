@@ -127,9 +127,10 @@ impl PriceLevelStreamBuilder {
     /// long as the stream is polled; it never terminates on its own, and dropping the stream
     /// closes the connection. Frames that contain no served pAMM produce no update.
     ///
-    /// Each streamed frame is a complete snapshot per pAMM, so every update carries the full set
-    /// of that frame's pair states, with `new_pairs` / `removed_pairs` derived by diffing against
-    /// the previously emitted snapshot of the same pAMM. Pairs whose tokens are missing from the
+    /// Each streamed frame is a complete snapshot of everything Titan currently streams, so
+    /// every update carries the full set of the frame's pair states, with `new_pairs` /
+    /// `removed_pairs` derived by diffing against the previous frame — a pair (or a whole
+    /// venue) the stream stops serving is removed. Pairs whose tokens are missing from the
     /// provided token metadata are skipped.
     pub fn build(self) -> impl Stream<Item = Update> + Send {
         let url = self
@@ -142,17 +143,19 @@ impl PriceLevelStreamBuilder {
     }
 }
 
-/// Turns Titan frames into [`Update`]s, tracking each pAMM's previously emitted components so
-/// pair additions and removals can be diffed against the last snapshot.
+/// Turns Titan frames into [`Update`]s, tracking the previously emitted components so pair
+/// additions and removals can be diffed against the last snapshot.
 struct SnapshotTracker {
     registry: HashMap<Bytes, PriceLevelStreamConfig>,
     tokens: HashMap<Bytes, Token>,
     /// Whether frames from pAMMs absent from the registry get an address-named configuration
     /// synthesized (and cached in the registry) instead of being skipped.
     auto_detect: bool,
-    /// Components of the last emitted snapshot, per pAMM address. Kept per pAMM because a frame
-    /// only has snapshot semantics for the pAMMs it contains.
-    components: HashMap<Bytes, HashMap<String, ProtocolComponent>>,
+    /// Components of the last emitted snapshot, across all pAMMs. A frame is a complete
+    /// snapshot of everything Titan currently streams, so removals are diffed globally: a
+    /// known component a frame does not re-emit is gone — including when its venue vanishes
+    /// from the stream entirely.
+    components: HashMap<String, ProtocolComponent>,
 }
 
 impl SnapshotTracker {
@@ -169,7 +172,9 @@ impl SnapshotTracker {
     fn process(&mut self, message: TitanPriceLevelMessage) -> Option<Update> {
         let mut states: HashMap<String, Box<dyn ProtocolSim>> = HashMap::new();
         let mut new_pairs = HashMap::new();
-        let mut removed_pairs = HashMap::new();
+        // The frame is a complete snapshot: every known component is presumed gone until the
+        // frame re-emits it below.
+        let mut previous = std::mem::take(&mut self.components);
 
         for TitanPammLevels { pamm, pairs } in message.pamms {
             let config = match self.registry.entry(pamm.clone()) {
@@ -211,11 +216,6 @@ impl SnapshotTracker {
                 }
             }
 
-            let mut previous = self
-                .components
-                .remove(&pamm)
-                .unwrap_or_default();
-            let mut current = HashMap::with_capacity(merged_pairs.len());
             for ((token0, token1), (quotes_0_to_1, quotes_1_to_0)) in merged_pairs {
                 let id = component_id(&config.address, &token0, &token1);
                 let id_string = id.to_string();
@@ -236,14 +236,14 @@ impl SnapshotTracker {
                 );
 
                 states.insert(id_string.clone(), Box::new(state));
-                current.insert(id_string, component);
+                self.components
+                    .insert(id_string, component);
             }
-
-            // This frame is the pAMM's complete snapshot, and every re-emitted pair was moved
-            // into `current` above — whatever remains is gone.
-            removed_pairs.extend(previous);
-            self.components.insert(pamm, current);
         }
+
+        // Every re-emitted pair was moved back into `self.components` above — whatever remains
+        // is gone: the pair, or its whole venue, is no longer streamed.
+        let removed_pairs = previous;
 
         if states.is_empty() && new_pairs.is_empty() && removed_pairs.is_empty() {
             return None;
@@ -440,6 +440,39 @@ mod tests {
             .contains_key(&expected_id()));
         assert_eq!(update.new_pairs.len(), 1);
         assert_eq!(update.states.len(), 1);
+    }
+
+    #[test]
+    fn vanished_pamm_has_its_pairs_removed() {
+        let mut tracker = tracker();
+        tracker
+            .process(message(100, wbtc_usdc_pairs()))
+            .expect("update expected");
+
+        // The next frame no longer contains the pAMM at all: a complete snapshot without a
+        // venue means the venue is gone, pairs and all.
+        let update = tracker
+            .process(TitanPriceLevelMessage { block_number: 101, pamms: vec![] })
+            .expect("update expected");
+        assert!(update.states.is_empty());
+        assert!(update.new_pairs.is_empty());
+        assert_eq!(update.removed_pairs.len(), 1);
+        assert!(update
+            .removed_pairs
+            .contains_key(&expected_id()));
+
+        // Nothing served and nothing changed: no update.
+        assert!(tracker
+            .process(TitanPriceLevelMessage { block_number: 102, pamms: vec![] })
+            .is_none());
+
+        // A venue that reappears is a new pair again.
+        let update = tracker
+            .process(message(103, wbtc_usdc_pairs()))
+            .expect("update expected");
+        assert!(update
+            .new_pairs
+            .contains_key(&expected_id()));
     }
 
     #[test]
