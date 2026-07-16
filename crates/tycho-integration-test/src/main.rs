@@ -29,10 +29,9 @@ use tracing::{debug, error, info, warn};
 use tracing_subscriber::EnvFilter;
 use tycho_client::feed::SynchronizerState;
 use tycho_common::{simulation::protocol_sim::ProtocolSim, Bytes};
-use tycho_execution::encoding::evm::get_router_address;
+use tycho_execution::encoding::evm::{get_router_address, PRICE_LEVEL_STREAM_PREFIX};
 use tycho_simulation::{
     evm::protocol::cowamm::constants::PROTOCOL_SYSTEM as COWAMM_PROTOCOL_SYSTEM,
-    price_level_stream::config::PRICE_LEVEL_STREAM_PREFIX,
     protocol::models::ProtocolComponent,
     rfq::protocols::{
         hashflow::{client::HashflowClient, state::HashflowState},

@@ -3,13 +3,13 @@ use std::str::FromStr;
 use num_bigint::BigUint;
 use tycho_common::Bytes;
 
-/// Protocol system prefix identifying components sourced from the pAMM price level stream.
+/// Protocol system family name of components sourced from the pAMM price level stream.
 ///
 /// The full protocol system of a component is `pricelevelstream:{pamm}`, where `{pamm}` is the
 /// configured venue name (e.g. `pricelevelstream:fermiswap`) or, for auto-detected venues, the
 /// venue address (e.g. `pricelevelstream:0x5979…`); see the [module documentation](super) for
 /// details.
-pub const PRICE_LEVEL_STREAM_PREFIX: &str = "pricelevelstream";
+pub const PRICE_LEVEL_STREAM_FAMILY: &str = "pricelevelstream";
 
 /// Configuration of a single pAMM to be served from the price level stream.
 #[derive(Debug, Clone)]
@@ -37,7 +37,7 @@ impl PriceLevelStreamConfig {
 
     /// The protocol system identifier of components emitted for this pAMM.
     pub fn protocol_system(&self) -> String {
-        format!("{PRICE_LEVEL_STREAM_PREFIX}:{}", self.protocol)
+        format!("{PRICE_LEVEL_STREAM_FAMILY}:{}", self.protocol)
     }
 }
 
