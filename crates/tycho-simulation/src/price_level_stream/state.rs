@@ -87,7 +87,7 @@ impl PriceLevelStreamState {
     ///
     /// Callers must ensure `amount_in` lies within the quoted range (smallest to largest
     /// `amount_in`) — the ladder holds no information outside of it.
-    fn interpolate(quotes: &[PriceLevelStreamQuote], amount_in: &BigUint) -> BigUint {
+    fn interpolate(&self, quotes: &[PriceLevelStreamQuote], amount_in: &BigUint) -> BigUint {
         // First quote with amount_in >= the requested amount; the caller-guaranteed range makes
         // both it and (when needed) its predecessor exist.
         let idx = quotes.partition_point(|quote| &quote.amount_in < amount_in);
@@ -96,12 +96,23 @@ impl PriceLevelStreamState {
             return upper.amount_out.clone();
         }
         let lower = &quotes[idx - 1];
-        // A ladder should be monotonically increasing in amount_out; if a stream glitch breaks
-        // that, fall back to the lower quote instead of underflowing.
         let Some(out_span) = upper
             .amount_out
             .checked_sub(&lower.amount_out)
         else {
+            // A ladder should be monotonically increasing in amount_out; a violation means the
+            // stream data is unreliable. Serve the lower quote instead of underflowing, but warn.
+            tracing::warn!(
+                token0 = %self.token0,
+                token1 = %self.token1,
+                %amount_in,
+                lower_amount_in = %lower.amount_in,
+                lower_amount_out = %lower.amount_out,
+                upper_amount_in = %upper.amount_in,
+                upper_amount_out = %upper.amount_out,
+                "Quote ladder is not monotonically increasing in amount_out; falling back to \
+                 the lower quote"
+            );
             return lower.amount_out.clone();
         };
         let in_span = &upper.amount_in - &lower.amount_in;
@@ -188,7 +199,7 @@ impl ProtocolSim for PriceLevelStreamState {
             ));
         }
         Ok(GetAmountOutResult {
-            amount: Self::interpolate(quotes, &amount_in),
+            amount: self.interpolate(quotes, &amount_in),
             gas: self.gas_cost.clone(),
             new_state: self.consumed(),
         })
