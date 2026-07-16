@@ -713,7 +713,7 @@ async fn refresh_token_prices(chain: Chain, prices: SharedTokenPrices, interval:
 }
 
 /// Waits until the RPC has reached `target_block` and returns exactly that block, or `None` if
-/// the chain doesn't reach it within `max_attempts`.
+/// the RPC doesn't serve it within `max_attempts`.
 ///
 /// Unlike [`poll_rpc_for_block`], an RPC that has already moved past the target is not treated
 /// as stale: the target block is fetched by number, since the caller wants to simulate at that
@@ -734,12 +734,15 @@ async fn await_target_block(
                 return Some(latest);
             }
             if latest.header.number > target_block {
-                return rpc_tools
+                // A transient error on this by-number fetch must not drop the update; keep
+                // polling with the remaining attempts instead.
+                if let Ok(Some(target)) = rpc_tools
                     .provider
                     .get_block_by_number(BlockNumberOrTag::Number(target_block))
                     .await
-                    .ok()
-                    .flatten();
+                {
+                    return Some(target);
+                }
             }
         }
         tokio::time::sleep(poll_interval).await;
