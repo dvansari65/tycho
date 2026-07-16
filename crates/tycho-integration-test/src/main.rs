@@ -410,9 +410,11 @@ async fn run(cli: Cli) -> miette::Result<()> {
         }
 
         tokio::select! {
-            // Monitor protocol stream termination
+            // Monitor protocol stream termination. The handles are awaited by reference: the
+            // select futures are recreated (and the losers dropped) every iteration, so taking
+            // the handle out would detach the task and disable this arm after one poll.
             result = async {
-                if let Some(handle) = protocol_handle.take() {
+                if let Some(handle) = protocol_handle.as_mut() {
                     handle.await
                 } else {
                     std::future::pending().await
@@ -432,20 +434,19 @@ async fn run(cli: Cli) -> miette::Result<()> {
 
             // Monitor RFQ stream termination
             result = async {
-                if let Some(handle) = rfq_handle.take() {
+                if let Some(handle) = rfq_handle.as_mut() {
                     handle.await
                 } else {
                     std::future::pending().await
                 }
             }, if rfq_handle.is_some() => {
+                rfq_handle = None;
                 match result {
                     Ok(()) => {
                         warn!("RFQ stream terminated");
-                        // rfq_handle is already None due to take()
                     }
                     Err(e) => {
                         warn!("RFQ stream panicked: {:?}", e);
-                        // rfq_handle is already None due to take()
                     }
                 }
             }
