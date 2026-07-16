@@ -133,6 +133,18 @@ impl PriceLevelStreamBuilder {
     /// venue) the stream stops serving is removed. Pairs whose tokens are missing from the
     /// provided token metadata are skipped.
     pub fn build(self) -> impl Stream<Item = Update> + Send {
+        if self.registry.is_empty() && !self.auto_detect {
+            tracing::warn!(
+                "No pAMMs registered and auto-detection is off; the stream will never produce \
+                 an update"
+            );
+        }
+        if self.tokens.is_empty() {
+            tracing::warn!(
+                "No token metadata provided; every streamed pair will be skipped and the stream \
+                 will never produce an update"
+            );
+        }
         let url = self
             .url
             .clone()
