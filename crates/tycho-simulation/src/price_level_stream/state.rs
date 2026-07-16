@@ -333,6 +333,23 @@ mod tests {
     }
 
     #[test]
+    fn get_amount_out_on_glitched_ladder_falls_back_to_lower_quote() {
+        // A ladder that is not monotonically increasing in amount_out (a stream glitch):
+        // interpolation must fall back to the lower quote instead of underflowing.
+        let state = PriceLevelStreamState::new(
+            wbtc().address,
+            usdc().address,
+            vec![quote(100, 200), quote(200, 150)],
+            vec![],
+            BigUint::ZERO,
+        );
+        let result = state
+            .get_amount_out(BigUint::from(150u64), &wbtc(), &usdc())
+            .unwrap();
+        assert_eq!(result.amount, BigUint::from(200u64));
+    }
+
+    #[test]
     fn get_amount_out_below_smallest_level_is_rejected() {
         // The ladder holds no information below its smallest quote, and there is no partial
         // result to offer.
