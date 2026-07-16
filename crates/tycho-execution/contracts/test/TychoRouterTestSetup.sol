@@ -15,6 +15,7 @@ import {
 } from "../src/executors/LiquidityPartyExecutor.sol";
 import {HashflowExecutor} from "../src/executors/HashflowExecutor.sol";
 import {MaverickV2Executor} from "../src/executors/MaverickV2Executor.sol";
+import {PropAMMExecutor} from "../src/executors/PropAMMExecutor.sol";
 import {UniswapV2Executor} from "../src/executors/UniswapV2Executor.sol";
 import {
     UniswapV3Executor,
@@ -127,6 +128,7 @@ contract TychoRouterTestSetup is
     FermiSwapExecutor public fermiSwapExecutor;
     MetricExecutor public metricExecutor;
     BopAMMExecutor public bopAMMExecutor;
+    PropAMMExecutor public propAMMExecutor;
 
     FeeCalculator feeCalculator;
     address routerFeeReceiver;
@@ -247,8 +249,9 @@ contract TychoRouterTestSetup is
         fermiSwapExecutor = new FermiSwapExecutor(FERMI_SWAPPER);
         metricExecutor = new MetricExecutor(METRIC_ORACLE);
         bopAMMExecutor = new BopAMMExecutor(BOPAMM_SETTLEMENT);
+        propAMMExecutor = new PropAMMExecutor();
 
-        address[] memory executors = new address[](24);
+        address[] memory executors = new address[](25);
         executors[0] = address(usv2Executor);
         executors[1] = address(usv3Executor);
         executors[2] = address(pancakev3Executor);
@@ -273,6 +276,7 @@ contract TychoRouterTestSetup is
         executors[21] = address(fermiSwapExecutor);
         executors[22] = address(metricExecutor);
         executors[23] = address(bopAMMExecutor);
+        executors[24] = address(propAMMExecutor);
         return executors;
     }
 

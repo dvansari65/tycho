@@ -17,6 +17,7 @@ mod lunarbase;
 mod maverick_v2;
 mod metric;
 mod native_wrap;
+mod propamm;
 mod rocketpool;
 mod slipstreams;
 pub mod swap_encoder_registry;
