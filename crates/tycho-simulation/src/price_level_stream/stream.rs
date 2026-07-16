@@ -147,7 +147,6 @@ impl PriceLevelStreamBuilder {
         }
         let url = self
             .url
-            .clone()
             .unwrap_or_else(|| TITAN_PRICE_LEVEL_URL.to_string());
         let mut tracker = SnapshotTracker::new(self.registry, self.tokens, self.auto_detect);
 
