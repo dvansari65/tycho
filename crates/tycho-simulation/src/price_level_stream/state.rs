@@ -171,8 +171,19 @@ impl ProtocolSim for PriceLevelStreamState {
         let (Some(first), Some(last)) = (quotes.first(), quotes.last()) else {
             return Err(SimulationError::RecoverableError("No liquidity available".to_string()));
         };
-        // Below the smallest quote the maker's willingness to fill is unknown — scaling the
-        // smallest quote down would fabricate a price — so there is no partial result either.
+        // Below the smallest quote nothing is served. The venue itself could still fill —
+        // FermiSwap was observed quoting below the smallest streamed level — but if so, on its
+        // own price curve, which the ladder holds no information about: unlike interpolation
+        // between two quoted levels, whose result is bracketed by genuine samples on both
+        // sides, extrapolating linearly from (0, 0) like Titan's quote API does is an unbounded
+        // guess even off a healthy ladder. (0, 0) is an assumption, not a sample, and the
+        // bottom of that line is not even fillable: FermiSwap reverts below a venue-side
+        // minimum (~$0.02 at the time of measurement) where the API keeps quoting. And a
+        // malformed ladder turns the guess absurd: on FermiSwap's flat cbBTC-input books
+        // (18-decimals grid bug) the smallest quote is the venue's depth clamp, not a price
+        // sample, and the extrapolated quotes land ~3e6x below the venue's own (measured
+        // 2026-07). All the rejection gives up are trades smaller than the first level —
+        // ~$10-30 on healthy ladders, negligible for routing. Hence no partial result either.
         if amount_in < first.amount_in {
             return Err(SimulationError::InvalidInput(
                 format!(
