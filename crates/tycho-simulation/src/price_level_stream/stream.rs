@@ -130,8 +130,9 @@ impl PriceLevelStreamBuilder {
     /// Each streamed frame is a complete snapshot of everything Titan currently streams, so
     /// every update carries the full set of the frame's pair states, with `new_pairs` /
     /// `removed_pairs` derived by diffing against the previous frame — a pair (or a whole
-    /// venue) the stream stops serving is removed. Pairs whose tokens are missing from the
-    /// provided token metadata are skipped.
+    /// venue) the stream stops serving is removed. Frames older than an already processed one
+    /// are skipped, so updates never move backwards in block number. Pairs whose tokens are
+    /// missing from the provided token metadata are skipped.
     pub fn build(self) -> impl Stream<Item = Update> + Send {
         if self.registry.is_empty() && !self.auto_detect {
             tracing::warn!(
@@ -167,6 +168,10 @@ struct SnapshotTracker {
     /// known component a frame does not re-emit is gone — including when its venue vanishes
     /// from the stream entirely.
     components: HashMap<String, ProtocolComponent>,
+    /// The newest block number processed so far. Frames targeting an older block (e.g.
+    /// delivered around a reconnect) are stale and skipped wholesale — processing one would
+    /// emit superseded states and churn the global diff.
+    newest_block: u64,
 }
 
 impl SnapshotTracker {
@@ -175,12 +180,23 @@ impl SnapshotTracker {
         tokens: HashMap<Bytes, Token>,
         auto_detect: bool,
     ) -> Self {
-        Self { registry, tokens, auto_detect, components: HashMap::new() }
+        Self { registry, tokens, auto_detect, components: HashMap::new(), newest_block: 0 }
     }
 
-    /// Processes one frame into an [`Update`], or `None` if the frame contains nothing relevant
-    /// (no registered pAMM with at least one known pair or a pair removal).
+    /// Processes one frame into an [`Update`], or `None` if the frame targets an older block
+    /// than an already processed one or contains nothing relevant (no registered pAMM with at
+    /// least one known pair or a pair removal).
     fn process(&mut self, message: TitanPriceLevelMessage) -> Option<Update> {
+        if message.block_number < self.newest_block {
+            tracing::warn!(
+                block_number = message.block_number,
+                newest_block = self.newest_block,
+                "Skipping out-of-order price level frame"
+            );
+            return None;
+        }
+        self.newest_block = message.block_number;
+
         let mut states: HashMap<String, Box<dyn ProtocolSim>> = HashMap::new();
         let mut new_pairs = HashMap::new();
         // The frame is a complete snapshot: every known component is presumed gone until the
@@ -451,6 +467,30 @@ mod tests {
             .contains_key(&expected_id()));
         assert_eq!(update.new_pairs.len(), 1);
         assert_eq!(update.states.len(), 1);
+    }
+
+    #[test]
+    fn out_of_order_frame_is_skipped() {
+        let mut tracker = tracker();
+        tracker
+            .process(message(101, wbtc_usdc_pairs()))
+            .expect("update expected");
+
+        // A frame for an older block is stale: no update, and the caches stay untouched even
+        // though the frame's snapshot differs completely.
+        let stale =
+            vec![pair_levels(WETH, USDC, vec![level(1_000_000_000_000_000_000, 3_000_000_000)])];
+        assert!(tracker
+            .process(message(100, stale))
+            .is_none());
+
+        // The next current frame diffs against the pre-stale state: nothing was added or
+        // removed in between.
+        let update = tracker
+            .process(message(102, wbtc_usdc_pairs()))
+            .expect("update expected");
+        assert!(update.new_pairs.is_empty());
+        assert!(update.removed_pairs.is_empty());
     }
 
     #[test]
