@@ -86,38 +86,41 @@ impl PriceLevelStreamState {
     /// between the two enclosing quotes.
     ///
     /// Callers must ensure `amount_in` lies within the quoted range (smallest to largest
-    /// `amount_in`) — the ladder holds no information outside of it.
-    fn interpolate(&self, quotes: &[PriceLevelStreamQuote], amount_in: &BigUint) -> BigUint {
+    /// `amount_in`) — the ladder holds no information outside of it. Errors if the enclosing
+    /// quotes are not monotonically increasing in `amount_out`: such a ladder is unreliable,
+    /// and a venue with corrupt data should not be quoted at any price.
+    fn interpolate(
+        &self,
+        quotes: &[PriceLevelStreamQuote],
+        amount_in: &BigUint,
+    ) -> Result<BigUint, SimulationError> {
         // First quote with amount_in >= the requested amount; the caller-guaranteed range makes
         // both it and (when needed) its predecessor exist.
         let idx = quotes.partition_point(|quote| &quote.amount_in < amount_in);
         let upper = &quotes[idx];
         if &upper.amount_in == amount_in {
-            return upper.amount_out.clone();
+            return Ok(upper.amount_out.clone());
         }
         let lower = &quotes[idx - 1];
         let Some(out_span) = upper
             .amount_out
             .checked_sub(&lower.amount_out)
         else {
-            // A ladder should be monotonically increasing in amount_out; a violation means the
-            // stream data is unreliable. Serve the lower quote instead of underflowing, but warn.
-            tracing::warn!(
-                token0 = %self.token0,
-                token1 = %self.token1,
-                %amount_in,
-                lower_amount_in = %lower.amount_in,
-                lower_amount_out = %lower.amount_out,
-                upper_amount_in = %upper.amount_in,
-                upper_amount_out = %upper.amount_out,
-                "Quote ladder is not monotonically increasing in amount_out; falling back to \
-                 the lower quote"
-            );
-            return lower.amount_out.clone();
+            // Recoverable: the next snapshot replaces the ladder wholesale.
+            return Err(SimulationError::RecoverableError(format!(
+                "Quote ladder {}/{} is not monotonically increasing in amount_out around the \
+                 requested amount {amount_in}: {} -> {}, but {} -> {}",
+                self.token0,
+                self.token1,
+                lower.amount_in,
+                lower.amount_out,
+                upper.amount_in,
+                upper.amount_out,
+            )));
         };
         let in_span = &upper.amount_in - &lower.amount_in;
         let offset = amount_in - &lower.amount_in;
-        &lower.amount_out + out_span * offset / in_span
+        Ok(&lower.amount_out + out_span * offset / in_span)
     }
 
     /// The state after a fill: both ladders are consumed. The snapshot quotes fills of the
@@ -210,7 +213,7 @@ impl ProtocolSim for PriceLevelStreamState {
             ));
         }
         Ok(GetAmountOutResult {
-            amount: self.interpolate(quotes, &amount_in),
+            amount: self.interpolate(quotes, &amount_in)?,
             gas: self.gas_cost.clone(),
             new_state: self.consumed(),
         })
@@ -355,9 +358,10 @@ mod tests {
     }
 
     #[test]
-    fn get_amount_out_on_glitched_ladder_falls_back_to_lower_quote() {
-        // A ladder that is not monotonically increasing in amount_out (a stream glitch):
-        // interpolation must fall back to the lower quote instead of underflowing.
+    fn get_amount_out_on_glitched_ladder_is_rejected() {
+        // A ladder that is not monotonically increasing in amount_out (a stream glitch): the
+        // data is unreliable, so a quote landing in the glitched segment is refused instead of
+        // interpolated (or underflowing).
         let state = PriceLevelStreamState::new(
             wbtc().address,
             usdc().address,
@@ -365,8 +369,12 @@ mod tests {
             vec![],
             BigUint::ZERO,
         );
+        let result = state.get_amount_out(BigUint::from(150u64), &wbtc(), &usdc());
+        assert!(matches!(result, Err(SimulationError::RecoverableError(_))));
+
+        // Hitting a level exactly returns that genuine sample even on a glitched ladder.
         let result = state
-            .get_amount_out(BigUint::from(150u64), &wbtc(), &usdc())
+            .get_amount_out(BigUint::from(100u64), &wbtc(), &usdc())
             .unwrap();
         assert_eq!(result.amount, BigUint::from(200u64));
     }
