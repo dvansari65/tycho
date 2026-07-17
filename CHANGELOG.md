@@ -1,3 +1,86 @@
+## [0.337.0](https://github.com/propeller-heads/tycho/compare/0.336.1...0.337.0) (2026-07-16)
+
+
+### Features
+
+* add --no-tls flag to the price_printer example ([#1206](https://github.com/propeller-heads/tycho/issues/1206)) ([6db0d30](https://github.com/propeller-heads/tycho/commit/6db0d30fb0d88bab3c1dab2359ed8f7167d3d734))
+
+## [0.336.1](https://github.com/propeller-heads/tycho/compare/0.336.0...0.336.1) (2026-07-16)
+
+
+### Bug Fixes
+
+* **tycho-client:** classify late partial below tip as delayed ([0cd57a5](https://github.com/propeller-heads/tycho/commit/0cd57a54abc5e0e9881622518ae64ca3dfa21ca6))
+* **tycho-client:** skip catch-up wait when a synchronizer is advanced ([54fa595](https://github.com/propeller-heads/tycho/commit/54fa59515bed0d407462c956ed2664db90185071))
+* **tycho-client:** skip catch-up wait when a synchronizer is advanced ([#1185](https://github.com/propeller-heads/tycho/issues/1185)) ([0a2f014](https://github.com/propeller-heads/tycho/commit/0a2f0143f166f36250a26ccd8aaab0ee66a059e5))
+
+## [0.336.0](https://github.com/propeller-heads/tycho/compare/0.335.1...0.336.0) (2026-07-16)
+
+
+### Features
+
+* add integration test ([90f8e30](https://github.com/propeller-heads/tycho/commit/90f8e30be5ba3c0905a161f81916e2972eb03580))
+* add slipstreams dynamic fee backfill script ([e10131d](https://github.com/propeller-heads/tycho/commit/e10131d9787e0c35e59443907c9c8755c1e5f154))
+* add slipstreams to registry ([99e504c](https://github.com/propeller-heads/tycho/commit/99e504cb72fdb73194b6456af6c58c7181c6dd8e))
+
+
+### Bug Fixes
+
+* emit partial slipstreams fee config updates ([3d5888f](https://github.com/propeller-heads/tycho/commit/3d5888f247de3a73addf2d6f74756dcc53c15a71))
+* **slipstreams:** harden dynamic fee backfill cutover ([614d06c](https://github.com/propeller-heads/tycho/commit/614d06c451189b2f781cb1a5a45deaa1cdde6ee6))
+* support aerodrome slipstreams initial fees ([#1190](https://github.com/propeller-heads/tycho/issues/1190)) ([5df32b7](https://github.com/propeller-heads/tycho/commit/5df32b72378b26b47ded31e31e7dba11b15b062a))
+* support updated slipstreams fee modules ([96fe4cb](https://github.com/propeller-heads/tycho/commit/96fe4cbf4c9c23fa1957686e938e0f457ed1717d))
+
+
+### Performance Improvements
+
+* **slipstreams:** skip pre-fee-module blocks ([6bf9dd9](https://github.com/propeller-heads/tycho/commit/6bf9dd9f610d1afb36edd1ed44b3c6dd7e04b169))
+* **substreams:** gate dynamic fee mapping by deployment block ([3ddcd5c](https://github.com/propeller-heads/tycho/commit/3ddcd5c6f937fa66e5658c1e23a47b2de21de56e))
+
+## [0.335.1](https://github.com/propeller-heads/tycho/compare/0.335.0...0.335.1) (2026-07-15)
+
+
+### Bug Fixes
+
+* **substreams:** match readme filename case for cargo publish ([37470fd](https://github.com/propeller-heads/tycho/commit/37470fd282eba913eba91da03fd96e32420748bd))
+* **substreams:** match readme filename case for cargo publish ([#1199](https://github.com/propeller-heads/tycho/issues/1199)) ([069d223](https://github.com/propeller-heads/tycho/commit/069d223d3c8139ae631953b6d926e607238eebeb))
+
+## [0.335.0](https://github.com/propeller-heads/tycho/compare/0.334.0...0.335.0) (2026-07-15)
+
+
+### Features
+
+* support PropAMM pools as SignedExclusiveSwap ([#1171](https://github.com/propeller-heads/tycho/issues/1171)) ([f43221a](https://github.com/propeller-heads/tycho/commit/f43221a79427b7c80104f74414419ee7b2249e83))
+* support PropAMM pools as SignedExclusiveSwap in decoder and encoder ([b59549e](https://github.com/propeller-heads/tycho/commit/b59549ecbd6b6cb4cebde3bf15f513cc690409e6))
+
+
+### Bug Fixes
+
+* assert an exact amount for the fixed block ([7742dec](https://github.com/propeller-heads/tycho/commit/7742dec89aaca47a372cc1b8ddf0d9bd0e7e632d))
+
+## [0.334.0](https://github.com/propeller-heads/tycho/compare/0.333.1...0.334.0) (2026-07-13)
+
+
+### Features
+
+* extend Ekubo V3 signed swap executor and encoder ([#1167](https://github.com/propeller-heads/tycho/issues/1167)) ([3d6a94f](https://github.com/propeller-heads/tycho/commit/3d6a94fc39f3699f66203f78d1fd3071f413dc74))
+* implement signed exclusive swap in EkuboV3 executor and encoder ([09bf7c6](https://github.com/propeller-heads/tycho/commit/09bf7c6a0853ce453ee321ab9af7b2d8da379d45))
+* scaffold Ekubo V3 signed swap executor and encoder ([33268b9](https://github.com/propeller-heads/tycho/commit/33268b9a1e4aa8e9c8e54faebd0ba606d98cf60a))
+
+
+### Bug Fixes
+
+* Add Polygon to dev CI ([31cee12](https://github.com/propeller-heads/tycho/commit/31cee1278cb09f5089d25ae1cdafbf862ba6960b))
+* address review on incremental transaction cleanup ([bc966a1](https://github.com/propeller-heads/tycho/commit/bc966a1035e03c97962d81f67df23a311468725a))
+* replace transaction cleanup with lock-safe incremental procedure ([e5664e9](https://github.com/propeller-heads/tycho/commit/e5664e925887d05a9cfe76e62073373a61e849d0))
+* replace transaction cleanup with lock-safe incremental procedure ([#1157](https://github.com/propeller-heads/tycho/issues/1157)) ([c57f532](https://github.com/propeller-heads/tycho/commit/c57f5320f17e49851343794a08e3455536ed230a))
+* unpin evm version ([5767323](https://github.com/propeller-heads/tycho/commit/576732303bb2622dec96dc64d36084e4bbc6cfbb))
+
+
+### Reverts
+
+* Revert "fix: unpin evm version" ([cf66eaa](https://github.com/propeller-heads/tycho/commit/cf66eaa8654843fbb07939751de1d331e4ce9f9b))
+
 ## [0.333.1](https://github.com/propeller-heads/tycho/compare/0.333.0...0.333.1) (2026-07-10)
 
 
