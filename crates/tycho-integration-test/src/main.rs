@@ -711,42 +711,76 @@ async fn refresh_token_prices(chain: Chain, prices: SharedTokenPrices, interval:
     }
 }
 
-/// Waits until the RPC has reached `target_block` and returns exactly that block, or `None` if
-/// the RPC doesn't serve it within `max_attempts`.
+/// Waits until the RPC has reached `target_block` and returns exactly that block. `Ok(None)`
+/// means the chain did not reach the target within `max_attempts`; `Err` means the polling ended
+/// on an RPC failure instead, carrying the failed operation, target block, and attempt.
 ///
 /// Unlike [`poll_rpc_for_block`], an RPC that has already moved past the target is not treated
 /// as stale: the target block is fetched by number, since the caller wants to simulate at that
-/// exact (recent) block.
+/// exact (recent) block. Transient RPC failures are retried like a lagging chain — an `Err` is
+/// only returned once the attempts are exhausted, and a healthy poll clears earlier failures.
 async fn await_target_block(
     rpc_tools: &tycho_test::RPCTools,
     target_block: u64,
     max_attempts: u32,
     poll_interval: Duration,
-) -> Option<Block> {
-    for _attempt in 0..max_attempts {
-        if let Ok(Some(latest)) = rpc_tools
+) -> miette::Result<Option<Block>> {
+    let mut last_failure: Option<miette::Report> = None;
+    for attempt in 1..=max_attempts {
+        match rpc_tools
             .provider
             .get_block_by_number(BlockNumberOrTag::Latest)
             .await
         {
-            if latest.header.number == target_block {
-                return Some(latest);
+            Ok(Some(latest)) if latest.header.number == target_block => {
+                return Ok(Some(latest));
             }
-            if latest.header.number > target_block {
-                // A transient error on this by-number fetch must not drop the update; keep
-                // polling with the remaining attempts instead.
-                if let Ok(Some(target)) = rpc_tools
+            Ok(Some(latest)) if latest.header.number > target_block => {
+                // The chain has moved past the target; fetch it by number. A failure here must
+                // not drop the update — keep polling with the remaining attempts instead.
+                match rpc_tools
                     .provider
                     .get_block_by_number(BlockNumberOrTag::Number(target_block))
                     .await
                 {
-                    return Some(target);
+                    Ok(Some(target)) => return Ok(Some(target)),
+                    Ok(None) => {
+                        last_failure = Some(miette!(
+                            "RPC reports latest block {} but served no block {target_block} \
+                             (attempt {attempt}/{max_attempts})",
+                            latest.header.number
+                        ));
+                    }
+                    Err(e) => {
+                        last_failure = Some(miette!(e).wrap_err(format!(
+                            "Failed to fetch target block {target_block} by number (attempt \
+                             {attempt}/{max_attempts})"
+                        )));
+                    }
                 }
+            }
+            // The chain has not reached the target yet and the RPC is healthy: any earlier
+            // failure is stale, the block is simply not there.
+            Ok(Some(_)) => last_failure = None,
+            Ok(None) => {
+                last_failure = Some(miette!(
+                    "RPC served no latest block while awaiting target block {target_block} \
+                     (attempt {attempt}/{max_attempts})"
+                ));
+            }
+            Err(e) => {
+                last_failure = Some(miette!(e).wrap_err(format!(
+                    "Failed to fetch the latest block while awaiting target block \
+                     {target_block} (attempt {attempt}/{max_attempts})"
+                )));
             }
         }
         tokio::time::sleep(poll_interval).await;
     }
-    None
+    match last_failure {
+        Some(failure) => Err(failure),
+        None => Ok(None),
+    }
 }
 
 /// Polls the RPC until the queried block (`Latest` or `Pending`) matches `target_block`.
@@ -982,8 +1016,10 @@ async fn process_update(
             // streams the next block, so the target block is already finalizing by now.
             let target_block = update.update.block_number_or_timestamp;
             let poll_interval = Duration::from_millis(cli.rpc_poll_interval_ms);
+            // RPC failures propagate instead of counting as a miss: the miss metric means "the
+            // chain did not reach the quoted block", not "the RPC was down".
             match await_target_block(&rpc_tools, target_block, cli.rpc_poll_attempts, poll_interval)
-                .await
+                .await?
             {
                 Some(b) => Arc::new(b),
                 None => {
