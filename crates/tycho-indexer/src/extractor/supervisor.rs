@@ -1,9 +1,10 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use tokio::sync::{
     mpsc::{self, Receiver, Sender},
     oneshot, Mutex,
 };
+use tokio_retry::strategy::ExponentialBackoff;
 use tracing::{error, info, warn};
 use tycho_common::models::ExtractorIdentity;
 
@@ -13,6 +14,9 @@ use crate::extractor::{
     runner::{ControlMessage, ExtractorHandle, SubscriptionsMap},
     DeltaCommand, ExtractionError,
 };
+
+/// Upper bound for the restart backoff delay.
+const MAX_RESTART_BACKOFF: Duration = Duration::from_secs(4 * 60 * 60);
 
 /// Long-lived per-extractor task that owns the factory and manages restart lifecycle.
 ///
@@ -71,6 +75,10 @@ impl ExtractorSupervisor {
     /// `ControlMessage::Stop` or has exhausted all restart attempts.
     pub async fn run(mut self) -> Result<(), ExtractionError> {
         let mut restart_count: u32 = 0;
+        // Exponential backoff: 1s, 2s, 4s, ... capped at 4 hours.
+        let mut backoff_strategy = ExponentialBackoff::from_millis(2)
+            .factor(500)
+            .max_delay(MAX_RESTART_BACKOFF);
 
         loop {
             let (stop_tx, stop_rx) = oneshot::channel();
@@ -216,10 +224,9 @@ impl ExtractorSupervisor {
                 }
             }
 
-            // Exponential backoff: 120s, 240s, 480s, 960s, 1920s, 3840s, 7680s, 14400s
-            // (capped at 4 hours).
-            let exp = restart_count.min(7); // 120 * 2^7 = 14400s = 4 hours, cap here to avoid overflow.
-            let backoff = std::time::Duration::from_secs(120 * 2u64.pow(exp));
+            let backoff = backoff_strategy
+                .next()
+                .expect("backoff strategy is infinite");
             warn!(
                 extractor = %self.id,
                 ?backoff,
