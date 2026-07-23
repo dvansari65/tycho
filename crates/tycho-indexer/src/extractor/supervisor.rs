@@ -77,9 +77,9 @@ impl ExtractorSupervisor {
     /// `ControlMessage::Stop` or has exhausted all restart attempts.
     pub async fn run(mut self) -> Result<(), ExtractionError> {
         let mut restart_count: u32 = 0;
-        // Exponential backoff: 1s, 2s, 4s, ... capped at 4 hours.
+        // Exponential backoff: 60s, 120s, 240s, ... capped at 4 hours.
         let mut backoff_strategy = ExponentialBackoff::from_millis(2)
-            .factor(500)
+            .factor(30_000)
             .max_delay(MAX_RESTART_BACKOFF);
 
         loop {
