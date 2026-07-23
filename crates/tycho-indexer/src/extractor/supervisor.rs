@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use tokio::sync::{
     mpsc::{self, Receiver, Sender},
@@ -19,27 +19,22 @@ use crate::extractor::{
 /// The supervisor:
 /// - Builds an extractor and runner via its factory.
 /// - Runs the runner and waits for it to exit.
-/// - On failure: clears WS subscriptions, sends `DeltaCommand::ExtractorRestarted` to
-///   `PendingDeltas` applies exponential backoff, then rebuilds from scratch.
-/// - Forwards `ControlMessage::Subscribe` from the `ExtractorHandle` to the WS subscription map.
+/// - On failure: sends `DeltaCommand::ExtractorRestarted` to all subscribers, applies exponential
+///   backoff, then rebuilds from scratch. Each subscriber decides how to handle the restart.
+/// - Forwards `ControlMessage::Subscribe` from the `ExtractorHandle` to the subscription map.
 /// - Forwards `ControlMessage::Stop` by signalling the runner's stop channel.
 pub struct ExtractorSupervisor {
     factory: ExtractorFactory,
     ctrl_tx: Sender<ControlMessage>,
     control_rx: Receiver<ControlMessage>,
-    ws_subscriptions: Arc<Mutex<SubscriptionsMap>>,
-    pending_deltas_tx: Sender<DeltaCommand>,
+    subscriptions: Arc<Mutex<SubscriptionsMap>>,
     id: ExtractorIdentity,
     max_restarts: Option<u32>,
     next_subscriber_id: u64,
 }
 
 impl ExtractorSupervisor {
-    pub fn new(
-        factory: ExtractorFactory,
-        ws_subscriptions: Arc<Mutex<SubscriptionsMap>>,
-        pending_deltas_tx: Sender<DeltaCommand>,
-    ) -> Self {
+    pub fn new(factory: ExtractorFactory) -> Self {
         let id = factory.extractor_id();
         let max_restarts: Option<u32> = factory.config.max_restarts;
         let (ctrl_tx, control_rx) = mpsc::channel(128);
@@ -47,12 +42,24 @@ impl ExtractorSupervisor {
             factory,
             ctrl_tx,
             control_rx,
-            ws_subscriptions,
-            pending_deltas_tx,
+            subscriptions: Arc::new(Mutex::new(HashMap::new())),
             id,
             max_restarts,
             next_subscriber_id: 0,
         }
+    }
+
+    /// Registers a subscriber before the supervision loop starts.
+    ///
+    /// The subscriber receives every [`DeltaCommand`] the extractor emits, across restarts.
+    /// Subscribers joining at runtime go through [`ExtractorHandle::subscribe`] instead.
+    pub async fn add_subscriber(&mut self, sender: Sender<DeltaCommand>) {
+        let subscriber_id = self.next_subscriber_id;
+        self.next_subscriber_id += 1;
+        self.subscriptions
+            .lock()
+            .await
+            .insert(subscriber_id, sender);
     }
 
     /// Returns an [`ExtractorHandle`] that can be used to subscribe or stop this extractor.
@@ -69,11 +76,7 @@ impl ExtractorSupervisor {
             let (stop_tx, stop_rx) = oneshot::channel();
             let runner = match self
                 .factory
-                .build_runner(
-                    self.ws_subscriptions.clone(),
-                    Some(self.pending_deltas_tx.clone()),
-                    stop_rx,
-                )
+                .build_runner(self.subscriptions.clone(), stop_rx)
                 .await
             {
                 Ok(r) => r,
@@ -116,9 +119,9 @@ impl ExtractorSupervisor {
                                 info!(
                                     extractor = %self.id,
                                     subscriber_id,
-                                    "New WS subscription via supervisor"
+                                    "New subscription via supervisor"
                                 );
-                                self.ws_subscriptions
+                                self.subscriptions
                                     .lock()
                                     .await
                                     .insert(subscriber_id, sender);
@@ -187,34 +190,30 @@ impl ExtractorSupervisor {
                     .map_err(|e| ExtractionError::Unknown(format!("Runner panicked: {e}")))?;
             }
 
-            // Clear WS subscriptions — clients must reconnect after a restart.
-            // TODO: can we keep the ws connections alive and handle this on the client side?
+            // Notify all subscribers of the restart. Sent on the same channels as block
+            // messages, so it is guaranteed to arrive after all blocks the runner emitted
+            // before failing. Each subscriber decides how to react: `PendingDeltas` resets its
+            // buffer, the WS service ends the affected client subscriptions.
             {
-                let mut subs = self.ws_subscriptions.lock().await;
-                let count = subs.len();
-                subs.clear();
-                if count > 0 {
+                let mut subs = self.subscriptions.lock().await;
+                let mut closed = Vec::new();
+                for (subscriber_id, sender) in subs.iter() {
+                    if sender
+                        .send(DeltaCommand::ExtractorRestarted(self.id.name.clone()))
+                        .await
+                        .is_err()
+                    {
+                        closed.push(*subscriber_id);
+                    }
+                }
+                for subscriber_id in closed {
+                    subs.remove(&subscriber_id);
                     info!(
                         extractor = %self.id,
-                        dropped_subscribers = count,
-                        "Cleared WS subscriptions before restart"
+                        subscriber_id,
+                        "Removed closed subscriber during restart"
                     );
                 }
-            }
-
-            // Signal PendingDeltas to reset its buffer for this extractor.
-            // Sent on the same per-extractor channel as block messages, so it is guaranteed to
-            // arrive after all blocks the runner emitted before failing.
-            if let Err(err) = self
-                .pending_deltas_tx
-                .send(DeltaCommand::ExtractorRestarted(self.id.name.clone()))
-                .await
-            {
-                warn!(
-                    extractor = %self.id,
-                    error = %err,
-                    "Failed to send ExtractorRestarted to PendingDeltas"
-                );
             }
 
             // Exponential backoff: 120s, 240s, 480s, 960s, 1920s, 3840s, 7680s, 14400s

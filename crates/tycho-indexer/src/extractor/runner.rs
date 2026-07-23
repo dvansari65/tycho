@@ -90,7 +90,7 @@ impl<AE: AccountExtractor + Send + Sync> ExtractorExtension for DCIPlugin<AE> {
 
 pub enum ControlMessage {
     Stop,
-    Subscribe(Sender<ExtractorMsg>),
+    Subscribe(Sender<DeltaCommand>),
 }
 
 /// A trait for a message sender that can be used to subscribe to messages.
@@ -98,7 +98,7 @@ pub enum ControlMessage {
 /// Extracted out of [`ExtractorHandle`] to allow for easier testing.
 #[async_trait]
 pub trait MessageSender: Send + Sync {
-    async fn subscribe(&self) -> Result<Receiver<ExtractorMsg>, SendError<ControlMessage>>;
+    async fn subscribe(&self) -> Result<Receiver<DeltaCommand>, SendError<ControlMessage>>;
 }
 
 #[derive(Clone)]
@@ -128,7 +128,7 @@ impl ExtractorHandle {
 #[async_trait]
 impl MessageSender for ExtractorHandle {
     #[instrument(skip(self))]
-    async fn subscribe(&self) -> Result<Receiver<ExtractorMsg>, SendError<ControlMessage>> {
+    async fn subscribe(&self) -> Result<Receiver<DeltaCommand>, SendError<ControlMessage>> {
         let (tx, rx) = mpsc::channel(16);
         // Define a timeout duration
         let timeout_duration = std::time::Duration::from_secs(5); // 5 seconds timeout
@@ -151,19 +151,17 @@ impl MessageSender for ExtractorHandle {
 }
 
 // Define the SubscriptionsMap type alias
-pub(crate) type SubscriptionsMap = HashMap<u64, Sender<ExtractorMsg>>;
+pub(crate) type SubscriptionsMap = HashMap<u64, Sender<DeltaCommand>>;
 
 pub struct ExtractorRunner {
     extractor: Arc<dyn Extractor>,
     substreams: SubstreamsStream,
-    /// WS subscribers — managed by the supervisor, shared across restarts.
-    ws_subscriptions: Arc<Mutex<SubscriptionsMap>>,
-    /// Dedicated channel for PendingDeltasBuffer — survives restarts.
-    pending_deltas_tx: Option<Sender<DeltaCommand>>,
+    /// Subscribers — managed by the supervisor, shared across restarts.
+    subscriptions: Arc<Mutex<SubscriptionsMap>>,
     /// Oneshot stop signal from the supervisor.
     stop_rx: oneshot::Receiver<()>,
     /// Handle of the tokio runtime on which the extraction tasks will be run.
-    /// If `None` the default runtime will be used.
+    /// If `None` the default tokio runtime will be used.
     runtime_handle: Option<Handle>,
     partial_blocks: bool,
 }
@@ -172,8 +170,7 @@ impl ExtractorRunner {
     pub fn new(
         extractor: Arc<dyn Extractor>,
         substreams: SubstreamsStream,
-        ws_subscriptions: Arc<Mutex<SubscriptionsMap>>,
-        pending_deltas_tx: Option<Sender<DeltaCommand>>,
+        subscriptions: Arc<Mutex<SubscriptionsMap>>,
         stop_rx: oneshot::Receiver<()>,
         runtime_handle: Option<Handle>,
         partial_blocks: bool,
@@ -181,8 +178,7 @@ impl ExtractorRunner {
         ExtractorRunner {
             extractor,
             substreams,
-            ws_subscriptions,
-            pending_deltas_tx,
+            subscriptions,
             stop_rx,
             runtime_handle,
             partial_blocks,
@@ -264,11 +260,7 @@ impl ExtractorRunner {
                                     })?;
                                     for msg in msgs {
                                         trace!("Propagating block data message.");
-                                        Self::propagate_msg(
-                                            &self.ws_subscriptions,
-                                            self.pending_deltas_tx.as_ref(),
-                                            msg,
-                                        ).await;
+                                        Self::propagate_msg(&self.subscriptions, msg).await;
                                     }
 
                                     let duration_ms = start_time.elapsed().as_millis() as f64;
@@ -291,11 +283,7 @@ impl ExtractorRunner {
                                     match self.extractor.handle_revert(undo_signal.clone()).await {
                                         Ok(Some(msg)) => {
                                             trace!("Propagating block undo message.");
-                                            Self::propagate_msg(
-                                                &self.ws_subscriptions,
-                                                self.pending_deltas_tx.as_ref(),
-                                                msg,
-                                            ).await;
+                                            Self::propagate_msg(&self.subscriptions, msg).await;
                                         }
                                         Ok(None) => {
                                             trace!("No message to propagate.");
@@ -392,24 +380,10 @@ impl ExtractorRunner {
 
     // TODO: add message tracing_id to the log
     #[instrument(skip_all, fields(subscriber_count))]
-    async fn propagate_msg(
-        subscribers: &Arc<Mutex<SubscriptionsMap>>,
-        pending_deltas_tx: Option<&Sender<DeltaCommand>>,
-        message: ExtractorMsg,
-    ) {
+    async fn propagate_msg(subscribers: &Arc<Mutex<SubscriptionsMap>>, message: ExtractorMsg) {
         trace!(msg = %message, "Propagating message to subscribers.");
 
-        if let Some(tx) = pending_deltas_tx {
-            if let Err(err) = tx
-                .send(DeltaCommand::Block(message.clone()))
-                .await
-            {
-                error!(error = %err, "Failed to send to PendingDeltas channel");
-            }
-        }
-
-        // TODO: rename variable here instead
-        let arced_message = message;
+        let command = DeltaCommand::Block(message);
 
         let mut to_remove = Vec::new();
 
@@ -418,7 +392,7 @@ impl ExtractorRunner {
         tracing::Span::current().record("subscriber_count", subscribers.len());
 
         for (counter, sender) in subscribers.iter_mut() {
-            match sender.send(arced_message.clone()).await {
+            match sender.send(command.clone()).await {
                 Ok(_) => {
                     // Message sent successfully
                     trace!(subscriber_id = %counter, "Message sent successfully.");

@@ -18,7 +18,7 @@ use tycho_common::{
 };
 use uuid::Uuid;
 
-use crate::extractor::runner::MessageSender;
+use crate::extractor::{runner::MessageSender, DeltaCommand};
 
 /// How often heartbeat pings are sent
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
@@ -236,7 +236,17 @@ impl WsActor {
                     debug!(actor_id = %actor_id, elapsed_ms = elapsed.as_millis(), "subscribe completed successfully");
 
                     let stream = async_stream::stream! {
-                        while let Some(item) = rx.recv().await {
+                        while let Some(command) = rx.recv().await {
+                            let item = match command {
+                                DeltaCommand::Block(item) => item,
+                                DeltaCommand::ExtractorRestarted(_) => {
+                                    // The extractor lost its stream position; end the
+                                    // subscription so the client resubscribes and resyncs
+                                    // from a fresh snapshot.
+                                    break;
+                                }
+                            };
+
                             if item.revert {
                                 // For reverts
                                 // Exclude partials if the client requested full blocks
@@ -259,7 +269,7 @@ impl WsActor {
 
                             yield ExtractorEvent::Message(subscription_id, Box::new(result));
                         }
-                        // Channel closed: extractor restarted or stopped.
+                        // Extractor restarted or its channel closed: end the subscription.
                         yield ExtractorEvent::ChannelClosed(subscription_id);
                     };
 
@@ -630,7 +640,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::extractor::{runner::ControlMessage, ExtractorMsg};
+    use crate::extractor::runner::ControlMessage;
 
     pub struct MyMessageSender {
         extractor_id: ExtractorIdentity,
@@ -672,8 +682,8 @@ mod tests {
 
     #[async_trait]
     impl MessageSender for MyMessageSender {
-        async fn subscribe(&self) -> Result<Receiver<ExtractorMsg>, SendError<ControlMessage>> {
-            let (tx, rx) = mpsc::channel::<ExtractorMsg>(1);
+        async fn subscribe(&self) -> Result<Receiver<DeltaCommand>, SendError<ControlMessage>> {
+            let (tx, rx) = mpsc::channel::<DeltaCommand>(1);
             let extractor_id = self.extractor_id.clone();
             let block_template = self.block_template.clone();
 
@@ -685,7 +695,7 @@ mod tests {
                     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
                     debug!("Sending DummyMessage");
                     if tx
-                        .send(Arc::new(block_template.clone()))
+                        .send(DeltaCommand::Block(Arc::new(block_template.clone())))
                         .await
                         .is_err()
                     {
@@ -1134,20 +1144,20 @@ mod tests {
 
     #[async_trait]
     impl MessageSender for SlowMessageSender {
-        async fn subscribe(&self) -> Result<Receiver<ExtractorMsg>, SendError<ControlMessage>> {
+        async fn subscribe(&self) -> Result<Receiver<DeltaCommand>, SendError<ControlMessage>> {
             debug!("SlowMessageSender::subscribe() starting 200ms delay");
             // Add a delay to increase the window for deadlock
             tokio::time::sleep(Duration::from_millis(200)).await;
             debug!("SlowMessageSender::subscribe() delay completed, creating channel");
 
-            let (tx, rx) = mpsc::channel::<ExtractorMsg>(1);
+            let (tx, rx) = mpsc::channel::<DeltaCommand>(1);
             let extractor_id = self.extractor_id.clone();
 
             tokio::spawn(async move {
                 loop {
                     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
                     if tx
-                        .send(Arc::new(BlockAggregatedChanges {
+                        .send(DeltaCommand::Block(Arc::new(BlockAggregatedChanges {
                             extractor: extractor_id.name.clone(),
                             block: Block::new(
                                 1,
@@ -1162,7 +1172,7 @@ mod tests {
                             finalized_block_height: 1,
                             revert: false,
                             ..Default::default()
-                        }))
+                        })))
                         .await
                         .is_err()
                     {
@@ -1479,7 +1489,7 @@ mod tests {
 
     #[async_trait]
     impl MessageSender for FailingMessageSender {
-        async fn subscribe(&self) -> Result<Receiver<ExtractorMsg>, SendError<ControlMessage>> {
+        async fn subscribe(&self) -> Result<Receiver<DeltaCommand>, SendError<ControlMessage>> {
             // Always return an error to simulate subscription failure
             Err(SendError(ControlMessage::Stop))
         }
@@ -1672,8 +1682,8 @@ mod tests {
 
     #[async_trait]
     impl MessageSender for ClosingMessageSender {
-        async fn subscribe(&self) -> Result<Receiver<ExtractorMsg>, SendError<ControlMessage>> {
-            let (_tx, rx) = mpsc::channel::<ExtractorMsg>(1);
+        async fn subscribe(&self) -> Result<Receiver<DeltaCommand>, SendError<ControlMessage>> {
+            let (_tx, rx) = mpsc::channel::<DeltaCommand>(1);
             // _tx is dropped here, closing the channel immediately.
             Ok(rx)
         }
@@ -1768,6 +1778,99 @@ mod tests {
             .send(Message::Close(Some(CloseFrame { code: CloseCode::Normal, reason: "".into() })))
             .await
             .ok();
+
+        Ok(())
+    }
+
+    /// A sender that emits one block, then an `ExtractorRestarted` command, and keeps the
+    /// channel open — simulating a supervisor restarting the extractor while subscribers stay
+    /// registered.
+    pub struct RestartingMessageSender {
+        extractor_id: ExtractorIdentity,
+    }
+
+    #[async_trait]
+    impl MessageSender for RestartingMessageSender {
+        async fn subscribe(&self) -> Result<Receiver<DeltaCommand>, SendError<ControlMessage>> {
+            let (tx, rx) = mpsc::channel::<DeltaCommand>(2);
+            let name = self.extractor_id.name.clone();
+            tokio::spawn(async move {
+                let block = MyMessageSender::default_block(&name);
+                let _ = tx
+                    .send(DeltaCommand::Block(Arc::new(block)))
+                    .await;
+                let _ = tx
+                    .send(DeltaCommand::ExtractorRestarted(name))
+                    .await;
+                // Keep the channel open so the test proves the restart command (not a channel
+                // close) is what ends the subscription.
+                tokio::time::sleep(Duration::from_secs(10)).await;
+            });
+            Ok(rx)
+        }
+    }
+
+    /// Verifies that an `ExtractorRestarted` command ends the client's subscription with
+    /// `SubscriptionEnded`, even though the extractor channel stays open.
+    #[actix_rt::test]
+    async fn test_subscription_ended_on_extractor_restart() -> Result<(), String> {
+        tracing_subscriber::fmt()
+            .with_test_writer()
+            .try_init()
+            .unwrap_or_else(|_| debug!("Subscriber already initialized"));
+
+        let extractor_id = ExtractorIdentity::new(Chain::Ethereum, "restarting_extractor");
+        let mut subscribers_map = HashMap::new();
+        subscribers_map.insert(
+            extractor_id.clone(),
+            Arc::new(RestartingMessageSender { extractor_id: extractor_id.clone() })
+                as Arc<dyn MessageSender + Send + Sync>,
+        );
+
+        let app_state = web::Data::new(WsData::new(subscribers_map));
+        let server = start_with(
+            TestServerConfig::default().client_request_timeout(Duration::from_secs(5)),
+            move || {
+                App::new()
+                    .wrap(RequestTracing::new())
+                    .app_data(app_state.clone())
+                    .service(web::resource("/ws/").route(web::get().to(WsActor::ws_index)))
+            },
+        );
+
+        let url = server
+            .url("/ws/")
+            .to_string()
+            .replacen("http://", "ws://", 1);
+        let (mut connection, _) = tokio_tungstenite::connect_async(url)
+            .await
+            .expect("Failed to connect");
+
+        connection
+            .send(Message::Text(
+                serde_json::to_string(&Command::Subscribe {
+                    extractor_id: extractor_id.clone().into(),
+                    include_state: false,
+                    compression: false,
+                    partial_blocks: false,
+                })
+                .unwrap(),
+            ))
+            .await
+            .expect("Failed to send subscribe");
+        wait_for_new_subscription(&mut connection)
+            .await
+            .expect("Failed to get subscription");
+
+        // The block sent before the restart must still be delivered.
+        wait_for_dummy_message(&mut connection, extractor_id)
+            .await
+            .expect("Expected the block emitted before the restart");
+
+        // The restart command must end the subscription.
+        wait_for_subscription_ended(&mut connection)
+            .await
+            .expect("Expected SubscriptionEnded after ExtractorRestarted");
 
         Ok(())
     }

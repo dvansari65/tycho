@@ -109,12 +109,13 @@ pub enum RPCError {
 
 pub type ExtractorMsg = Arc<BlockAggregatedChanges>;
 
-/// Commands sent from an extractor's runner or supervisor to `PendingDeltas` over the
-/// per-extractor channel.
+/// Messages delivered to extractor subscribers over their subscription channel.
 ///
-/// Using a single typed channel (rather than a separate reset side-channel) gives an ordering
-/// guarantee: `ExtractorRestarted` always arrives after every `Block` message the runner sent
-/// before it stopped.
+/// Every subscriber (`PendingDeltas`, WebSocket clients, ...) receives the same commands and
+/// decides for itself how to react to a restart. Sending `ExtractorRestarted` on the same
+/// channel as `Block` messages gives an ordering guarantee: it always arrives after every
+/// `Block` message the runner sent before it stopped.
+#[derive(Clone)]
 pub enum DeltaCommand {
     Block(ExtractorMsg),
     ExtractorRestarted(String),

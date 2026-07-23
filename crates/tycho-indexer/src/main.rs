@@ -566,10 +566,8 @@ async fn build_all_extractors(
         // Create dedicated PendingDeltas channel for this extractor
         let (pd_tx, pd_rx) = tokio::sync::mpsc::channel(256);
 
-        // WS subscription map — shared between supervisor and runner
-        let ws_subscriptions = Arc::new(tokio::sync::Mutex::new(HashMap::new()));
-
-        let supervisor = ExtractorSupervisor::new(factory, ws_subscriptions, pd_tx);
+        let mut supervisor = ExtractorSupervisor::new(factory);
+        supervisor.add_subscriber(pd_tx).await;
         let handle = supervisor.handle();
 
         supervisors.push(supervisor);

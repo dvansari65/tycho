@@ -7,7 +7,7 @@ use prost::Message;
 use serde::Deserialize;
 use tokio::{
     runtime::Handle,
-    sync::{mpsc::Sender, oneshot, Mutex},
+    sync::{oneshot, Mutex},
 };
 use tracing::info;
 use tycho_common::{
@@ -33,7 +33,7 @@ use crate::{
         protocol_cache::ProtocolMemoryCache,
         protocol_extractor::{ExtractorPgGateway, ProtocolExtractor},
         runner::{compute_start_block, DCIPlugin, ExtractorRunner, SubscriptionsMap},
-        DeltaCommand, ExtractionError, Extractor,
+        ExtractionError, Extractor,
     },
     pb::sf::substreams::v1::Package,
     substreams::{stream::SubstreamsStream, SubstreamsEndpoint},
@@ -214,8 +214,7 @@ impl ExtractorFactory {
     /// run). The protocol cache and chain state are reused from factory construction.
     pub async fn build_runner(
         &self,
-        ws_subscriptions: Arc<Mutex<SubscriptionsMap>>,
-        pending_deltas_tx: Option<Sender<DeltaCommand>>,
+        subscriptions: Arc<Mutex<SubscriptionsMap>>,
         stop_rx: oneshot::Receiver<()>,
     ) -> Result<ExtractorRunner, ExtractionError> {
         let fresh_gw = self.cached_gw.new_instance();
@@ -373,8 +372,7 @@ impl ExtractorFactory {
         Ok(ExtractorRunner::new(
             extractor,
             stream,
-            ws_subscriptions,
-            pending_deltas_tx,
+            subscriptions,
             stop_rx,
             self.runtime_handle.clone(),
             self.partial_blocks,
