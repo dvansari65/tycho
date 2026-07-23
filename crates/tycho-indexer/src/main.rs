@@ -65,6 +65,11 @@ use tycho_storage::postgres::{builder::GatewayBuilder, cache::CachedGateway};
 
 mod ot;
 
+/// Buffer size of the per-extractor channel feeding `PendingDeltas`. Sized above the
+/// subscriber channels created by `ExtractorHandle::subscribe` since a single consumer
+/// drains the channels of all extractors.
+const PENDING_DELTAS_CHANNEL_SIZE: usize = 256;
+
 #[derive(Debug, Deserialize)]
 struct ExtractorConfigs {
     extractors: std::collections::HashMap<String, ExtractorConfig>,
@@ -564,7 +569,7 @@ async fn build_all_extractors(
         .await?;
 
         // Create dedicated PendingDeltas channel for this extractor
-        let (pd_tx, pd_rx) = tokio::sync::mpsc::channel(256);
+        let (pd_tx, pd_rx) = tokio::sync::mpsc::channel(PENDING_DELTAS_CHANNEL_SIZE);
 
         let mut supervisor = ExtractorSupervisor::new(factory);
         supervisor.add_subscriber(pd_tx).await;

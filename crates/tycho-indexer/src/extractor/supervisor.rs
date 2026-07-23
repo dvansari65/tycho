@@ -15,6 +15,8 @@ use crate::extractor::{
     DeltaCommand, ExtractionError,
 };
 
+/// Buffer size of the control channel between `ExtractorHandle`s and the supervisor.
+const CONTROL_CHANNEL_SIZE: usize = 128;
 /// Upper bound for the restart backoff delay.
 const MAX_RESTART_BACKOFF: Duration = Duration::from_secs(4 * 60 * 60);
 
@@ -41,7 +43,7 @@ impl ExtractorSupervisor {
     pub fn new(factory: ExtractorFactory) -> Self {
         let id = factory.extractor_id();
         let max_restarts: Option<u32> = factory.config.max_restarts;
-        let (ctrl_tx, control_rx) = mpsc::channel(128);
+        let (ctrl_tx, control_rx) = mpsc::channel(CONTROL_CHANNEL_SIZE);
         Self {
             factory,
             ctrl_tx,
