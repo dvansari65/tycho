@@ -32,6 +32,7 @@ pub struct NativeClient {
     pub tvl: f64,
     pub quote_tokens: HashSet<Bytes>,
     pub poll_time: Duration,
+    quote_timeout: Duration,
 }
 
 impl NativeClient {
@@ -46,6 +47,7 @@ impl NativeClient {
         tvl: f64,
         quote_tokens: HashSet<Bytes>,
         poll_time: Duration,
+        quote_timeout: Duration,
     ) -> Result<Self, RFQError> {
         Ok(Self {
             chain,
@@ -55,6 +57,7 @@ impl NativeClient {
             tvl,
             quote_tokens,
             poll_time,
+            quote_timeout,
         })
     }
 
@@ -309,6 +312,7 @@ mod tests {
             10.0,
             HashSet::new(),
             Duration::from_secs(1),
+            Duration::from_secs(5),
         )
         .unwrap();
 
@@ -333,6 +337,7 @@ mod tests {
             0.0,
             HashSet::from([usdt.clone()]),
             Duration::from_secs(1),
+            Duration::from_secs(5),
         )
         .unwrap();
 

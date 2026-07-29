@@ -15,6 +15,7 @@ pub struct NativeClientBuilder {
     tvl: f64,
     quote_tokens: Option<HashSet<Bytes>>,
     poll_time: Duration,
+    quote_timeout: Duration,
 }
 
 impl NativeClientBuilder {
@@ -26,6 +27,7 @@ impl NativeClientBuilder {
             tvl: 100.0,
             quote_tokens: None,
             poll_time: Duration::from_secs(5),
+            quote_timeout: Duration::from_secs(5),
         }
     }
 
@@ -67,6 +69,7 @@ impl NativeClientBuilder {
             self.tvl,
             quote_tokens,
             self.poll_time,
+            self.quote_timeout,
         )
     }
 }
