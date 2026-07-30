@@ -58,7 +58,9 @@ impl ExtractorSupervisor {
     /// Registers a subscriber before the supervision loop starts.
     ///
     /// The subscriber receives every [`DeltaCommand`] the extractor emits, across restarts.
-    /// Subscribers joining at runtime go through [`ExtractorHandle::subscribe`] instead.
+    /// Subscribers joining at runtime go through
+    /// [`MessageSender::subscribe`](crate::extractor::runner::MessageSender::subscribe) on an
+    /// [`ExtractorHandle`] instead.
     pub async fn add_subscriber(&mut self, sender: Sender<DeltaCommand>) {
         let subscriber_id = self.next_subscriber_id;
         self.next_subscriber_id += 1;
