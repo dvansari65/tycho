@@ -188,11 +188,40 @@ let token_in = native_to_router_eth(bytes_to_address(&swap.token_in().address)?)
 
 #### Executor `swap`: translate `ETH_ADDRESS` → protocol address
 
-If your protocol uses `address(0)` (e.g., UniswapV4, Ekubo) or another sentinel for native ETH in its pool keys or function calls, translate `ETH_ADDRESS` back to the protocol's expected address inside `swap()` (or `_decodeData()` / `_locked()`), right before interacting with the protocol.
+If your protocol uses `address(0)` (e.g., UniswapV4, Ekubo) or another sentinel for native ETH in its pool keys or function calls, translate `ETH_ADDRESS` back to the protocol's expected address inside `swap()`, right before interacting with the protocol.
 
 ## Fee Tokens
 
 Balance checks before and after token transfers mean fee-on-transfer tokens and rebasing tokens work on most protocols. The exception is Uniswap V3-like protocols, which require declaring the exact input amount upfront but only transfer it inside a callback.
+
+## Security Requirements
+
+TychoRouter calls executors via `delegatecall`, so executor code runs within TychoRouter's context — it can freely transfer the router's assets and write to the router's storage, including users' vault balances. Follow this checklist when building or reviewing an executor.
+
+{% hint style="danger" %}
+**Executors run with TychoRouter's full privileges.** A bug or malicious executor can steal all router assets.
+{% endhint %}
+
+* **Never call `ERC20.transfer`, `ERC20.transferFrom`, or `Permit2.transferFrom` directly.** Communicate transfer intent through `getTransferData` and `getCallbackTransferData` instead — TychoRouter performs the actual transfers with its own safeguards. The only exception is for native ETH transfers: this transfers must be handled inside the Executor and have a `transferType` of `TransferNativeInExecutor`.
+* **Never do ERC20 token approvals**. These are all handled by the TychoRouter.
+* **Never assign to a state variable** or perform any operation that writes to TychoRouter's storage.
+* **Do not execute `delegatecall`.** If a protocol makes it unavoidable, ensure the caller cannot control the `delegatecall` target — attacker-controlled targets enable arbitrary code execution within TychoRouter's context.
+* **Avoid trusting data sent via callback.** If necessary, call `verifyCallback` within `handleCallback` to confirm `msg.sender` is a valid pool from the expected protocol.
+* **`handleCallback`'s `data` argument** contains raw ABI-encoded calldata that the executor must decode manually.
+* **`handleCallback`'s return value** must be raw ABI-encoded return data that the executor encodes manually.
+
+## Security Model
+
+Tycho maintains a Rust <a href="https://github.com/propeller-heads/tycho-indexer/tree/main/crates/tycho-execution/model" target="_blank" rel="noopener noreferrer">security model</a> of TychoRouter that simulates many swap-parameter combinations to find inputs that let a caller drain the router's assets. The model mirrors the router's Solidity logic and reports suspicious outcomes. During the V3 security assessment it surfaced several critical vulnerabilities, all of which the team fixed before launch. Adding new executors keeps this coverage up to date.
+
+The model only covers executors that give the caller control over the called pool contract — for example, executors where the caller supplies the pool address. These executors present the highest risk and are the easiest to model. If your executor falls into this category, add it to the model so the simulation covers it.
+
+To add your executor, edit <a href="https://github.com/propeller-heads/tycho-indexer/blob/main/crates/tycho-execution/model/src/model/executors.rs" target="_blank" rel="noopener noreferrer">`model/src/model/executors.rs`</a>:
+
+1. Add a variant to the `Executor` enum and to the `Executor::VARIANTS` array.
+2. Implement the executor's behavior in the `get_transfer_data`, `swap`, and `funds_expected_address` match arms, mirroring your Solidity executor. For callback-based protocols, also implement `get_callback_transfer_data` and `handle_callback`.
+
+Run the model with `cargo run --release` from the `model` crate (release mode is required — it is very slow otherwise). Run `cargo doc --open` for the full model documentation.
 
 ## Testing
 
@@ -238,8 +267,9 @@ These tests ensure your integration works end-to-end within Tycho’s architectu
 
 Once your implementation is approved:
 
-1. **Deploy the executor contract** on the appropriate network (more <a href="https://github.com/propeller-heads/tycho-indexer/blob/main/crates/tycho-execution/contracts/scripts/README.md" target="_blank" rel="noopener noreferrer">here</a>).
-2. **Contact us** to whitelist the new executor address on our main router contract.
-3. **Update the configuration** by adding the new executor address to `executor_addresses.json` and register the `SwapEncoder` within the `SwapEncoderBuilder` .
+1. **Declare the executor's deployment** by adding its contract name and constructor arguments to <a href="https://github.com/propeller-heads/tycho-indexer/blob/main/crates/tycho-execution/config/executor_deployments.json" target="_blank" rel="noopener noreferrer">`config/executor_deployments.json`</a> (keyed by chain and protocol) and listing its protocol in the `deploy_protocols` map in `deploy-executors.js`. The deploy script and the SDK test-fixture generation both read the constructor arguments from this config.
+2. **Deploy the executor contract** on the appropriate network (more <a href="https://github.com/propeller-heads/tycho-indexer/blob/main/crates/tycho-execution/contracts/scripts/README.md" target="_blank" rel="noopener noreferrer">here</a>).
+3. **Contact us** to whitelist the new executor address on our main router contract.
+4. **Update the configuration** by adding the new executor address to `executor_addresses.json` and register the `SwapEncoder` within the `SwapEncoderBuilder` .
 
 By following these steps, your protocol will be fully integrated with Tycho.

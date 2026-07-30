@@ -36,7 +36,6 @@ mod dynamic_contract_indexer;
 pub mod factory;
 pub mod models;
 pub mod post_processors;
-pub mod protobuf_deserialisation;
 pub mod protocol_cache;
 pub mod protocol_extractor;
 pub mod reorg_buffer;
@@ -44,6 +43,9 @@ pub mod runner;
 pub mod supervisor;
 pub mod token_analysis_cron;
 mod u256_num;
+
+#[cfg(test)]
+mod protobuf_conversion_tests;
 
 #[derive(Error, Debug, PartialEq)]
 pub enum ExtractionError {
@@ -99,6 +101,15 @@ impl ExtractionError {
     }
 }
 
+impl From<tycho_protobuf::error::DecodeError> for ExtractionError {
+    fn from(e: tycho_protobuf::error::DecodeError) -> Self {
+        match e {
+            tycho_protobuf::error::DecodeError::Empty => Self::Empty,
+            tycho_protobuf::error::DecodeError::Decode(msg) => Self::DecodeError(msg),
+        }
+    }
+}
+
 #[derive(Error, Debug)]
 pub enum RPCError {
     #[error("RPC setup error: {0}")]
@@ -129,7 +140,10 @@ pub trait Extractor: Send + Sync {
 
     /// Ensures all protocol types this extractor needs are registered in
     /// storage. Safe to call multiple times.
-    async fn ensure_protocol_types(&self);
+    ///
+    /// # Errors
+    /// Returns an [`ExtractionError`] if the protocol types could not be persisted.
+    async fn ensure_protocol_types(&self) -> Result<(), ExtractionError>;
 
     /// Returns the current stream cursor, or an empty string if no block has
     /// been processed yet. At startup this reflects the last persisted cursor;

@@ -16,7 +16,7 @@ These are the models used as input and output of the encoding crate.
 {% tab title="Solution" %}
 The `Solution` struct defines your order and how it should be filled. This is the input to the encoding module.
 
-<table><thead><tr><th width="210" align="center">Attribute</th><th width="210" align="center">Type</th><th width="280">Description</th></tr></thead><tbody><tr><td align="center"><strong>sender</strong></td><td align="center"><code>Bytes</code></td><td>Address of the sender of the token in</td></tr><tr><td align="center"><strong>receiver</strong></td><td align="center"><code>Bytes</code></td><td>Address that receives the output token. If set to the TychoRouter address, the output is credited to the <strong>sender's</strong> <a href="../vault.md#crediting-output-to-the-vault">vault balance</a> instead of being transferred out.</td></tr><tr><td align="center"><strong>token_in</strong></td><td align="center"><code>Bytes</code></td><td>The input token</td></tr><tr><td align="center"><strong>amount_in</strong></td><td align="center"><code>BigUint</code></td><td>Amount of the input token</td></tr><tr><td align="center"><strong>token_out</strong></td><td align="center"><code>Bytes</code></td><td>The output token</td></tr><tr><td align="center"><strong>min_amount_out</strong></td><td align="center"><code>BigUint</code></td><td>Minimum amount the receiver must receive at the end of the transaction</td></tr><tr><td align="center"><strong>swaps</strong></td><td align="center"><code>Vec&#x3C;Swap></code></td><td>List of swaps to fulfil the solution</td></tr><tr><td align="center"><strong>user_transfer_type</strong></td><td align="center"><code>UserTransferType</code></td><td>How the input token enters the router — see the <strong>UserTransferType</strong> tab</td></tr></tbody></table>
+<table><thead><tr><th width="210" align="center">Attribute</th><th width="210" align="center">Type</th><th width="280">Description</th></tr></thead><tbody><tr><td align="center"><strong>sender</strong></td><td align="center"><code>Bytes</code></td><td>Address of the sender of the token in</td></tr><tr><td align="center"><strong>receiver</strong></td><td align="center"><code>Bytes</code></td><td>Address that receives the output token. If set to the TychoRouter address, the output is credited to the <strong>sender's</strong> <a href="../vault.md#crediting-output-to-the-vault">vault balance</a> instead of being transferred out.</td></tr><tr><td align="center"><strong>token_in</strong></td><td align="center"><code>Bytes</code></td><td>The input token</td></tr><tr><td align="center"><strong>amount_in</strong></td><td align="center"><code>BigUint</code></td><td>Amount of the input token</td></tr><tr><td align="center"><strong>token_out</strong></td><td align="center"><code>Bytes</code></td><td>The output token</td></tr><tr><td align="center"><strong>min_amount_out</strong></td><td align="center"><code>BigUint</code></td><td>Minimum amount the receiver must receive at the end of the transaction, after fees are deducted</td></tr><tr><td align="center"><strong>swaps</strong></td><td align="center"><code>Vec&#x3C;Swap></code></td><td>List of swaps to fulfil the solution</td></tr><tr><td align="center"><strong>user_transfer_type</strong></td><td align="center"><code>UserTransferType</code></td><td>How the input token enters the router — see the <strong>UserTransferType</strong> tab</td></tr></tbody></table>
 {% endtab %}
 
 {% tab title="UserTransferType" %}
@@ -49,6 +49,14 @@ We validate split swaps. A split swap is valid if:
 4. For each set of splits, set the split for the last swap to 0. This tells the router to send all tokens not assigned
    to the previous splits in the set (i.e., the remainder) to this pool.
 5. The sum of all non-remainder splits for each token is smaller than 1 (100%)
+
+{% hint style="info" %}
+**Split fractions are applied to the balance seen so far.** The router processes swaps
+sequentially. A non-zero `split` takes a fraction of the total amount produced for that token
+*up to that point in the swap array* — not the final total. A `split` of 0 consumes whatever
+remains. If more of the same token is produced by a later swap, it will not be included in
+any earlier split's calculation.
+{% endhint %}
 
 <details>
 
@@ -171,7 +179,7 @@ creation and signing yourself using the public `Permit2` utility (see [Token tra
 The full method call includes the following parameters, which act as **execution guardrails:**
 
 * `amountIn` and `tokenIn` — the amount and token to be transferred into the TychoRouter from you. For native ETH, use `0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE` — the router reverts on `address(0)`.
-* `minAmountOut` and `tokenOut` — the minimum amount you want to receive. Same ETH address rule applies. For maximum security, determine this from a **third-party source**.
+* `minAmountOut` and `tokenOut` — the minimum amount you want to receive, after fees are deducted. Same ETH address rule applies. For maximum security, determine this from a **third-party source**.
 * `receiver` — who receives the final output. Set this to the TychoRouter address to credit output tokens to the vault.
 * `nTokens` — _(split swaps only)_ the number of distinct tokens in the split routing graph.
 * `clientFeeParams` — controls fee-taking and client contribution (see [Client Fee Signature](#client-fee-signature)). Pass all-zero values if you don't need fees.
@@ -220,6 +228,14 @@ EIP712Domain(string name, string version, uint256 chainId, address verifyingCont
 ```
 
 with `name = "TychoRouter"`, `version = "1"`, and `verifyingContract` set to the TychoRouter contract address.
+
+{% hint style="warning" %}
+**Replay attack risk.** The signature contains no nonce. Once a signed `ClientFeeParams` appears on-chain, anyone who sees it can reuse it for the same swap and input parameters until `deadline` expires. If `maxClientContribution > 0`, the swap's `receiver` can repeatedly replay the transaction — each replay debits the client's vault balance by up to `maxClientContribution` — until the balance is exhausted or the deadline passes.
+
+To minimise exposure:
+* Set `deadline` as close to the current block timestamp as practical (e.g., a few minutes ahead).
+* Set `maxClientContribution` as low as the intended use case allows.
+{% endhint %}
 
 <details>
 

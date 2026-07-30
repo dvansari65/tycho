@@ -275,6 +275,12 @@ The router no longer accepts `wrap` or `unwrap` boolean flags. If your calldata 
 remove them. The WETH executor handles wrapping and unwrapping as part of the swap path.
 See [Native Tokens](encoding/#native-tokens "mention").
 
+#### Native ETH Address
+
+When constructing the outer function arguments (`tokenIn` / `tokenOut`), native ETH must be represented as `0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE` — not `address(0)`. The router reverts on `address(0)`.
+
+The `ROUTER_ETH_ADDRESS` constant is exported from the `tycho-execution` crate for this purpose.
+
 #### Method Variants
 
 Each swap strategy (single, sequential, split) gains a third variant — `UsingVault` — alongside the existing standard and Permit2 variants:

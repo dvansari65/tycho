@@ -38,10 +38,28 @@ use crate::evm::protocol::{
     },
 };
 
-// The names of the constants reflect the exact method from the tenderly log.
-const TICK_CROSSING_GAS_COST: i32 = 25_000;
-// nextInitializedTickWithinOneWord +  computeSwapStep + calculateFees
-const LOOP_GAS_COST: i32 = 10_000;
+// Cold-storage warmup on the first loop iteration:
+// nextInitializedTickWithinOneWord first call (~3,000) vs warm (~1,060)
+// calculateFees first call via cold getUnstakedFee STATICCALL (~19,050) vs warm (~6,055)
+const FIRST_LOOP_OVERHEAD: i32 = 15_000;
+// Steady-state per-loop: nextInitializedTickWithinOneWord (warm) + getSqrtRatioAtTick
+// + computeSwapStep + calculateFees (warm) + toInt256x2 + EVM opcode overhead
+const LOOP_GAS_COST: i32 = 12_500;
+// cross(): updates tick fee growth and staked reward growth slots.
+// Warm ticks (previously crossed, non-zero SSTORE slots) cost ~22k; cold ticks ~76k.
+// We bias toward the cold end to prefer overestimation: 70k.
+const TICK_CROSSING_GAS_COST: i32 = 70_000;
+// When dfc.scaling_factor != 0, fee() does a TWAP binary search on the observation ring
+// buffer (~77k–91k gas) instead of a simple slot read (~18k–27k gas). This extra cost is
+// added once per swap on top of the base.
+const TWAP_FEE_OVERHEAD: i32 = 65_000;
+// Pre/post loop overhead: fee(), slot0 reads, end-of-swap writes.
+const SWAP_BASE_GAS: i32 = 125_000;
+// Conservative max gas for a single swap. Used to cap get_limits iteration.
+const MAX_SWAP_GAS: u64 = 16_700_000;
+// Maximum initialized ticks that can be crossed within MAX_SWAP_GAS.
+const MAX_TICKS_CROSSED: u64 =
+    (MAX_SWAP_GAS - SWAP_BASE_GAS as u64) / TICK_CROSSING_GAS_COST as u64;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AerodromeSlipstreamsState {
@@ -156,7 +174,9 @@ impl AerodromeSlipstreamsState {
             tick: self.tick,
             liquidity: self.liquidity,
         };
-        let mut gas_used = U256::from(130_000);
+        let twap_overhead = if self.dfc.scaling_factor() != 0 { TWAP_FEE_OVERHEAD } else { 0 };
+        let mut gas_used = U256::from((SWAP_BASE_GAS + twap_overhead) as u64);
+        let mut n_loops = 0;
 
         let fee = self.get_fee()?;
         while state.amount_remaining != I256::from_raw(U256::from(0u64)) &&
@@ -246,6 +266,10 @@ impl AerodromeSlipstreamsState {
                 state.tick = get_tick_at_sqrt_ratio(state.sqrt_price)?;
             }
             gas_used = safe_add_u256(gas_used, U256::from(LOOP_GAS_COST))?;
+            if n_loops == 0 {
+                gas_used = safe_add_u256(gas_used, U256::from(FIRST_LOOP_OVERHEAD))?;
+            }
+            n_loops += 1;
         }
         Ok(SwapResults {
             amount_calculated: state.amount_calculated,
@@ -357,10 +381,15 @@ impl ProtocolSim for AerodromeSlipstreamsState {
 
         // Iterate through all ticks in the direction of the swap
         // Continues until there is no more liquidity in the pool or no more ticks to process
+        let mut ticks_crossed: u64 = 0;
         while let Ok((tick, initialized)) = self
             .ticks
             .next_initialized_tick_within_one_word(current_tick, zero_for_one)
         {
+            if ticks_crossed >= MAX_TICKS_CROSSED {
+                break;
+            }
+            ticks_crossed += 1;
             // Clamp the tick value to ensure it's within valid range
             let next_tick = tick.clamp(MIN_TICK, MAX_TICK);
 
@@ -487,27 +516,13 @@ impl ProtocolSim for AerodromeSlipstreamsState {
         {
             self.default_fee = u32::from(default_fee.clone());
         }
-        if let Some(dfc_base_fee) = delta
-            .updated_attributes
-            .get("dfc_baseFee")
-        {
-            self.dfc
-                .update_base_fee(u32::from(dfc_base_fee.clone()));
-        }
-        if let Some(dfc_fee_cap) = delta
-            .updated_attributes
-            .get("dfc_feeCap")
-        {
-            self.dfc
-                .update_fee_cap(u32::from(dfc_fee_cap.clone()));
-        }
-        if let Some(dfc_scaling_factor) = delta
-            .updated_attributes
-            .get("dfc_scalingFactor")
-        {
-            self.dfc
-                .update_scaling_factor(u64::from(dfc_scaling_factor.clone()));
-        }
+        self.dfc
+            .update_from_attributes(&delta.updated_attributes)
+            .map_err(|err| {
+                TransitionError::DecodeError(format!(
+                    "Failed to update dynamic fee module config: {err}"
+                ))
+            })?;
         if let Some(tick) = delta.updated_attributes.get("tick") {
             // This is a hotfix because if the tick has never been updated after creation, it's
             // currently encoded as H256::zero(), therefore, we can't decode this as i32.
@@ -654,9 +669,80 @@ mod tests {
             0,
             ticks,
             vec![Observation::default()],
-            DynamicFeeConfig::new(3000, 10_000, 1),
+            DynamicFeeConfig::new(3000, 10_000, 1, false, 0),
         )
         .expect("Failed to create pool")
+    }
+
+    fn dynamic_fee_delta(dynamic_fee_module: [u8; 20]) -> ProtocolStateDelta {
+        ProtocolStateDelta {
+            component_id: "test-pool".to_string(),
+            updated_attributes: HashMap::from([
+                ("dynamic_fee_module".to_string(), Bytes::from(dynamic_fee_module)),
+                ("dfc_baseFee".to_string(), Bytes::from(500_u32.to_be_bytes())),
+                ("dfc_scalingFactor".to_string(), Bytes::from(0_u64.to_be_bytes())),
+                ("dfc_feeCap".to_string(), Bytes::from(700_u32.to_be_bytes())),
+                ("dfc_initialFeeEnabled".to_string(), Bytes::from([0_u8])),
+                ("dfc_initialFee".to_string(), Bytes::from(0_u32.to_be_bytes())),
+            ]),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn dynamic_fee_update_applies_for_supported_module() {
+        let mut pool = create_basic_test_pool();
+        pool.dfc = DynamicFeeConfig::new(4500, 10_000, 1, false, 0);
+        let delta =
+            dynamic_fee_delta(hex_literal::hex!("090b2A6bb475c00e2256e2095A60887cD710803b"));
+
+        pool.delta_transition(delta, &HashMap::new(), &Balances::default())
+            .expect("dynamic fee update should be valid");
+
+        assert_eq!(
+            pool.get_fee()
+                .expect("fee should be computable"),
+            500
+        );
+    }
+
+    #[test]
+    fn dynamic_fee_update_falls_back_to_default_for_unsupported_module() {
+        // An unsupported-module delta resets to default rather than erroring; pool keeps
+        // default_fee.
+        let mut pool = create_basic_test_pool();
+        pool.dfc = DynamicFeeConfig::new(4500, 10_000, 1, false, 0);
+        let delta =
+            dynamic_fee_delta(hex_literal::hex!("DB45818A6db280ecfeB33cbeBd445423d0216b5D"));
+
+        pool.delta_transition(delta, &HashMap::new(), &Balances::default())
+            .expect("unsupported module delta should decode to the default config");
+
+        assert_eq!(pool.dfc, DynamicFeeConfig::default());
+        assert_eq!(
+            pool.get_fee()
+                .expect("fee should be computable"),
+            3000
+        );
+    }
+
+    #[test]
+    fn applies_partial_dynamic_fee_updates_after_module_initialization() {
+        let mut pool = create_basic_test_pool();
+        pool.dfc = DynamicFeeConfig::new(4500, 10_000, 1, false, 0);
+        let delta = ProtocolStateDelta {
+            component_id: "test-pool".to_string(),
+            updated_attributes: HashMap::from([(
+                "dfc_baseFee".to_string(),
+                Bytes::from(500_u32.to_be_bytes()),
+            )]),
+            ..Default::default()
+        };
+
+        pool.delta_transition(delta, &HashMap::new(), &Balances::default())
+            .expect("partial dynamic fee update should be valid");
+
+        assert_eq!(pool.dfc, DynamicFeeConfig::new(500, 10_000, 1, false, 0));
     }
 
     #[test]
@@ -729,7 +815,7 @@ mod tests {
             tick,
             ticks,
             vec![Observation::default()],
-            DynamicFeeConfig::new(3000, 10_000, 1),
+            DynamicFeeConfig::new(3000, 10_000, 1, false, 0),
         )
         .expect("Failed to create pool");
 

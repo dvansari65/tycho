@@ -51,15 +51,22 @@ use crate::{
     impl_non_serializable_protocol,
 };
 
-// Gas limit constants for capping get_limits calculations
-// These prevent simulations from exceeding Ethereum's block gas limit
-// The names of the constants reflect the exact method from the tenderly log.
-const SWAP_BASE_GAS: u64 = 130_000;
-const GAS_PER_TICK: u64 = 17_540;
-const GAS_PER_BITMAP_LOOKUP: u64 = 4_000;
-// Cost of taking the output amount from the Uniswap V4 PoolManager, corresponds to
-// PoolManager.take()
+// Fixed overhead per swap: covers router overhead, executor preamble (decode, sync,
+// unlock/callback pattern), and token transfer-in.
+const SWAP_BASE_GAS: u64 = 185_000;
+// Per loop: PoolManager.swap bitmap lookup + sqrt math + computeSwapStep.
+// V4's singleton PoolManager hits warmer storage than V3 standalone pools: ~3,500/loop.
+const GAS_PER_BITMAP_LOOKUP: u64 = 3_500;
+// Initialized tick crossing: _updateTick() updates feeGrowthOutside0/1 (2 SSTOREs).
+// Warm ≈ 10–17k, cold ≈ 40–52k. We use a blended estimate that
+// weights toward cold costs.
+const GAS_PER_TICK: u64 = 29_000;
+// Settlement overhead within swapExactInputSingle: _settle() + _getFullCredit() + misc.
 const V4_CALLBACK_SETTLEMENT_GAS: u64 = 30_000;
+// PoolManager Hooks.sol wrapper overhead per hook call: ABI encode params,
+// external CALL dispatch, decode return, validate selector, and process
+// the returned BeforeSwapDelta / AfterSwapDelta.
+const PM_PER_HOOK_CALL_OVERHEAD: u64 = 25_000;
 // Conservative max gas budget for a single swap (Ethereum transaction gas limit)
 const MAX_SWAP_GAS: u64 = 16_700_000;
 const MAX_TICKS_CROSSED: u64 = (MAX_SWAP_GAS - SWAP_BASE_GAS) / GAS_PER_TICK;
@@ -213,7 +220,7 @@ impl UniswapV4State {
             tick: self.tick,
             liquidity: self.liquidity,
         };
-        let mut gas_used = U256::from(0);
+        let mut gas_used = U256::from(SWAP_BASE_GAS);
 
         while state.amount_remaining != I256::ZERO && state.sqrt_price != price_limit {
             let (mut next_tick, initialized) = match self
@@ -657,8 +664,19 @@ impl ProtocolSim for UniswapV4State {
         new_state.tick = result.tick;
         new_state.sqrt_price = result.sqrt_price;
 
-        // Add hook gas costs to baseline swap cost
-        let total_gas_used = result.gas_used + U256::from(before_swap_gas + after_swap_gas);
+        // Add hook gas costs to baseline swap cost.
+        // before_swap_gas / after_swap_gas capture the hook contract's internal
+        // logic (from VM simulation). PM_PER_HOOK_CALL_OVERHEAD accounts for the
+        // PoolManager's Hooks.sol dispatch wrapper that is not captured by either
+        // the native swap constants or the VM simulation.
+        let mut hook_overhead = before_swap_gas + after_swap_gas;
+        if before_swap_gas > 0 {
+            hook_overhead += PM_PER_HOOK_CALL_OVERHEAD;
+        }
+        if after_swap_gas > 0 {
+            hook_overhead += PM_PER_HOOK_CALL_OVERHEAD;
+        }
+        let total_gas_used = result.gas_used + U256::from(hook_overhead);
         Ok(GetAmountOutResult::new(
             u256_to_biguint(U256::from(amount_out.abs())),
             u256_to_biguint(total_gas_used),
