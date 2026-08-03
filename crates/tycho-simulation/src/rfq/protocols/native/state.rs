@@ -2,6 +2,7 @@ use std::{any::Any, collections::HashMap, fmt};
 
 use async_trait::async_trait;
 use num_bigint::BigUint;
+use num_traits::{FromPrimitive, ToPrimitive};
 use serde::{Deserialize, Serialize};
 use tycho_common::{
     dto::ProtocolStateDelta,
@@ -90,22 +91,118 @@ impl ProtocolSim for NativeState {
 
     fn get_amount_out(
         &self,
-        _amount_in: BigUint,
-        _token_in: &Token,
-        _token_out: &Token,
+        amount_in: BigUint,
+        token_in: &Token,
+        token_out: &Token,
     ) -> Result<GetAmountOutResult, SimulationError> {
-        // Basic stub since amount out calculation requires proper decimal shifting and level
-        // walking
-        Err(SimulationError::RecoverableError("Not implemented".into()))
+        let is_sell_base = token_in.address == self.base_token.address &&
+            token_out.address == self.quote_token.address;
+        let is_sell_quote = token_in.address == self.quote_token.address &&
+            token_out.address == self.base_token.address;
+
+        if !is_sell_base && !is_sell_quote {
+            return Err(SimulationError::InvalidInput(
+                format!(
+                    "Invalid token addresses. Got in={}, out={}",
+                    token_in.address, token_out.address
+                ),
+                None,
+            ));
+        }
+
+        let amount_in_f64 = amount_in.to_f64().ok_or_else(|| {
+            SimulationError::RecoverableError("Can't convert amount in to f64".into())
+        })? / 10f64.powi(token_in.decimals as i32);
+
+        let levels = if is_sell_base {
+            self.book.bids.clone()
+        } else {
+            NativePriceData::invert_price_levels(&self.book.asks)
+        };
+
+        if levels.is_empty() {
+            return Err(SimulationError::RecoverableError("No liquidity".into()));
+        }
+
+        let (amount_out_f64, remaining) =
+            NativePriceData::get_amount_out_from_levels(amount_in_f64, &levels);
+
+        if remaining > 0.0 {
+            return Err(SimulationError::InvalidInput(
+                format!("Pool has not enough liquidity to support complete swap. Input amount: {}, consumed: {}", amount_in_f64, amount_in_f64 - remaining),
+                None,
+            ));
+        }
+
+        let amount_base = if is_sell_base { amount_in_f64 } else { amount_out_f64 };
+        if self.book.minimum_in_base > 0.0 && amount_base < self.book.minimum_in_base {
+            return Err(SimulationError::RecoverableError(format!(
+                "Amount below minimum. Base amount: {}, min amount: {}",
+                amount_base, self.book.minimum_in_base
+            )));
+        }
+
+        let res = GetAmountOutResult {
+            amount: BigUint::from_f64(amount_out_f64 * 10f64.powi(token_out.decimals as i32))
+                .ok_or_else(|| {
+                    SimulationError::RecoverableError("Can't convert amount out to BigUInt".into())
+                })?,
+            gas: BigUint::from(134_000u64), // Approximate standard gas for Native swap
+            new_state: self.clone_box(),
+        };
+
+        Ok(res)
     }
 
     fn get_limits(
         &self,
-        _sell_token: Bytes,
-        _buy_token: Bytes,
+        sell_token: Bytes,
+        buy_token: Bytes,
     ) -> Result<(BigUint, BigUint), SimulationError> {
-        // Basic stub
-        Err(SimulationError::RecoverableError("Not implemented".into()))
+        let is_sell_base =
+            sell_token == self.base_token.address && buy_token == self.quote_token.address;
+        let is_sell_quote =
+            sell_token == self.quote_token.address && buy_token == self.base_token.address;
+
+        if !is_sell_base && !is_sell_quote {
+            return Err(SimulationError::InvalidInput(
+                format!("Invalid token addresses. Got sell={}, buy={}", sell_token, buy_token),
+                None,
+            ));
+        }
+
+        let levels = if is_sell_base {
+            self.book.bids.clone()
+        } else {
+            NativePriceData::invert_price_levels(&self.book.asks)
+        };
+
+        if levels.is_empty() {
+            return Err(SimulationError::RecoverableError("No liquidity".into()));
+        }
+
+        let (total_sell_amount, total_buy_amount) =
+            levels
+                .iter()
+                .fold((0.0, 0.0), |(sell_sum, buy_sum), level| {
+                    (sell_sum + level.quantity, buy_sum + level.quantity * level.price)
+                });
+
+        let sell_decimals =
+            if is_sell_base { self.base_token.decimals } else { self.quote_token.decimals };
+        let buy_decimals =
+            if is_sell_base { self.quote_token.decimals } else { self.base_token.decimals };
+
+        let sell_limit = BigUint::from_f64(total_sell_amount * 10f64.powi(sell_decimals as i32))
+            .ok_or_else(|| {
+                SimulationError::RecoverableError("Can't convert limit to BigUInt".into())
+            })?;
+        let buy_limit = BigUint::from_f64(total_buy_amount * 10f64.powi(buy_decimals as i32))
+            .ok_or_else(|| {
+                SimulationError::RecoverableError("Can't convert limit to BigUInt".into())
+            })?;
+
+        Ok((sell_limit, buy_limit))
     }
 
     fn delta_transition(

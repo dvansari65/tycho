@@ -185,7 +185,7 @@ mod tests {
         assert_eq!(result.book.asks.len(), 1);
         assert_eq!(result.book.bids[0].price, 3000.0);
         assert_eq!(result.book.bids[0].quantity, 1.5);
-        assert_eq!(result.client.orderbook_endpoint, NativeClient::DEFAULT_ORDERBOOK_ENDPOINT);
+        assert_eq!(result.client.endpoint, NativeClient::DEFAULT_ENDPOINT);
     }
 
     #[tokio::test]

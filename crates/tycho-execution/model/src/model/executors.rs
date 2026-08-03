@@ -43,6 +43,7 @@ pub enum Executor {
     AerodromeV1,
     LiquidityParty,
     LunarBase,
+    Native,
 }
 
 /// Return value of [Executor::get_transfer_data]
@@ -63,7 +64,7 @@ pub struct CallbackTransferData {
 
 impl Executor {
     /// Array containing all [Executor]s.
-    pub const VARIANTS: [Executor; 11] = [
+    pub const VARIANTS: [Executor; 12] = [
         Executor::Curve,
         Executor::ERC4626,
         Executor::FluidV1,
@@ -75,6 +76,7 @@ impl Executor {
         Executor::AerodromeV1,
         Executor::LiquidityParty,
         Executor::LunarBase,
+        Executor::Native,
     ];
 
     /// <https://github.com/propeller-heads/tycho-indexer/blob/d0a5db4ab55baf9ff87fb54cdfb59e015866b409/crates/tycho-execution/contracts/interfaces/IExecutor.sol#L41>
@@ -333,6 +335,32 @@ impl Executor {
                         Address::POSSIBLY_ERC20_AND_NATIVE,
                     )?,
                     output_to_router: false,
+                })
+            }
+            Self::Native => {
+                let token_in = params.request(
+                    ParamKey::ProtocolData { swap_index, start: 0, end: 20 },
+                    Address::POSSIBLY_ERC20_AND_NATIVE,
+                )?;
+                let token_out = params.request(
+                    ParamKey::ProtocolData { swap_index, start: 20, end: 40 },
+                    Address::POSSIBLY_ERC20_AND_NATIVE,
+                )?;
+                let target = params.request(
+                    ParamKey::ProtocolData { swap_index, start: 40, end: 60 },
+                    Address::SENDER_CONTROLLED,
+                )?;
+                let is_native_sell = token_in == Address::NativeETH;
+                Ok(TransferData {
+                    transfer_type: if is_native_sell {
+                        TransferType::TransferNativeInExecutor
+                    } else {
+                        TransferType::ProtocolWillDebit
+                    },
+                    receiver: if is_native_sell { Address::Zero } else { target },
+                    token_in,
+                    token_out,
+                    output_to_router: true,
                 })
             }
         }
@@ -623,6 +651,20 @@ impl Executor {
                 // the actual swap logic doesn't matter
                 Ok(())
             }
+            Self::Native => {
+                let target = params.request(
+                    ParamKey::ProtocolData { swap_index, start: 40, end: 60 },
+                    Address::SENDER_CONTROLLED,
+                )?;
+                if target.is_sender_controlled() {
+                    Ok(())
+                } else {
+                    Err(Error::Ignore {
+                        reason: "native target not sender controlled. not low hanging fruit."
+                            .into(),
+                    })
+                }
+            }
         }
     }
 
@@ -658,6 +700,7 @@ impl Executor {
             Self::AerodromeV1 => unimplemented!(),
             Self::LiquidityParty => unimplemented!(),
             Self::LunarBase => unimplemented!(),
+            Self::Native => unimplemented!(),
         }
     }
 
@@ -685,6 +728,7 @@ impl Executor {
             Self::AerodromeV1 => unimplemented!("AerodromeV1 doesn't use callbacks"),
             Self::LiquidityParty => unimplemented!("LiquidityParty doesn't use callbacks"),
             Self::LunarBase => unimplemented!("LunarBase doesn't use callbacks"),
+            Self::Native => unimplemented!("Native doesn't use callbacks"),
         }
     }
 
@@ -745,6 +789,7 @@ impl Executor {
             )?,
             // https://github.com/propeller-heads/tycho-indexer/blob/ae386ce3a9decbf8d73dab474e80a3d3785f02ef/crates/tycho-execution/contracts/src/executors/LunarBaseExecutor.sol#L37
             Self::LunarBase => Address::Router,
+            Self::Native => Address::Router,
         })
     }
 }

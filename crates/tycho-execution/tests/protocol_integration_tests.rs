@@ -3217,3 +3217,69 @@ fn test_single_encoding_strategy_uniswap_v3_bsc() {
     let hex_calldata = encode(&calldata);
     write_calldata_to_file("test_single_encoding_strategy_uniswap_v3_bsc", hex_calldata.as_str());
 }
+
+#[test]
+fn test_single_encoding_strategy_native() {
+    let token_in = usdc();
+    let token_out = eth();
+
+    let target_address = "0xb2d1F342D2049684Fb2f8c4eF320633415598333";
+    let target_bytes = Bytes::from_str(target_address).unwrap();
+    let calldata_hex = "af70653900000000000000000000000000000000000000000000000000000000000000600000000000000000000000000000000000000000000000000000000000000000";
+    let calldata_bytes = Bytes::from(hex::decode(calldata_hex).unwrap());
+
+    let native_quote_data = vec![
+        ("target".to_string(), target_bytes),
+        ("calldata".to_string(), calldata_bytes),
+        ("value".to_string(), Bytes::from(vec![b'0'])),
+    ];
+
+    let native_state = MockRFQState {
+        quote_amount_out: BigUint::from_str("1000000000000000000").unwrap(),
+        quote_data: native_quote_data.into_iter().collect(),
+    };
+
+    let component =
+        ProtocolComponent { protocol_system: "rfq:native".to_string(), ..Default::default() };
+
+    let swap = Swap::new(
+        component,
+        default_token(token_in.clone()),
+        default_token(token_out.clone()),
+        BigUint::ZERO,
+    )
+    .with_estimated_amount_in(BigUint::from_str("3000000000").unwrap())
+    .with_protocol_state(Arc::new(native_state));
+
+    let encoder = get_tycho_router_encoder(Chain::Ethereum);
+
+    let solution = Solution::new(
+        alice_address(),
+        alice_address(),
+        token_in,
+        token_out,
+        BigUint::from_str("3000000000").unwrap(),
+        BigUint::from_str("1000").unwrap(),
+        vec![swap],
+    );
+
+    let encoded_solution = encoder
+        .encode_solutions(vec![solution.clone()])
+        .unwrap()[0]
+        .clone();
+
+    let calldata = encode_tycho_router_call(
+        eth_chain().id(),
+        encoded_solution,
+        &solution,
+        &eth(),
+        None,
+        0,
+        Bytes::zero(20),
+        BigUint::ZERO,
+    )
+    .unwrap()
+    .data;
+    let hex_calldata = encode(&calldata);
+    write_calldata_to_file("test_single_encoding_strategy_native", hex_calldata.as_str());
+}

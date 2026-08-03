@@ -30,6 +30,7 @@ import {LiquoriceExecutor} from "../src/executors/LiquoriceExecutor.sol";
 import {AerodromeV1Executor} from "../src/executors/AerodromeV1Executor.sol";
 import {MetricExecutor} from "../src/executors/MetricExecutor.sol";
 import {RingSwapV2Executor} from "../src/executors/RingSwapV2Executor.sol";
+import {NativeExecutor} from "../src/executors/NativeExecutor.sol";
 // Test utilities and mocks
 import "./Constants.sol";
 import "./TestUtils.sol";
@@ -129,6 +130,7 @@ contract TychoRouterTestSetup is
     MetricExecutor public metricExecutor;
     BopAMMExecutor public bopAMMExecutor;
     RingSwapV2Executor public ringSwapV2Executor;
+    NativeExecutor public nativeExecutor;
 
     FeeCalculator feeCalculator;
     address routerFeeReceiver;
@@ -251,8 +253,9 @@ contract TychoRouterTestSetup is
         bopAMMExecutor = new BopAMMExecutor(BOPAMM_SETTLEMENT);
         ringSwapV2Executor =
             new RingSwapV2Executor(RING_FEW_FACTORY, RING_SWAP_FACTORY);
+        nativeExecutor = new NativeExecutor();
 
-        address[] memory executors = new address[](25);
+        address[] memory executors = new address[](26);
         executors[0] = address(usv2Executor);
         executors[1] = address(usv3Executor);
         executors[2] = address(pancakev3Executor);
@@ -278,6 +281,7 @@ contract TychoRouterTestSetup is
         executors[22] = address(metricExecutor);
         executors[23] = address(bopAMMExecutor);
         executors[24] = address(ringSwapV2Executor);
+        executors[25] = address(nativeExecutor);
         return executors;
     }
 

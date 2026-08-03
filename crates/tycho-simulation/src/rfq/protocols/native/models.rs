@@ -133,7 +133,10 @@ impl NativePriceData {
         Some(amount_out / consumed_amount_in)
     }
 
-    fn get_amount_out_from_levels(amount_in: f64, price_levels: &[NativePriceLevel]) -> (f64, f64) {
+    pub fn get_amount_out_from_levels(
+        amount_in: f64,
+        price_levels: &[NativePriceLevel],
+    ) -> (f64, f64) {
         let mut remaining_amount_in = amount_in;
         let mut amount_out = 0.0;
 
@@ -150,7 +153,7 @@ impl NativePriceData {
         (amount_out, remaining_amount_in)
     }
 
-    fn invert_price_levels(price_levels: &[NativePriceLevel]) -> Vec<NativePriceLevel> {
+    pub fn invert_price_levels(price_levels: &[NativePriceLevel]) -> Vec<NativePriceLevel> {
         price_levels
             .iter()
             .filter(|level| level.price > 0.0)
@@ -159,6 +162,148 @@ impl NativePriceData {
                 price: 1.0 / level.price,
             })
             .collect()
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FirmQuoteRequest {
+    pub from_address: String,
+    pub src_chain: NativeSupportedChain,
+    pub dst_chain: NativeSupportedChain,
+    pub token_in: String,
+    pub token_out: String,
+    pub amount_wei: String,
+    pub version: u32,
+    pub allow_multihop: bool,
+}
+
+// --- Response ---
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct WidgetFee {
+    pub signer: String,
+    #[serde(rename = "feeRecipient")]
+    pub fee_recipient: String,
+    #[serde(rename = "feeRate")]
+    pub fee_rate: f64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct TxRequest {
+    pub target: String,
+    pub calldata: String,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct FirmQuoteOrder {
+    pub pool: String,
+    pub signer: String,
+    pub recipient: String,
+    #[serde(rename = "sellerToken")]
+    pub seller_token: String,
+    #[serde(rename = "buyerToken")]
+    pub buyer_token: String,
+    #[serde(rename = "effectiveSellerTokenAmount")]
+    pub effective_seller_token_amount: String,
+    #[serde(rename = "sellerTokenAmount")]
+    pub seller_token_amount: String,
+    #[serde(rename = "buyerTokenAmount")]
+    pub buyer_token_amount: String,
+    #[serde(rename = "deadlineTimestamp")]
+    pub deadline_timestamp: u64,
+    pub nonce: u64,
+    #[serde(rename = "quoteId")]
+    pub quote_id: String,
+    #[serde(rename = "multiHop")]
+    pub multi_hop: bool,
+    pub signature: String,
+    #[serde(rename = "externalSwapCalldata")]
+    pub external_swap_calldata: String,
+    #[serde(rename = "amountOutMinimum")]
+    pub amount_out_minimum: String,
+    #[serde(rename = "widgetFee")]
+    pub widget_fee: WidgetFee,
+    #[serde(rename = "widgetFeeSignature")]
+    pub widget_fee_signature: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct FirmQuoteResponse {
+    pub success: bool,
+    pub orders: Vec<FirmQuoteOrder>,
+    #[serde(rename = "widgetFee")]
+    pub widget_fee: WidgetFee,
+    #[serde(rename = "widgetFeeSignature")]
+    pub widget_fee_signature: String,
+    pub recipient: String,
+    #[serde(rename = "amountIn")]
+    pub amount_in: String,
+    #[serde(rename = "amountOut")]
+    pub amount_out: String,
+    #[serde(rename = "amountOutBeforeFee")]
+    pub amount_out_before_fee: String,
+    #[serde(rename = "fallbackSwapDataArray")]
+    pub fallback_swap_data_array: Option<serde_json::Value>,
+    #[serde(rename = "tokenTransferFeeOnPercent")]
+    pub token_transfer_fee_on_percent: f64,
+    #[serde(rename = "txRequest")]
+    pub tx_request: TxRequest,
+    pub source: Vec<u32>,
+    #[serde(rename = "errorMessage")]
+    pub error_message: String,
+    #[serde(rename = "router_version")]
+    pub router_version: String,
+    #[serde(rename = "toWrap")]
+    pub to_wrap: bool,
+    #[serde(rename = "toUnwrap")]
+    pub to_unwrap: bool,
+    #[serde(rename = "amountInOffset")]
+    pub amount_in_offset: u32,
+    #[serde(rename = "amountOutMinimumOffset")]
+    pub amount_out_minimum_offset: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NativeSupportedChain {
+    Ethereum,
+    Bsc,
+    Arbitrum,
+    Base,
+    Monad,
+    Xlayer,
+    Robinhood,
+    Morph,
+}
+
+impl TryFrom<tycho_common::models::Chain> for NativeSupportedChain {
+    type Error = String;
+
+    fn try_from(chain: tycho_common::models::Chain) -> Result<Self, Self::Error> {
+        match chain.id() {
+            1 => Ok(NativeSupportedChain::Ethereum),
+            56 => Ok(NativeSupportedChain::Bsc),
+            42161 => Ok(NativeSupportedChain::Arbitrum),
+            8453 => Ok(NativeSupportedChain::Base),
+            id => Err(format!("Chain ID {} not supported by Native API", id)),
+        }
+    }
+}
+
+// TODO: take intersection of the tycho supported chains and native supported chain
+impl NativeSupportedChain {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            NativeSupportedChain::Ethereum => "ethereum",
+            NativeSupportedChain::Bsc => "bsc",
+            NativeSupportedChain::Arbitrum => "arbitrum",
+            NativeSupportedChain::Base => "base",
+            NativeSupportedChain::Monad => "monad",
+            NativeSupportedChain::Xlayer => "xlayer",
+            NativeSupportedChain::Robinhood => "robinhood",
+            NativeSupportedChain::Morph => "morph",
+        }
     }
 }
 
