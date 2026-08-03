@@ -147,7 +147,7 @@ impl ProtocolSim for PriceLevelStreamState {
         let quotes = self.quotes(&base.address, &quote.address)?;
         let best = quotes
             .iter()
-            .find(|q| q.amount_in > BigUint::ZERO)
+            .find(|q| q.amount_in > BigUint::ZERO && q.amount_out > BigUint::ZERO)
             .ok_or_else(|| {
                 SimulationError::RecoverableError("No liquidity available".to_string())
             })?;
@@ -452,6 +452,23 @@ mod tests {
             .unwrap();
         // 100k USDC (1e11 at 6 decimals) -> 0.99 WBTC: 0.99 / 100_000 = 9.9e-6.
         assert!((inverse - 9.9e-6).abs() < 1e-15);
+    }
+
+    #[test]
+    fn spot_price_skips_zero_amount_out_quotes() {
+        // A dust level rounding to zero output must not produce a spot price of 0 — consumers
+        // computing 1/spot_price would divide by zero.
+        let state = PriceLevelStreamState::new(
+            wbtc().address,
+            usdc().address,
+            vec![quote(1, 0), quote(100_000_000, 100_000_000_000)],
+            vec![],
+            BigUint::ZERO,
+        );
+        let price = state
+            .spot_price(&wbtc(), &usdc())
+            .unwrap();
+        assert!((price - 100_000.0).abs() < 1e-9);
     }
 
     #[test]
