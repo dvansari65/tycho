@@ -43,6 +43,7 @@ const deploy_protocols = {
         "native_wrapper",
         "lunarbase",
         "rfq:metric",
+        "rfq:native"
     ],
     "unichain": [
         "uniswap_v2",
@@ -58,6 +59,7 @@ const deploy_protocols = {
         "uniswap_v4",
         "native_wrapper",
         "rfq:metric",
+        "rfq:native"
     ],
     "polygon": [
         "uniswap_v2",
@@ -73,6 +75,7 @@ const deploy_protocols = {
         "uniswap_v4",
         "native_wrapper",
         "rfq:metric",
+        "rfq:native"
     ],
     "plasma": [
         "uniswap_v3",

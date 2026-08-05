@@ -23,15 +23,29 @@
     "rfq:liquorice": "0x3381cD18e2Fb4dB236BF0525938AB6E43Db0440f",
     "vm:fermiswap": "0xe8dc788818033232EF9772CB2e6622F1Ec8bc840",
     "vm:bopamm": "0x27cc01A4676C73fe8b6d0933Ac991BfF1D77C4da",
-    "rfq:native": "0x796f2974e3C1af763252512dd6d521E9E984726C"
+    "rfq:native": [
+      "0x8a2ddc0461Fcf96F81a05529Bed540d4f1eb2a00",
+      "0xa540ec8C73322200d68E1B86c471A5C850854f22",
+      "0xe3D41d19564922C9952f692C5Dd0563030f5f2EF"
+    ]
   },
   "base": {
     "aerodrome_slipstreams": "0x2a07706473244BC757E10F2a9E86fB532828afe3",
     "aerodrome_v1": "0x1aF7f588A501EA2B5bB3feeFA744892aA2CF00e6",
-    "rfq:metric": "0x3Cff5E7eBecb676c3Cb602D0ef2d46710b88854E"
+    "rfq:metric": "0x3Cff5E7eBecb676c3Cb602D0ef2d46710b88854E",
+    "rfq:native":[
+      "0xaEC634d949df14Be76dC317504C7b9a6a8A5f576",
+      "0xd547727b926648Af3F31DbB89E3B93E49F78dCb8",
+      "0x74a4Cd023e5AfB88369E3f22b02440F2614a1367"
+    ]
   },
   "arbitrum": {
-    "uniswap_v3": "0x2e234DAe75C793f67A35089C9d99245E1C58470b"
+    "uniswap_v3": "0x2e234DAe75C793f67A35089C9d99245E1C58470b",
+    "rfq:native":[
+      "0x0FC85a171bD0b53BF0bBace74F04B66170Ae3eAb",
+      "0x7d1c4889DF6113B3e4581a8c0484374bdeC3341B",
+      "0xbA1cf8A63227b46575AF823BEB4d83D1025eff09"
+    ]
   },
   "polygon": {
     "uniswap_v3": "0x2e234DAe75C793f67A35089C9d99245E1C58470b",
@@ -39,5 +53,31 @@
   },
   "bsc": {
     "uniswap_v3": "0x2e234DAe75C793f67A35089C9d99245E1C58470b"
+  },
+  "monad": {
+    "rfq:native":[
+       "0x332e56e0b91eC3F08553eC7964E19CC041A38672",
+       "0xcD1D2D602C3e7394515DaAe96e4FFe16DE71e5B4"
+    ]
+  },
+  "xlayer": {
+    "rfq:native": [
+      "0x45F4D4AED68A04E9a48EED69E1C8b15d7875d25F",
+      "0xFF12771C74A9394477C2ce53F82b67C93d5D7B82",
+      "0x4Df7557734B382EB542BEa6c74786D398DF4CC19"
+    ]
+  },
+  "robinhood": {
+    "rfq:native": [
+      "0xa5ec1f0aC784C3620fFDcdf2A7DbcEF9DA658ea4",
+      "0xe7D5083b8cA725258552da45C781ED04eF079C7f",
+      "0x57B8f68ef57Af2dB70BC9aAc891836661CA4cB51"
+    ]
+  },
+  "morph": {
+    "rfq:native": [
+      "0x45F4D4AED68A04E9a48EED69E1C8b15d7875d25F",
+      "0x4Df7557734B382EB542BEa6c74786D398DF4CC19"
+    ]
   }
 }
