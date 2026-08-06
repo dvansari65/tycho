@@ -8,11 +8,32 @@ import {ETH_ADDRESS} from "../../lib/NativeETH.sol";
 
 error NativeExecutor__InvalidDataLength();
 error NativeExecutor__InvalidTarget();
+error NativeExecutor__InvalidPayload();
+error NativeExecutor__ZeroAddress();
+error NativeExecutor__NotAContract();
 
 contract NativeExecutor is IExecutor {
     using Address for address;
 
-    constructor() {}
+    address public immutable nativeRouterV4;
+    address public immutable nativeRouterV3;
+    address public immutable creditVault;
+
+    // this function selector is consistent across all versions 
+    // of the native router (v3, v4)
+    bytes4 private constant _SELECTOR = 0x0947c2d9;
+
+    constructor(address _nativeRouterV4, address _nativeRouterV3, address _creditVault) {
+        if (_nativeRouterV4 == address(0) || _nativeRouterV3 == address(0) || _creditVault == address(0)) {
+            revert NativeExecutor__ZeroAddress();
+        }
+        if (_nativeRouterV4.code.length == 0 || _nativeRouterV3.code.length == 0 || _creditVault.code.length == 0) {
+            revert NativeExecutor__NotAContract();
+        }
+        nativeRouterV4 = _nativeRouterV4;
+        nativeRouterV3 = _nativeRouterV3;
+        creditVault = _creditVault;
+    }
 
     function fundsExpectedAddress(
         bytes calldata /* data */
@@ -35,7 +56,17 @@ contract NativeExecutor is IExecutor {
             uint256 value,
             bytes memory payload
         ) = _decodeData(data);
-
+        
+        // checking target address against native's router
+         if (target != nativeRouterV3 && target != nativeRouterV4 && target != creditVault) {
+            revert NativeExecutor__InvalidTarget();
+        }
+        
+        // check payload against function selector
+        bytes4 selector = bytes4(payload);
+        if(selector != _SELECTOR ){
+            revert NativeExecutor__InvalidPayload();
+        }
 
         // Prevent Dispatcher ETH drain vulnerability:
         // The `value` from the Native API could maliciously be set to drain the Dispatcher.
@@ -78,11 +109,6 @@ contract NativeExecutor is IExecutor {
         payload = data[92:];
     }
 
-    /**
-     * @dev Allow receiving ETH for settlement calls that require ETH
-     */
-    receive() external payable {}
-
     function getTransferData(bytes calldata data)
         external
         view
@@ -97,6 +123,9 @@ contract NativeExecutor is IExecutor {
         address target;
         (tokenIn, tokenOut, target, /* value */, /* payload */) = _decodeData(data);
 
+        if (target != nativeRouterV3 && target != nativeRouterV4 && target != creditVault) {
+            revert NativeExecutor__InvalidTarget();
+        }
 
         if (tokenIn == ETH_ADDRESS) {
             transferType = TransferManager.TransferType.TransferNativeInExecutor;
