@@ -42,7 +42,7 @@ pub struct NativeClient {
     pub tvl: f64,
     pub quote_tokens: HashSet<Bytes>,
     pub poll_time: Duration,
-    quote_timeout: Duration,
+    pub quote_timeout: Duration,
 }
 
 impl NativeClient {
@@ -107,7 +107,7 @@ impl NativeClient {
         http_client: &Client,
     ) -> Result<Vec<NativeOrderbookEntry>, RFQError> {
         let response = http_client
-            .get("{}/orderbook")
+            .get(format!("{}/orderbook", self.endpoint))
             .query(&[("chain", self.chain.to_string())])
             .header("accept", "application/json")
             .header("apikey", &self.api_key)
@@ -256,7 +256,6 @@ impl NativeClient {
 
         let mut quote_attributes: HashMap<String, Bytes> = HashMap::new();
         // Native returns tx_request_value in string
-
         quote_attributes.insert(
             "value".to_string(),
             Bytes::from(
