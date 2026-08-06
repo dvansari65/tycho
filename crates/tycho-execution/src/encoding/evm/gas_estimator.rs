@@ -1,6 +1,9 @@
 use num_bigint::BigUint;
 
-use super::{constants::PRICE_LEVEL_STREAM_PREFIX, group_swaps::group_swaps};
+use super::{
+    constants::{PRICE_LEVEL_STREAM_PREFIX, PROPAMM_FALLBACK_PREFIX},
+    group_swaps::group_swaps,
+};
 use crate::encoding::models::{Solution, Strategy, UserTransferType};
 
 /// Default gas usage for an ERC-20 `transferFrom` or `transfer`. Used as fallback when the token
@@ -44,9 +47,11 @@ pub fn optimizable_transfer_in(protocol_system: &str) -> bool {
         protocol_system.starts_with(PRICE_LEVEL_STREAM_PREFIX)
 }
 
-/// ProtocolWillDebit: the router must `approve(protocol)` before swapping.
-/// The protocol's `transferFrom` is inside `swap()` and already in the gas computation of
-/// `get_amount_out`, but the approval is not.
+/// Exact-name protocols where the router must `approve(protocol)` before swapping
+/// (ProtocolWillDebit). The protocol's `transferFrom` is inside `swap()` and already in the gas
+/// computation of `get_amount_out`, but the approval is not.
+///
+/// Incomplete on its own — use `needs_approval` for the full classification.
 pub const PROTOCOLS_NEEDING_APPROVAL: &[&str] = &[
     "vm:balancer_v2",
     "vm:curve",
@@ -57,6 +62,19 @@ pub const PROTOCOLS_NEEDING_APPROVAL: &[&str] = &[
     "erc4626",
     "ring_swap_v2",
 ];
+
+/// Whether the router must approve the protocol before swapping (see
+/// `PROTOCOLS_NEEDING_APPROVAL`). The PropAMMRouter pulls `tokenIn` with `transferFrom`, so the
+/// whole `propammfallback:` family needs the approval.
+pub fn needs_approval(protocol_system: &str) -> bool {
+    PROTOCOLS_NEEDING_APPROVAL.contains(&protocol_system) ||
+        protocol_system.starts_with(PROPAMM_FALLBACK_PREFIX)
+}
+
+/// Extra gas the PropAMMRouter adds on top of the venue swap. Measured on mainnet forks by the
+/// router authors at +48,972 (FermiSwap) and +69,952 (Kipseli); the higher figure is used so the
+/// estimate is not optimistic. Excludes the Uniswap V3 retry, charged only when the venue reverts.
+pub const PROPAMM_FALLBACK_OVERHEAD_GAS: u64 = 70_000;
 
 /// `outputToRouter = true`: the pool sends output to the router, which then does an extra
 /// `_transferOut` to the receiver.
@@ -195,8 +213,14 @@ fn estimate_transfer_overhead(
         overhead += transfer_token_gas(token_in);
     }
 
-    if PROTOCOLS_NEEDING_APPROVAL.contains(&protocol_system) {
+    if needs_approval(protocol_system) {
         overhead += BigUint::from(TOKEN_APPROVAL_GAS);
+    }
+
+    // The venue swap gas from `get_amount_out` prices a direct call, not one wrapped by the
+    // PropAMMRouter.
+    if protocol_system.starts_with(PROPAMM_FALLBACK_PREFIX) {
+        overhead += BigUint::from(PROPAMM_FALLBACK_OVERHEAD_GAS);
     }
 
     // Output transfer: router -> receiver/next pool (only when outputToRouter).
@@ -284,6 +308,22 @@ mod tests {
         // pool gas                            100_000
         // fee output transfer                  60_000  ← not in OUTPUT_TO_ROUTER
         assert_eq!(gas, BigUint::from(200_000u64));
+    }
+
+    #[test]
+    fn test_single_propamm_fallback() {
+        // Routing the same venue through the PropAMMRouter switches the leg to ProtocolWillDebit:
+        // the router pulls tokenIn (input transfer + approval) and charges its own overhead.
+        let solution = make_solution(vec![make_swap("propammfallback:fermiswap")]);
+        let gas = estimate_gas_usage(&solution, Strategy::Single);
+
+        // user transfer (TransferFrom)         40_000  ← DEFAULT_TOKEN_TRANSFER_GAS
+        // input transfer                       60_000  ← router pulls, not push-payment
+        // approval                             25_000  ← TOKEN_APPROVAL_GAS
+        // PropAMMRouter overhead               70_000  ← PROPAMM_FALLBACK_OVERHEAD_GAS
+        // pool gas                            100_000
+        // fee output transfer                  60_000  ← not in OUTPUT_TO_ROUTER
+        assert_eq!(gas, BigUint::from(355_000u64));
     }
 
     #[test]
