@@ -44,6 +44,7 @@ pub enum Executor {
     LiquidityParty,
     LunarBase,
     PropAMM,
+    PropAMMFallback,
 }
 
 /// Return value of [Executor::get_transfer_data]
@@ -64,7 +65,7 @@ pub struct CallbackTransferData {
 
 impl Executor {
     /// Array containing all [Executor]s.
-    pub const VARIANTS: [Executor; 12] = [
+    pub const VARIANTS: [Executor; 13] = [
         Executor::Curve,
         Executor::ERC4626,
         Executor::FluidV1,
@@ -77,6 +78,7 @@ impl Executor {
         Executor::LiquidityParty,
         Executor::LunarBase,
         Executor::PropAMM,
+        Executor::PropAMMFallback,
     ];
 
     /// <https://github.com/propeller-heads/tycho-indexer/blob/d0a5db4ab55baf9ff87fb54cdfb59e015866b409/crates/tycho-execution/contracts/interfaces/IExecutor.sol#L41>
@@ -347,6 +349,22 @@ impl Executor {
                     // and currently is ignored anyway
                     Address::SENDER_CONTROLLED,
                 )?,
+                token_in: params.request(
+                    ParamKey::ProtocolData { swap_index, start: 20, end: 40 },
+                    Address::POSSIBLY_ERC20_AND_NATIVE,
+                )?,
+                token_out: params.request(
+                    ParamKey::ProtocolData { swap_index, start: 40, end: 60 },
+                    Address::POSSIBLY_ERC20_AND_NATIVE,
+                )?,
+                output_to_router: false,
+            }),
+            // https://github.com/propeller-heads/tycho/blob/main/crates/tycho-execution/contracts/src/executors/PropAMMFallbackExecutor.sol
+            // The router pulls tokenIn with transferFrom, so the receiver is the router itself,
+            // not the venue in the swap data as on the push-payment PropAMM path.
+            Self::PropAMMFallback => Ok(TransferData {
+                transfer_type: TransferType::ProtocolWillDebit,
+                receiver: Address::Named("propamm-router"),
                 token_in: params.request(
                     ParamKey::ProtocolData { swap_index, start: 20, end: 40 },
                     Address::POSSIBLY_ERC20_AND_NATIVE,
@@ -664,6 +682,30 @@ impl Executor {
                     })
                 }
             }
+            // https://github.com/propeller-heads/tycho/blob/main/crates/tycho-execution/contracts/src/executors/PropAMMFallbackExecutor.sol
+            Self::PropAMMFallback => {
+                let token_in = params.request(
+                    ParamKey::ProtocolData { swap_index, start: 20, end: 40 },
+                    Address::POSSIBLY_ERC20_AND_NATIVE,
+                )?;
+                let token_out = params.request(
+                    ParamKey::ProtocolData { swap_index, start: 40, end: 60 },
+                    Address::POSSIBLY_ERC20_AND_NATIVE,
+                )?;
+                // The executor passes token addresses through unchanged and declares
+                // ProtocolWillDebit, so a native leg would have the router approve the ETH marker.
+                // The PropAMMRouter's own ETH_SENTINEL path is not used.
+                if token_in == Address::NativeETH || token_out == Address::NativeETH {
+                    return Err(Error::revert(
+                        "PropAMMFallbackExecutor: native token is not supported",
+                    ));
+                }
+                // Unlike the sender-controlled counterparties above, the PropAMMRouter is
+                // governed and whitelist-gated: the swap data cannot make it call arbitrary code.
+                // It has no effect on router state beyond consuming the approval, so this models
+                // the router's accounting around the call, not the venue or the retry.
+                Ok(())
+            }
         }
     }
 
@@ -700,6 +742,7 @@ impl Executor {
             Self::LiquidityParty => unimplemented!(),
             Self::LunarBase => unimplemented!(),
             Self::PropAMM => unimplemented!(),
+            Self::PropAMMFallback => unimplemented!(),
         }
     }
 
@@ -729,6 +772,9 @@ impl Executor {
             Self::LunarBase => unimplemented!("LunarBase doesn't use callbacks"),
             Self::PropAMM => {
                 unimplemented!("PropAMM doesn't use callbacks")
+            }
+            Self::PropAMMFallback => {
+                unimplemented!("PropAMMRouter doesn't use callbacks")
             }
         }
     }
@@ -798,6 +844,9 @@ impl Executor {
                 // and currently is ignored anyway
                 Address::SENDER_CONTROLLED,
             )?,
+            // https://github.com/propeller-heads/tycho/blob/main/crates/tycho-execution/contracts/src/executors/PropAMMFallbackExecutor.sol
+            // Funds stay in the router, which approves the PropAMMRouter.
+            Self::PropAMMFallback => Address::Router,
         })
     }
 }
