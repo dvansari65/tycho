@@ -254,12 +254,19 @@ contract TychoRouterTestSetup is
         ringSwapV2Executor =
             new RingSwapV2Executor(RING_FEW_FACTORY, RING_SWAP_FACTORY);
         
-        // Target address used in the rust unit test is 0xb2d1F342D2049684Fb2f8c4eF320633415598333
-        // We set it as nativeRouterV4 for testing purposes
+        // Target address used in the Rust Native integration test. NativeExecutor validates
+        // constructor targets up front, so test setup gives each allowed target placeholder code.
+        address nativeTestTarget =
+            0xb2d1F342D2049684Fb2f8c4eF320633415598333;
+        if (nativeTestTarget.code.length == 0) {
+            vm.etch(nativeTestTarget, bytes("1"));
+        }
+        if (DUMMY2.code.length == 0) vm.etch(DUMMY2, bytes("1"));
+        if (DUMMY3.code.length == 0) vm.etch(DUMMY3, bytes("1"));
         nativeExecutor = new NativeExecutor(
-            0xb2d1F342D2049684Fb2f8c4eF320633415598333, 
-            address(0), 
-            address(0)
+            nativeTestTarget,
+            DUMMY2,
+            DUMMY3
         );
 
         address[] memory executors = new address[](26);
