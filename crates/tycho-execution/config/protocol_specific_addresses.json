@@ -36,8 +36,9 @@
     "rfq:native": {
       "router_v4": "0xF064b069Ed18Eb5c61159247C55C5af79B28a968",
       "router_v3": "0x0f9f2366C6157F2aCD3C2bFA45Cd9031c152D2Cf",
-      "credit_vault": "0xe3D41d19564922C9952f692C5Dd0563030f5f2EF"
+      "credit_vault": "0xBA8dB0CAf781cAc69b6acf6C848aC148264Cc05d"
     }
   },
-  "plasma": {}
+  "plasma": {},
+  "robinhood": {}
 }

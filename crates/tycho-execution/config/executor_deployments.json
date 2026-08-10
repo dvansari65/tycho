@@ -17,10 +17,7 @@
         "0x0000000aa232009084Bd71A5797d089AA4Edfad4"
       ]
     },
-    "vm:balancer_v2": {
-      "contract": "BalancerV2Executor",
-      "args": []
-    },
+    "vm:balancer_v2": { "contract": "BalancerV2Executor", "args": [] },
     "ekubo_v2": {
       "contract": "EkuboExecutor",
       "args": [
@@ -35,14 +32,8 @@
         "0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84"
       ]
     },
-    "vm:maverick_v2": {
-      "contract": "MaverickV2Executor",
-      "args": []
-    },
-    "vm:balancer_v3": {
-      "contract": "BalancerV3Executor",
-      "args": []
-    },
+    "vm:maverick_v2": { "contract": "MaverickV2Executor", "args": [] },
+    "vm:balancer_v3": { "contract": "BalancerV3Executor", "args": [] },
     "rfq:bebop": {
       "contract": "BebopExecutor",
       "args": [
@@ -66,18 +57,12 @@
       "contract": "FluidV1Executor",
       "args": ["0x52Aa899454998Be5b000Ad077a46Bbe360F4e497"]
     },
-    "erc4626": {
-      "contract": "ERC4626Executor",
-      "args": []
-    },
+    "erc4626": { "contract": "ERC4626Executor", "args": [] },
     "rocketpool": {
       "contract": "RocketpoolExecutor",
       "args": ["0xCE15294273CFb9D9b628F4D61636623decDF4fdC"]
     },
-    "ekubo_v3": {
-      "contract": "EkuboV3Executor",
-      "args": []
-    },
+    "ekubo_v3": { "contract": "EkuboV3Executor", "args": [] },
     "native_wrapper": {
       "contract": "NativeWrapExecutor",
       "args": ["0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"]
@@ -93,10 +78,7 @@
       "contract": "FermiSwapExecutor",
       "args": ["0xb1076fE3AB5e28005C7c323Bac5AC06a680d452e"]
     },
-    "vm:liquidityparty": {
-      "contract": "LiquidityPartyExecutor",
-      "args": []
-    },
+    "vm:liquidityparty": { "contract": "LiquidityPartyExecutor", "args": [] },
     "vm:bopamm": {
       "contract": "BopAMMExecutor",
       "args": ["0xdB13ad0fcD134E9c48f2fDaEa8f6751a0F5349ca"]
@@ -107,14 +89,8 @@
     }
   },
   "base": {
-    "uniswap_v2": {
-      "contract": "UniswapV2Executor",
-      "args": [30]
-    },
-    "uniswap_v3": {
-      "contract": "UniswapV3Executor",
-      "args": []
-    },
+    "uniswap_v2": { "contract": "UniswapV2Executor", "args": [30] },
+    "uniswap_v3": { "contract": "UniswapV3Executor", "args": [] },
     "uniswap_v4": {
       "contract": "UniswapV4Executor",
       "args": [
@@ -129,22 +105,13 @@
         "0xBeb0009ACa35087ce7cCF11637E24dd1Aad3bf2A"
       ]
     },
-    "aerodrome_slipstreams": {
-      "contract": "SlipstreamsExecutor",
-      "args": []
-    },
-    "aerodrome_v1": {
-      "contract": "AerodromeV1Executor",
-      "args": []
-    },
+    "aerodrome_slipstreams": { "contract": "SlipstreamsExecutor", "args": [] },
+    "aerodrome_v1": { "contract": "AerodromeV1Executor", "args": [] },
     "native_wrapper": {
       "contract": "NativeWrapExecutor",
       "args": ["0x4200000000000000000000000000000000000006"]
     },
-    "lunarbase": {
-      "contract": "LunarBaseExecutor",
-      "args": []
-    },
+    "lunarbase": { "contract": "LunarBaseExecutor", "args": [] },
     "rfq:metric": {
       "contract": "MetricExecutor",
       "args": ["0x681E908B8ab57c49C74D770F369754CCC3E1ae09"]
@@ -159,14 +126,8 @@
     }
   },
   "unichain": {
-    "uniswap_v2": {
-      "contract": "UniswapV2Executor",
-      "args": [30]
-    },
-    "uniswap_v3": {
-      "contract": "UniswapV3Executor",
-      "args": []
-    },
+    "uniswap_v2": { "contract": "UniswapV2Executor", "args": [30] },
+    "uniswap_v3": { "contract": "UniswapV3Executor", "args": [] },
     "uniswap_v4": {
       "contract": "UniswapV4Executor",
       "args": [
@@ -287,6 +248,21 @@
         "0x0000000000000000000000000000000000000000",
         "0xcD1D2D602C3e7394515DaAe96e4FFe16DE71e5B4"
       ]
+    }
+  },
+  "robinhood": {
+    "uniswap_v2": { "contract": "UniswapV2Executor", "args": [30] },
+    "uniswap_v3": { "contract": "UniswapV3Executor", "args": [] },
+    "uniswap_v4": {
+      "contract": "UniswapV4Executor",
+      "args": [
+        "0x8366a39CC670B4001A1121B8F6A443A643e40951",
+        "0x0000000aa232009084Bd71A5797d089AA4Edfad4"
+      ]
+    },
+    "native_wrapper": {
+      "contract": "NativeWrapExecutor",
+      "args": ["0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73"]
     }
   }
 }
