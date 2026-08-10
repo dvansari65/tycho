@@ -14,6 +14,15 @@ use crate::encoding::{
     swap_encoder::SwapEncoder,
 };
 
+fn parse_quote_value(value: &Bytes) -> Result<U256, EncodingError> {
+    let value = std::str::from_utf8(value.as_ref()).map_err(|e| {
+        EncodingError::InvalidInput(format!("Native quote value must be UTF-8 decimal bytes: {e}"))
+    })?;
+
+    U256::from_str_radix(value, 10)
+        .map_err(|e| EncodingError::InvalidInput(format!("Invalid Native quote value: {e}")))
+}
+
 #[derive(Clone)]
 pub struct NativeSwapEncoder {
     executor_address: Bytes,
@@ -80,11 +89,9 @@ impl SwapEncoder for NativeSwapEncoder {
                 "Native quote must have a value attribute".to_string(),
             ))?;
 
-        // The Native API returns `value` as a string (e.g. "0").
-        // We parse it as UTF-8 string bytes into a U256 so it can be cleanly packed for the
-        // executor.
-        let value_str = String::from_utf8_lossy(value_bytes.as_ref());
-        let value = U256::from_str_radix(&value_str, 10).unwrap_or_default();
+        // Native returns `value` as a decimal string. Reject malformed values rather than
+        // silently encoding zero and dropping required msg.value for native-input swaps.
+        let value = parse_quote_value(value_bytes)?;
 
         let target_bytes = signed_quote
             .quote_attributes
@@ -202,7 +209,7 @@ mod test {
         let target_bytes = Bytes::from_str(target_address).unwrap();
         let calldata_hex = "0947c2d900000000000000000000000000000000000000000000000000000000000000600000000000000000000000000000000000000000000000000000000000000000";
         let calldata_bytes = Bytes::from(hex::decode(calldata_hex).unwrap());
-        let value_bytes = Bytes::from("00");
+        let value_bytes = Bytes::from(b"0".to_vec());
 
         let native_quote_data = vec![
             ("target".to_string(), target_bytes.clone()),
@@ -257,5 +264,44 @@ mod test {
             calldata_hex
         );
         assert_eq!(hex_swap, expected_swap);
+    }
+
+    #[test]
+    fn test_parse_quote_value_accepts_decimal_utf8() {
+        let value = Bytes::from(b"1000000000000000000".to_vec());
+
+        assert_eq!(parse_quote_value(&value).unwrap(), U256::from(1_000_000_000_000_000_000u64));
+    }
+
+    #[test]
+    fn test_parse_quote_value_rejects_binary_value() {
+        let error = parse_quote_value(&Bytes::from(vec![0])).unwrap_err();
+
+        assert!(matches!(error, EncodingError::InvalidInput(_)));
+    }
+
+    #[test]
+    fn test_parse_quote_value_rejects_invalid_utf8() {
+        let error = parse_quote_value(&Bytes::from(vec![0xff])).unwrap_err();
+
+        assert!(matches!(error, EncodingError::InvalidInput(_)));
+    }
+
+    #[test]
+    fn test_parse_quote_value_rejects_invalid_decimal() {
+        let error = parse_quote_value(&Bytes::from(b"not-a-number".to_vec())).unwrap_err();
+
+        assert!(matches!(error, EncodingError::InvalidInput(_)));
+    }
+
+    #[test]
+    fn test_parse_quote_value_rejects_u256_overflow() {
+        let overflow = Bytes::from(
+            b"115792089237316195423570985008687907853269984665640564039457584007913129639936"
+                .to_vec(),
+        );
+        let error = parse_quote_value(&overflow).unwrap_err();
+
+        assert!(matches!(error, EncodingError::InvalidInput(_)));
     }
 }

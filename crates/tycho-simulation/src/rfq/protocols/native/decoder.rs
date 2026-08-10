@@ -60,10 +60,14 @@ impl TryFromWithBlock<ComponentWithState, TimestampHeader> for NativeState {
         let book: NativePriceData = serde_json::from_slice(book_data)
             .map_err(|e| InvalidSnapshotError::ValueError(format!("Invalid book JSON: {e}")))?;
 
-        // Decoder-created states only need the client for late binding-quote requests.
-        // The API key is intentionally empty here; production callers should build the stream
-        // client from configuration.
-        let client = NativeClientBuilder::new(snapshot.component.chain, String::new())
+        let client_builder =
+            NativeClientBuilder::from_env(snapshot.component.chain).map_err(|e| {
+                InvalidSnapshotError::ValueError(format!(
+                    "Failed to get Native Relay authentication: {e}"
+                ))
+            })?;
+
+        let client = client_builder
             .tokens(HashSet::from([base_token.address.clone(), quote_token.address.clone()]))
             .build()
             .map_err(|e| {
@@ -76,7 +80,7 @@ impl TryFromWithBlock<ComponentWithState, TimestampHeader> for NativeState {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::{collections::HashMap, env};
 
     use tycho_common::models::{
         protocol::{ProtocolComponent, ProtocolComponentState},
@@ -167,6 +171,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_try_from_with_header() {
+        env::set_var("NATIVE_API_KEY", "test-api-key");
+
         let (snapshot, tokens) = create_test_snapshot();
 
         let result = NativeState::try_from_with_header(
@@ -186,6 +192,7 @@ mod tests {
         assert_eq!(result.book.bids[0].price, 3000.0);
         assert_eq!(result.book.bids[0].quantity, 1.5);
         assert_eq!(result.client.endpoint, NativeClient::DEFAULT_ENDPOINT);
+        assert_eq!(result.client.api_key, "test-api-key");
     }
 
     #[tokio::test]

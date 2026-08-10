@@ -87,7 +87,12 @@ impl NativePriceData {
             .map(|level: &NativePriceLevel| level.quantity * level.price)
             .sum();
 
-        let mut total_tvl = (bid_tvl + ask_tvl) / 2.0;
+        let mut total_tvl = match (self.bids.is_empty(), self.asks.is_empty()) {
+            (false, false) => (bid_tvl + ask_tvl) / 2.0,
+            (false, true) => bid_tvl,
+            (true, false) => ask_tvl,
+            (true, true) => 0.0,
+        };
         if let Some(quote_data) = quote_price_data {
             if let Some(price_of_quote_token) =
                 quote_data.get_mid_price(total_tvl, &self.quote_address)
@@ -107,9 +112,15 @@ impl NativePriceData {
         }
 
         let inverse = sell_token == &self.quote_address;
-        let asks_price = Self::get_price_for_levels(amount, &self.asks, inverse)?;
-        let bids_price = Self::get_price_for_levels(amount, &self.bids, inverse)?;
-        Some((asks_price + bids_price) / 2.0)
+        let asks_price = Self::get_price_for_levels(amount, &self.asks, inverse);
+        let bids_price = Self::get_price_for_levels(amount, &self.bids, inverse);
+
+        match (bids_price, asks_price) {
+            (Some(bid), Some(ask)) => Some((bid + ask) / 2.0),
+            (Some(bid), None) => Some(bid),
+            (None, Some(ask)) => Some(ask),
+            (None, None) => None,
+        }
     }
 
     fn get_price_for_levels(
@@ -378,6 +389,32 @@ mod tests {
             asks: vec![NativePriceLevel { quantity: 300.0, price: 11.0 }],
         };
 
+        assert_eq!(price_data_eth_tamara.calculate_tvl(Some(&price_data_tamara_usdc)), 3000.0);
+    }
+
+    #[test]
+    fn calculates_and_normalizes_tvl_for_one_sided_bid_books() {
+        let tamara = addr("0x1234567890123456789012345678901234567890");
+        let price_data_eth_tamara = NativePriceData {
+            base_symbol: "WETH".to_string(),
+            quote_symbol: "TAMARA".to_string(),
+            base_address: addr("0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"),
+            quote_address: tamara.clone(),
+            minimum_in_base: 0.0,
+            bids: vec![NativePriceLevel { quantity: 3.0, price: 100.0 }],
+            asks: vec![],
+        };
+        let price_data_tamara_usdc = NativePriceData {
+            base_symbol: "TAMARA".to_string(),
+            quote_symbol: "USDC".to_string(),
+            base_address: tamara,
+            quote_address: addr("0xA0b86991c6218b36c1d19d4a2e9Eb0cE3606eB48"),
+            minimum_in_base: 0.0,
+            bids: vec![NativePriceLevel { quantity: 300.0, price: 10.0 }],
+            asks: vec![],
+        };
+
+        assert_eq!(price_data_eth_tamara.calculate_tvl(None), 300.0);
         assert_eq!(price_data_eth_tamara.calculate_tvl(Some(&price_data_tamara_usdc)), 3000.0);
     }
 }

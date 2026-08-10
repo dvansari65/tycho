@@ -19,15 +19,24 @@ contract NativeExecutor is IExecutor {
     address public immutable nativeRouterV3;
     address public immutable creditVault;
 
-    // this function selector is consistent across all versions 
+    // this function selector is consistent across all versions
     // of the native router (v3, v4)
     bytes4 private constant _SELECTOR = 0x0947c2d9;
 
-    constructor(address _nativeRouterV4, address _nativeRouterV3, address _creditVault) {
-        if (_nativeRouterV4 == address(0) || _nativeRouterV3 == address(0) || _creditVault == address(0)) {
+    constructor(
+        address _nativeRouterV4,
+        address _nativeRouterV3,
+        address _creditVault
+    ) {
+        // Some supported chains do not deploy V3. V4 and CreditVault are always required.
+        if (_nativeRouterV4 == address(0) || _creditVault == address(0)) {
             revert NativeExecutor__ZeroAddress();
         }
-        if (_nativeRouterV4.code.length == 0 || _nativeRouterV3.code.length == 0 || _creditVault.code.length == 0) {
+        if (
+            _nativeRouterV4.code.length == 0 || _creditVault.code.length == 0
+                || (_nativeRouterV3 != address(0)
+                    && _nativeRouterV3.code.length == 0)
+        ) {
             revert NativeExecutor__NotAContract();
         }
         nativeRouterV4 = _nativeRouterV4;
@@ -56,15 +65,14 @@ contract NativeExecutor is IExecutor {
             uint256 value,
             bytes memory payload
         ) = _decodeData(data);
-        
-        // checking target address against native's router
-         if (target != nativeRouterV3 && target != nativeRouterV4 && target != creditVault) {
+
+        if (!_isValidTarget(target)) {
             revert NativeExecutor__InvalidTarget();
         }
-        
+
         // check payload against function selector
         bytes4 selector = bytes4(payload);
-        if(selector != _SELECTOR ){
+        if (selector != _SELECTOR) {
             revert NativeExecutor__InvalidPayload();
         }
 
@@ -104,9 +112,16 @@ contract NativeExecutor is IExecutor {
         tokenOut = address(bytes20(data[20:40]));
         target = address(bytes20(data[40:60]));
         value = uint256(bytes32(data[60:92]));
-        
+
         // The remaining bytes are the opaque Native Router calldata
         payload = data[92:];
+    }
+
+    function _isValidTarget(address target) private view returns (bool) {
+        return target != address(0)
+            && (target == nativeRouterV4
+                || target == creditVault
+                || (nativeRouterV3 != address(0) && target == nativeRouterV3));
     }
 
     function getTransferData(bytes calldata data)
@@ -121,9 +136,9 @@ contract NativeExecutor is IExecutor {
         )
     {
         address target;
-        (tokenIn, tokenOut, target, /* value */, /* payload */) = _decodeData(data);
+        (tokenIn, tokenOut, target,,) = _decodeData(data);
 
-        if (target != nativeRouterV3 && target != nativeRouterV4 && target != creditVault) {
+        if (!_isValidTarget(target)) {
             revert NativeExecutor__InvalidTarget();
         }
 

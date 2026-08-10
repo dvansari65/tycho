@@ -44,6 +44,17 @@ contract MockNativeTarget {
     }
 }
 
+contract MockNativeEthTarget {
+    IERC20 constant USDC = IERC20(0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48);
+    uint256 constant AMOUNT_IN = 1 ether;
+    uint256 constant AMOUNT_OUT = 1_000_000;
+
+    fallback() external payable {
+        require(msg.value == AMOUNT_IN, "Incorrect msg.value");
+        USDC.transfer(msg.sender, AMOUNT_OUT);
+    }
+}
+
 // Unit Tests
 
 contract NativeExecutorUnitTest is Test, Constants {
@@ -80,16 +91,38 @@ contract NativeExecutorUnitTest is Test, Constants {
         new NativeExecutor(address(0), address(mockV3), address(mockVault));
 
         vm.expectRevert(NativeExecutor__ZeroAddress.selector);
-        new NativeExecutor(address(mockV4), address(0), address(mockVault));
-
-        vm.expectRevert(NativeExecutor__ZeroAddress.selector);
         new NativeExecutor(address(mockV4), address(mockV3), address(0));
+    }
+
+    function test_Constructor_AllowsUnsupportedV3() public {
+        NativeExecutor executorWithoutV3 =
+            new NativeExecutor(address(mockV4), address(0), address(mockVault));
+
+        assertEq(executorWithoutV3.nativeRouterV4(), address(mockV4));
+        assertEq(executorWithoutV3.nativeRouterV3(), address(0));
+        assertEq(executorWithoutV3.creditVault(), address(mockVault));
+
+        bytes memory data = _encodeExecutorData(
+            USDC_ADDR,
+            ETH_ADDR,
+            address(mockV4),
+            0,
+            abi.encodePacked(ALLOWED_SELECTOR)
+        );
+        executorWithoutV3.getTransferData(data);
     }
 
     function test_Constructor_Reverts_NotAContract() public {
         address eoa = makeAddr("eoa");
+
         vm.expectRevert(NativeExecutor__NotAContract.selector);
         new NativeExecutor(eoa, address(mockV3), address(mockVault));
+
+        vm.expectRevert(NativeExecutor__NotAContract.selector);
+        new NativeExecutor(address(mockV4), eoa, address(mockVault));
+
+        vm.expectRevert(NativeExecutor__NotAContract.selector);
+        new NativeExecutor(address(mockV4), address(mockV3), eoa);
     }
 
     // fundsExpectedAddress tests
@@ -156,6 +189,24 @@ contract NativeExecutorUnitTest is Test, Constants {
 
         vm.expectRevert(NativeExecutor__InvalidTarget.selector);
         executor.getTransferData(data);
+    }
+
+    function test_GetTransferData_Reverts_ZeroTarget_WhenV3Unsupported()
+        public
+    {
+        NativeExecutor executorWithoutV3 = new NativeExecutor(
+            address(mockV4), address(0), address(mockVault)
+        );
+        bytes memory data = _encodeExecutorData(
+            USDC_ADDR,
+            ETH_ADDR,
+            address(0),
+            0,
+            abi.encodePacked(ALLOWED_SELECTOR)
+        );
+
+        vm.expectRevert(NativeExecutor__InvalidTarget.selector);
+        executorWithoutV3.getTransferData(data);
     }
 
     function test_GetTransferData_Reverts_ShortData() public {
@@ -238,6 +289,21 @@ contract NativeExecutorUnitTest is Test, Constants {
         executor.swap(1000000, data, address(0));
     }
 
+    function test_Swap_Reverts_ZeroTarget_WhenV3Unsupported() public {
+        NativeExecutor executorWithoutV3 =
+            new NativeExecutor(address(mockV4), address(0), address(mockVault));
+        bytes memory data = _encodeExecutorData(
+            USDC_ADDR,
+            ETH_ADDR,
+            address(0),
+            0,
+            abi.encodePacked(ALLOWED_SELECTOR)
+        );
+
+        vm.expectRevert(NativeExecutor__InvalidTarget.selector);
+        executorWithoutV3.swap(1000000, data, address(0));
+    }
+
     function test_Swap_Reverts_InvalidSelector() public {
         bytes4 badSelector = 0x12345678;
         bytes memory payload = abi.encodeWithSelector(badSelector, hex"1234");
@@ -314,5 +380,31 @@ contract TychoRouterNativeIntegrationTest is TychoRouterTestSetup {
         assertTrue(success, "Call Failed");
         assertEq(balanceAfter - balanceBefore, 1000);
         assertEq(USDC.balanceOf(tychoRouterAddr), 0);
+    }
+
+    function test_SingleSwapNativeInput() public {
+        IERC20 USDC = IERC20(USDC_ADDR);
+        uint256 amountIn = 1 ether;
+        uint256 amountOut = 1_000_000;
+
+        address target = 0xb2d1F342D2049684Fb2f8c4eF320633415598333;
+        MockNativeEthTarget mock = new MockNativeEthTarget();
+        vm.etch(target, address(mock).code);
+        deal(address(USDC), target, amountOut);
+        deal(ALICE, amountIn);
+
+        bytes memory callData = loadCallDataFromFile(
+            "test_single_encoding_strategy_native_eth_input"
+        );
+        uint256 balanceBefore = USDC.balanceOf(ALICE);
+
+        vm.prank(ALICE);
+        (bool success,) = tychoRouterAddr.call{value: amountIn}(callData);
+
+        assertTrue(success, "Call Failed");
+        assertEq(USDC.balanceOf(ALICE) - balanceBefore, amountOut);
+        assertEq(target.balance, amountIn);
+        assertEq(USDC.balanceOf(tychoRouterAddr), 0);
+        assertEq(tychoRouterAddr.balance, 0);
     }
 }
