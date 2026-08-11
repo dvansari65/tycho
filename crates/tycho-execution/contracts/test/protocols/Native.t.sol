@@ -16,6 +16,7 @@ contract MockNativeRouter {
     address public lastCaller;
 
     receive() external payable {}
+
     fallback() external payable {
         called = true;
         lastValue = msg.value;
@@ -32,8 +33,7 @@ contract MockNativeRouter {
 }
 
 contract MockNativeTarget {
-    IERC20 constant USDC =
-        IERC20(0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48);
+    IERC20 constant USDC = IERC20(0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48);
     uint256 constant AMOUNT_IN = 3000000000;
 
     receive() external payable {}
@@ -72,9 +72,7 @@ contract NativeExecutorUnitTest is Test, Constants {
         mockVault = new MockNativeRouter();
 
         executor = new NativeExecutor(
-            address(mockV4),
-            address(mockV3),
-            address(mockVault)
+            address(mockV4), address(mockV3), address(mockVault)
         );
     }
 
@@ -183,9 +181,8 @@ contract NativeExecutorUnitTest is Test, Constants {
 
     function test_GetTransferData_Reverts_InvalidTarget() public {
         bytes memory payload = abi.encodePacked(ALLOWED_SELECTOR);
-        bytes memory data = _encodeExecutorData(
-            USDC_ADDR, ETH_ADDR, BAD_TARGET, 0, payload
-        );
+        bytes memory data =
+            _encodeExecutorData(USDC_ADDR, ETH_ADDR, BAD_TARGET, 0, payload);
 
         vm.expectRevert(NativeExecutor__InvalidTarget.selector);
         executor.getTransferData(data);
@@ -217,7 +214,8 @@ contract NativeExecutorUnitTest is Test, Constants {
     // swap tests
 
     function test_Swap_ERC20_SendsZeroEth() public {
-        bytes memory payload = abi.encodeWithSelector(ALLOWED_SELECTOR, hex"1234");
+        bytes memory payload =
+            abi.encodeWithSelector(ALLOWED_SELECTOR, hex"1234");
         bytes memory data = _encodeExecutorData(
             USDC_ADDR, ETH_ADDR, address(mockV4), 0, payload
         );
@@ -229,8 +227,33 @@ contract NativeExecutorUnitTest is Test, Constants {
         assertEq(mockV4.lastCaller(), address(executor));
     }
 
+    function test_Swap_AllowsV3Target() public {
+        bytes memory payload = abi.encodeWithSelector(ALLOWED_SELECTOR);
+        bytes memory data = _encodeExecutorData(
+            USDC_ADDR, ETH_ADDR, address(mockV3), 0, payload
+        );
+
+        executor.swap(1_000_000, data, address(0));
+
+        assertTrue(mockV3.called());
+        assertEq(mockV3.lastValue(), 0);
+    }
+
+    function test_Swap_AllowsCreditVaultTarget() public {
+        bytes memory payload = abi.encodeWithSelector(ALLOWED_SELECTOR);
+        bytes memory data = _encodeExecutorData(
+            USDC_ADDR, ETH_ADDR, address(mockVault), 0, payload
+        );
+
+        executor.swap(1_000_000, data, address(0));
+
+        assertTrue(mockVault.called());
+        assertEq(mockVault.lastValue(), 0);
+    }
+
     function test_Swap_ETH_CappedByAmountIn() public {
-        bytes memory payload = abi.encodeWithSelector(ALLOWED_SELECTOR, hex"1234");
+        bytes memory payload =
+            abi.encodeWithSelector(ALLOWED_SELECTOR, hex"1234");
         bytes memory data = _encodeExecutorData(
             ETH_ADDR, USDC_ADDR, address(mockV4), 2 ether, payload
         );
@@ -243,7 +266,8 @@ contract NativeExecutorUnitTest is Test, Constants {
     }
 
     function test_Swap_ETH_CappedByApiValue() public {
-        bytes memory payload = abi.encodeWithSelector(ALLOWED_SELECTOR, hex"1234");
+        bytes memory payload =
+            abi.encodeWithSelector(ALLOWED_SELECTOR, hex"1234");
         bytes memory data = _encodeExecutorData(
             ETH_ADDR, USDC_ADDR, address(mockV4), 0.5 ether, payload
         );
@@ -256,7 +280,8 @@ contract NativeExecutorUnitTest is Test, Constants {
     }
 
     function test_Swap_ETH_ZeroAmountInAndZeroValue() public {
-        bytes memory payload = abi.encodeWithSelector(ALLOWED_SELECTOR, hex"1234");
+        bytes memory payload =
+            abi.encodeWithSelector(ALLOWED_SELECTOR, hex"1234");
         bytes memory data = _encodeExecutorData(
             ETH_ADDR, USDC_ADDR, address(mockV4), 0, payload
         );
@@ -268,7 +293,8 @@ contract NativeExecutorUnitTest is Test, Constants {
     }
 
     function test_Swap_NonETH_IgnoresApiValue() public {
-        bytes memory payload = abi.encodeWithSelector(ALLOWED_SELECTOR, hex"1234");
+        bytes memory payload =
+            abi.encodeWithSelector(ALLOWED_SELECTOR, hex"1234");
         bytes memory data = _encodeExecutorData(
             USDC_ADDR, ETH_ADDR, address(mockV4), 1 ether, payload
         );
@@ -280,10 +306,10 @@ contract NativeExecutorUnitTest is Test, Constants {
     }
 
     function test_Swap_Reverts_InvalidTarget() public {
-        bytes memory payload = abi.encodeWithSelector(ALLOWED_SELECTOR, hex"1234");
-        bytes memory data = _encodeExecutorData(
-            USDC_ADDR, ETH_ADDR, BAD_TARGET, 0, payload
-        );
+        bytes memory payload =
+            abi.encodeWithSelector(ALLOWED_SELECTOR, hex"1234");
+        bytes memory data =
+            _encodeExecutorData(USDC_ADDR, ETH_ADDR, BAD_TARGET, 0, payload);
 
         vm.expectRevert(NativeExecutor__InvalidTarget.selector);
         executor.swap(1000000, data, address(0));
@@ -316,9 +342,8 @@ contract NativeExecutorUnitTest is Test, Constants {
     }
 
     function test_Swap_Reverts_EmptyPayload() public {
-        bytes memory data = _encodeExecutorData(
-            USDC_ADDR, ETH_ADDR, address(mockV4), 0, hex""
-        );
+        bytes memory data =
+            _encodeExecutorData(USDC_ADDR, ETH_ADDR, address(mockV4), 0, hex"");
 
         vm.expectRevert(NativeExecutor__InvalidPayload.selector);
         executor.swap(1000000, data, address(0));
@@ -352,7 +377,7 @@ contract NativeExecutorUnitTest is Test, Constants {
 
 contract TychoRouterNativeIntegrationTest is TychoRouterTestSetup {
     function getForkBlock() public pure override returns (uint256) {
-        return 22644371;
+        return 23624157;
     }
 
     function test_SingleSwap() public {
@@ -360,23 +385,22 @@ contract TychoRouterNativeIntegrationTest is TychoRouterTestSetup {
         uint256 amountIn = 3000000000;
 
         deal(address(USDC), ALICE, amountIn);
-        uint256 balanceBefore = ALICE.balance;
+        uint256 balanceBefore = BOB.balance;
 
         vm.startPrank(ALICE);
         USDC.approve(tychoRouterAddr, type(uint256).max);
 
-        address target = 0xb2d1F342D2049684Fb2f8c4eF320633415598333;
+        address target = NATIVE_ROUTER_V4;
         MockNativeTarget mock = new MockNativeTarget();
         vm.etch(target, address(mock).code);
         deal(target, 10 ether);
 
-        bytes memory callData = loadCallDataFromFile(
-            "test_single_encoding_strategy_native"
-        );
+        bytes memory callData =
+            loadCallDataFromFile("test_single_encoding_strategy_native");
 
         (bool success,) = tychoRouterAddr.call(callData);
 
-        uint256 balanceAfter = ALICE.balance;
+        uint256 balanceAfter = BOB.balance;
         assertTrue(success, "Call Failed");
         assertEq(balanceAfter - balanceBefore, 1000);
         assertEq(USDC.balanceOf(tychoRouterAddr), 0);
@@ -387,7 +411,7 @@ contract TychoRouterNativeIntegrationTest is TychoRouterTestSetup {
         uint256 amountIn = 1 ether;
         uint256 amountOut = 1_000_000;
 
-        address target = 0xb2d1F342D2049684Fb2f8c4eF320633415598333;
+        address target = NATIVE_ROUTER_V4;
         MockNativeEthTarget mock = new MockNativeEthTarget();
         vm.etch(target, address(mock).code);
         deal(address(USDC), target, amountOut);
@@ -396,13 +420,13 @@ contract TychoRouterNativeIntegrationTest is TychoRouterTestSetup {
         bytes memory callData = loadCallDataFromFile(
             "test_single_encoding_strategy_native_eth_input"
         );
-        uint256 balanceBefore = USDC.balanceOf(ALICE);
+        uint256 balanceBefore = USDC.balanceOf(BOB);
 
         vm.prank(ALICE);
         (bool success,) = tychoRouterAddr.call{value: amountIn}(callData);
 
         assertTrue(success, "Call Failed");
-        assertEq(USDC.balanceOf(ALICE) - balanceBefore, amountOut);
+        assertEq(USDC.balanceOf(BOB) - balanceBefore, amountOut);
         assertEq(target.balance, amountIn);
         assertEq(USDC.balanceOf(tychoRouterAddr), 0);
         assertEq(tychoRouterAddr.balance, 0);

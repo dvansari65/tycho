@@ -85,8 +85,6 @@ contract NativeExecutor is IExecutor {
             ethValue = amountIn > value ? value : amountIn;
         }
 
-        // Use OpenZeppelin's Address library for safe call
-        // This will revert if the call fails
         // slither-disable-next-line unused-return
         target.functionCallWithValue(payload, ethValue);
     }

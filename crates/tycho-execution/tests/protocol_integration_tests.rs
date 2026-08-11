@@ -16,8 +16,8 @@ use tycho_execution::encoding::{
 };
 
 use crate::common::{
-    alice_address, dai, encoding::encode_tycho_router_call, eth, eth_chain, get_signer,
-    get_tycho_router_encoder, ondo, pepe, usdc, usdt, wbtc, weth,
+    alice_address, bob_address, dai, encoding::encode_tycho_router_call, eth, eth_chain,
+    get_signer, get_tycho_router_encoder, ondo, pepe, usdc, usdt, wbtc, weth,
 };
 
 #[test]
@@ -3286,7 +3286,7 @@ fn test_single_encoding_strategy_native() {
     let token_in = usdc();
     let token_out = eth();
 
-    let target_address = "0xb2d1F342D2049684Fb2f8c4eF320633415598333";
+    let target_address = "0x8a2ddc0461Fcf96F81a05529Bed540d4f1eb2a00";
     let target_bytes = Bytes::from_str(target_address).unwrap();
     let calldata_hex = "0947c2d900000000000000000000000000000000000000000000000000000000000000600000000000000000000000000000000000000000000000000000000000000000";
     let calldata_bytes = Bytes::from(hex::decode(calldata_hex).unwrap());
@@ -3318,7 +3318,7 @@ fn test_single_encoding_strategy_native() {
 
     let solution = Solution::new(
         alice_address(),
-        alice_address(),
+        bob_address(),
         token_in,
         token_out,
         BigUint::from_str("3000000000").unwrap(),
@@ -3355,7 +3355,7 @@ fn test_single_encoding_strategy_native_eth_input() {
     let amount_in = BigUint::from_str("1000000000000000000").unwrap();
     let amount_out = BigUint::from(1_000_000u64);
 
-    let target_address = "0xb2d1F342D2049684Fb2f8c4eF320633415598333";
+    let target_address = "0x8a2ddc0461Fcf96F81a05529Bed540d4f1eb2a00";
     let target_bytes = Bytes::from_str(target_address).unwrap();
     let calldata_hex = "0947c2d900000000000000000000000000000000000000000000000000000000000000600000000000000000000000000000000000000000000000000000000000000000";
     let calldata_bytes = Bytes::from(hex::decode(calldata_hex).unwrap());
@@ -3383,7 +3383,7 @@ fn test_single_encoding_strategy_native_eth_input() {
     let encoder = get_tycho_router_encoder(Chain::Ethereum);
     let solution = Solution::new(
         alice_address(),
-        alice_address(),
+        bob_address(),
         token_in,
         token_out,
         amount_in,

@@ -70,6 +70,8 @@ pub struct NativePriceData {
     pub base_address: Bytes,
     pub quote_address: Bytes,
     pub minimum_in_base: f64,
+    #[serde(default)]
+    pub minimum_in_quote: f64,
     pub bids: Vec<NativePriceLevel>,
     pub asks: Vec<NativePriceLevel>,
 }
@@ -275,6 +277,12 @@ pub struct FirmQuoteResponse {
     pub amount_out_minimum_offset: u32,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct NativeApiErrorResponse {
+    pub code: u64,
+    pub message: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum NativeSupportedChain {
@@ -282,10 +290,6 @@ pub enum NativeSupportedChain {
     Bsc,
     Arbitrum,
     Base,
-    Monad,
-    Xlayer,
-    Robinhood,
-    Morph,
 }
 
 impl TryFrom<tycho_common::models::Chain> for NativeSupportedChain {
@@ -310,10 +314,6 @@ impl NativeSupportedChain {
             NativeSupportedChain::Bsc => "bsc",
             NativeSupportedChain::Arbitrum => "arbitrum",
             NativeSupportedChain::Base => "base",
-            NativeSupportedChain::Monad => "monad",
-            NativeSupportedChain::Xlayer => "xlayer",
-            NativeSupportedChain::Robinhood => "robinhood",
-            NativeSupportedChain::Morph => "morph",
         }
     }
 }
@@ -353,6 +353,7 @@ mod tests {
             base_address: addr("0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"),
             quote_address: addr("0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"),
             minimum_in_base: 0.0,
+            minimum_in_quote: 0.0,
             bids: vec![
                 NativePriceLevel { quantity: 1.0, price: 2000.0 },
                 NativePriceLevel { quantity: 2.0, price: 1999.0 },
@@ -376,6 +377,7 @@ mod tests {
             base_address: addr("0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"),
             quote_address: tamara.clone(),
             minimum_in_base: 0.0,
+            minimum_in_quote: 0.0,
             bids: vec![NativePriceLevel { quantity: 3.0, price: 100.0 }],
             asks: vec![NativePriceLevel { quantity: 3.0, price: 100.0 }],
         };
@@ -385,6 +387,7 @@ mod tests {
             base_address: tamara,
             quote_address: usdc,
             minimum_in_base: 0.0,
+            minimum_in_quote: 0.0,
             bids: vec![NativePriceLevel { quantity: 300.0, price: 9.0 }],
             asks: vec![NativePriceLevel { quantity: 300.0, price: 11.0 }],
         };
@@ -401,6 +404,7 @@ mod tests {
             base_address: addr("0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"),
             quote_address: tamara.clone(),
             minimum_in_base: 0.0,
+            minimum_in_quote: 0.0,
             bids: vec![NativePriceLevel { quantity: 3.0, price: 100.0 }],
             asks: vec![],
         };
@@ -410,6 +414,7 @@ mod tests {
             base_address: tamara,
             quote_address: addr("0xA0b86991c6218b36c1d19d4a2e9Eb0cE3606eB48"),
             minimum_in_base: 0.0,
+            minimum_in_quote: 0.0,
             bids: vec![NativePriceLevel { quantity: 300.0, price: 10.0 }],
             asks: vec![],
         };

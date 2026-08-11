@@ -1,6 +1,12 @@
-use std::collections::HashMap;
+use std::{
+    collections::{HashMap, HashSet},
+    str::FromStr,
+};
 
-use alloy::{primitives::U256, sol_types::SolValue};
+use alloy::{
+    primitives::{Address, U256},
+    sol_types::SolValue,
+};
 use tokio::runtime::Handle;
 use tycho_common::{
     models::{protocol::GetAmountOutParams, Chain},
@@ -26,6 +32,7 @@ fn parse_quote_value(value: &Bytes) -> Result<U256, EncodingError> {
 #[derive(Clone)]
 pub struct NativeSwapEncoder {
     executor_address: Bytes,
+    allowed_targets: HashSet<Address>,
     runtime_handle: Handle,
     #[allow(dead_code)]
     runtime: SafeRuntime,
@@ -35,10 +42,32 @@ impl SwapEncoder for NativeSwapEncoder {
     fn new(
         executor_address: Bytes,
         _chain: Chain,
-        _config: Option<HashMap<String, String>>,
+        config: Option<HashMap<String, String>>,
     ) -> Result<Self, EncodingError> {
+        let config = config
+            .ok_or_else(|| EncodingError::FatalError("Native config is empty".to_string()))?;
+        let mut allowed_targets = HashSet::new();
+        for key in ["router_v4", "router_v3", "credit_vault"] {
+            let value = config.get(key).ok_or_else(|| {
+                EncodingError::FatalError(format!("Missing {key} in Native config"))
+            })?;
+            let address = Address::from_str(value).map_err(|e| {
+                EncodingError::FatalError(format!("Invalid {key} in Native config: {e}"))
+            })?;
+
+            if address == Address::ZERO {
+                if key == "router_v3" {
+                    continue;
+                }
+                return Err(EncodingError::FatalError(format!(
+                    "Native {key} cannot be the zero address"
+                )));
+            }
+            allowed_targets.insert(address);
+        }
+
         let (runtime_handle, runtime) = create_encoding_runtime()?;
-        Ok(Self { executor_address, runtime_handle, runtime })
+        Ok(Self { executor_address, allowed_targets, runtime_handle, runtime })
     }
 
     fn encode_swap(
@@ -101,6 +130,11 @@ impl SwapEncoder for NativeSwapEncoder {
             ))?;
 
         let target = bytes_to_address(target_bytes)?;
+        if !self.allowed_targets.contains(&target) {
+            return Err(EncodingError::InvalidInput(format!(
+                "Native quote target {target} is not configured for this chain"
+            )));
+        }
 
         let calldata = signed_quote
             .quote_attributes
@@ -153,10 +187,11 @@ mod test {
     };
 
     fn native_config() -> Option<HashMap<String, String>> {
-        Some(HashMap::from([(
-            "native_router_address".to_string(),
-            "0x55084eE0fEf03f14a305cd24286359A35D735151".to_string(),
-        )]))
+        Some(HashMap::from([
+            ("router_v4".to_string(), "0x8a2ddc0461Fcf96F81a05529Bed540d4f1eb2a00".to_string()),
+            ("router_v3".to_string(), "0xa540ec8C73322200d68E1B86c471A5C850854f22".to_string()),
+            ("credit_vault".to_string(), "0xe3D41d19564922C9952f692C5Dd0563030f5f2EF".to_string()),
+        ]))
     }
 
     #[test]
@@ -205,7 +240,7 @@ mod test {
             ..Default::default()
         };
 
-        let target_address = "0xb2d1F342D2049684Fb2f8c4eF320633415598333";
+        let target_address = "0x8a2ddc0461Fcf96F81a05529Bed540d4f1eb2a00";
         let target_bytes = Bytes::from_str(target_address).unwrap();
         let calldata_hex = "0947c2d900000000000000000000000000000000000000000000000000000000000000600000000000000000000000000000000000000000000000000000000000000000";
         let calldata_bytes = Bytes::from(hex::decode(calldata_hex).unwrap());
@@ -264,6 +299,73 @@ mod test {
             calldata_hex
         );
         assert_eq!(hex_swap, expected_swap);
+    }
+
+    #[test]
+    fn test_encode_native_rejects_unconfigured_quote_target() {
+        let target_bytes = Bytes::from_str("0xb2d1F342D2049684Fb2f8c4eF320633415598333").unwrap();
+        let native_state = MockRFQState {
+            quote_amount_out: BigUint::from(1_000_000u64),
+            quote_data: HashMap::from([
+                ("target".to_string(), target_bytes),
+                ("calldata".to_string(), Bytes::from(vec![0x09, 0x47, 0xc2, 0xd9])),
+                ("value".to_string(), Bytes::from(b"0".to_vec())),
+            ]),
+        };
+        let token_in = Bytes::from("0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48");
+        let token_out = Bytes::from("0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2");
+        let swap = Swap::new(
+            ProtocolComponent { protocol_system: "rfq:native".to_string(), ..Default::default() },
+            default_token(token_in.clone()),
+            default_token(token_out.clone()),
+            BigUint::ZERO,
+        )
+        .with_estimated_amount_in(BigUint::from(3_000_000_000u64))
+        .with_protocol_state(Arc::new(native_state));
+        let context = EncodingContext {
+            router_address: Some(Bytes::zero(20)),
+            group_token_in: token_in,
+            group_token_out: token_out,
+        };
+        let encoder = NativeSwapEncoder::new(
+            Bytes::from("0x543778987b293C7E8Cf0722BB2e935ba6f4068D4"),
+            Chain::Ethereum,
+            native_config(),
+        )
+        .unwrap();
+
+        let error = encoder
+            .encode_swap(&swap, &context)
+            .unwrap_err();
+
+        assert!(matches!(error, EncodingError::InvalidInput(message) if message.contains(
+            "is not configured for this chain"
+        )));
+    }
+
+    #[test]
+    fn test_native_config_requires_v4_and_vault_but_allows_zero_v3() {
+        let executor = Bytes::from("0x543778987b293C7E8Cf0722BB2e935ba6f4068D4");
+
+        assert!(matches!(
+            NativeSwapEncoder::new(executor.clone(), Chain::Ethereum, None),
+            Err(EncodingError::FatalError(message)) if message.contains("config is empty")
+        ));
+
+        let mut config = native_config().unwrap();
+        config.remove("credit_vault");
+        assert!(matches!(
+            NativeSwapEncoder::new(executor.clone(), Chain::Ethereum, Some(config)),
+            Err(EncodingError::FatalError(message)) if message.contains("Missing credit_vault")
+        ));
+
+        let mut config = native_config().unwrap();
+        config.insert(
+            "router_v3".to_string(),
+            "0x0000000000000000000000000000000000000000".to_string(),
+        );
+        let encoder = NativeSwapEncoder::new(executor, Chain::Ethereum, Some(config)).unwrap();
+        assert_eq!(encoder.allowed_targets.len(), 2);
     }
 
     #[test]
