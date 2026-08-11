@@ -94,8 +94,9 @@ pub fn default_served_pamms() -> Vec<PriceLevelStreamConfig> {
 /// addresses overrides the denial.
 pub fn default_denied_pamms() -> Vec<Bytes> {
     // Unverified venue, identity not public (streamed since 2026-07-29). Its `swap` enforces a
-    // taker allowlist: replays of real fills (2026-08-11) revert for arbitrary callers and
-    // succeed only from allowlisted takers, so swaps sent by the executor would revert.
+    // taker allowlist: replays of real fills (2026-08-11) revert with `TakerNotAllowed()`
+    // (0xf774ea08) for arbitrary callers regardless of recipient and succeed only from
+    // allowlisted takers, so swaps sent by the executor would revert.
     ["0x00000003f1ec2379e79f58e12ec6c4f51ee92149"]
         .into_iter()
         .map(|address| Bytes::from_str(address).expect("hardcoded pAMM address must parse"))
