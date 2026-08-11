@@ -59,7 +59,7 @@ impl PriceLevelStreamProcessor {
         // The default venues are served under their names, auto-detection additionally serves
         // any newly streamed pAMM under its address.
         let stream = PriceLevelStreamBuilder::new()
-            .with_default_pamms()
+            .with_known_pamms()
             .auto_detect(true)
             .with_tokens(all_tokens.clone())
             .build();

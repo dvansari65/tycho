@@ -42,14 +42,14 @@ impl PriceLevelStreamConfig {
 }
 
 /// Per-swap gas estimate for auto-detected pAMMs whose venue has not been measured: the midpoint
-/// of the known venue profiles (see [`default_pamms`]), which span roughly 165k–341k.
+/// of the known venue profiles (see [`default_served_pamms`]), which span roughly 165k–341k.
 const DEFAULT_GAS_COST: u64 = 260_000;
 
 /// The pAMMs known to be served by the Titan price level stream (as of 2026-08): FermiSwap,
 /// Kipseli, and Metric.
 ///
 /// Registered on a builder via
-/// [`with_default_pamms`](super::stream::PriceLevelStreamBuilder::with_default_pamms), so their
+/// [`with_known_pamms`](super::stream::PriceLevelStreamBuilder::with_known_pamms), so their
 /// components carry the venue name instead of the raw address; an
 /// [`add_pamm`](super::stream::PriceLevelStreamBuilder::add_pamm) call for one of these
 /// addresses overrides the corresponding entry.
@@ -59,12 +59,7 @@ const DEFAULT_GAS_COST: u64 = 260_000;
 /// ([`PAMM_ADDRESS_ATTRIBUTE`](super::stream::PAMM_ADDRESS_ATTRIBUTE)): unlike the state-override
 /// stream, which also publishes frames under non-executable oracle aliases, an entry here must
 /// be an address a swap can be sent to.
-///
-/// The stream serves one further venue, `0x00000003f1ec2379e79f58e12ec6c4f51ee92149` (unverified,
-/// identity not public), which is deliberately not registered here: its `swap` enforces a taker
-/// allowlist (replays revert for arbitrary callers and succeed only from allowlisted takers), so
-/// it is not executable through the generic executor. Opt-in auto-detection still serves it.
-pub fn default_pamms() -> Vec<PriceLevelStreamConfig> {
+pub fn default_served_pamms() -> Vec<PriceLevelStreamConfig> {
     // The venues' `IPropAMM::swap` gas, calibrated from real fills (FermiSwap/Kipseli 2026-07-15,
     // Metric 2026-08-11) by replaying them on the live venues at their fill blocks via
     // `debug_traceCall`: ~162k-167k (FermiSwap), ~339k-343k (Kipseli), and ~203k (Metric), plus a
@@ -88,5 +83,21 @@ pub fn default_pamms() -> Vec<PriceLevelStreamConfig> {
                 BigUint::from(gas_cost),
             )
         })
+        .collect()
+}
+
+/// The streamed venues known NOT to be executable through the generic executor, excluded from
+/// auto-detection via
+/// [`with_known_pamms`](super::stream::PriceLevelStreamBuilder::with_known_pamms): quoting them
+/// would advertise liquidity every routed swap reverts on. An
+/// [`add_pamm`](super::stream::PriceLevelStreamBuilder::add_pamm) entry for one of these
+/// addresses overrides the denial.
+pub fn default_denied_pamms() -> Vec<Bytes> {
+    // Unverified venue, identity not public (streamed since 2026-07-29). Its `swap` enforces a
+    // taker allowlist: replays of real fills (2026-08-11) revert for arbitrary callers and
+    // succeed only from allowlisted takers, so swaps sent by the executor would revert.
+    ["0x00000003f1ec2379e79f58e12ec6c4f51ee92149"]
+        .into_iter()
+        .map(|address| Bytes::from_str(address).expect("hardcoded pAMM address must parse"))
         .collect()
 }

@@ -24,10 +24,13 @@ for any protocol indexed by Tycho.
 - **`price_level_stream/`**: Titan pAMM price level stream — `PriceLevelStreamBuilder` turns the
   Titan WebSocket's per-pair quote-ladder snapshots directly into `Update`s (no indexer feed
   round-trip); `PriceLevelStreamState` quotes by interpolating the ladder. Components are
-  identified as `pricelevelstream:{pamm}`. A new builder serves nothing: `with_default_pamms`
-  registers the known venues, `add_pamm` individual ones (overriding per address), and opt-in
-  auto-detection additionally serves unknown venues under their address
-  (`pricelevelstream:{0xaddress}`). Venues may overlap with other integration
+  identified as `pricelevelstream:{pamm}`. A new builder serves nothing: `with_known_pamms`
+  registers the known-good venues and denies known-unexecutable ones, `add_pamm` registers
+  individual ones, `deny_pamm` excludes one (dropping any registration and blocking
+  auto-detection), and opt-in auto-detection additionally serves unknown venues under their
+  address (`pricelevelstream:{0xaddress}`). Precedence: between `add_pamm` and `deny_pamm` for
+  the same address the later call wins; `with_known_pamms` defaults never override either,
+  regardless of call order. Venues may overlap with other integration
   paths of the same liquidity (e.g. `vm:fermiswap`) — consumers must deduplicate by venue where
   double-counting matters
 

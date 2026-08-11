@@ -22,7 +22,7 @@
 //!
 //! Entry point: [`PriceLevelStreamBuilder`](stream::PriceLevelStreamBuilder). Register the pAMMs
 //! to serve — the known venues via
-//! [`with_default_pamms`](stream::PriceLevelStreamBuilder::with_default_pamms), individual
+//! [`with_known_pamms`](stream::PriceLevelStreamBuilder::with_known_pamms), individual
 //! [`PriceLevelStreamConfig`](config::PriceLevelStreamConfig)s via
 //! [`add_pamm`](stream::PriceLevelStreamBuilder::add_pamm), or any streamed venue via
 //! auto-detection — provide token metadata, and consume the resulting stream of

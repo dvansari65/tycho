@@ -154,7 +154,7 @@ async fn main() {
         // forwards from its own task alongside the protocol stream's.
         if chain == Chain::Ethereum {
             let price_level_stream = PriceLevelStreamBuilder::new()
-                .with_default_pamms()
+                .with_known_pamms()
                 .auto_detect(true)
                 .with_tokens(all_tokens.clone())
                 .build();

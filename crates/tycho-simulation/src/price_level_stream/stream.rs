@@ -1,5 +1,5 @@
 use std::{
-    collections::{hash_map::Entry, HashMap},
+    collections::{hash_map::Entry, HashMap, HashSet},
     time::Duration,
 };
 
@@ -12,7 +12,7 @@ use tycho_common::{
 };
 
 use super::{
-    config::{default_pamms, PriceLevelStreamConfig},
+    config::{default_denied_pamms, default_served_pamms, PriceLevelStreamConfig},
     state::{PriceLevelStreamQuote, PriceLevelStreamState},
     titan::{
         self, ConnectionSettings, TitanPairLevels, TitanPammLevels, TitanPriceLevel,
@@ -27,7 +27,7 @@ pub const PAMM_ADDRESS_ATTRIBUTE: &str = "pamm_address";
 /// Builds a stream of [`Update`]s from the Titan pAMM price level WebSocket.
 ///
 /// A new builder serves no pAMMs: register the known venues via
-/// [`with_default_pamms`](Self::with_default_pamms), individual ones via
+/// [`with_known_pamms`](Self::with_known_pamms), individual ones via
 /// [`add_pamm`](Self::add_pamm), or opt into serving unknown streamed venues via
 /// [`auto_detect`](Self::auto_detect); [`with_tokens`](Self::with_tokens) provides the token
 /// metadata pairs are interpreted with.
@@ -39,6 +39,7 @@ pub const PAMM_ADDRESS_ATTRIBUTE: &str = "pamm_address";
 #[derive(Default)]
 pub struct PriceLevelStreamBuilder {
     registry: HashMap<Bytes, PriceLevelStreamConfig>,
+    denied: HashSet<Bytes>,
     tokens: HashMap<Bytes, Token>,
     url: Option<String>,
     auto_detect: bool,
@@ -51,15 +52,16 @@ impl PriceLevelStreamBuilder {
     }
 
     /// Enables serving pAMMs that are not registered via
-    /// [`with_default_pamms`](Self::with_default_pamms) or [`add_pamm`](Self::add_pamm)
+    /// [`with_known_pamms`](Self::with_known_pamms) or [`add_pamm`](Self::add_pamm)
     /// (disabled by default).
     ///
-    /// When enabled, any unknown streamed venue is served under its full lowercase hex address
+    /// When enabled, any unknown streamed venue — except denied ones (see
+    /// [`deny_pamm`](Self::deny_pamm)) — is served under its full lowercase hex address
     /// as the name, with the default gas cost. A venue's protocol system therefore changes from
     /// the address form (`pricelevelstream:{0xaddress}`) to a name (`pricelevelstream:{name}`)
     /// once it gets registered — via [`add_pamm`](Self::add_pamm) or a release's
-    /// [`default_pamms`] recognizing it; the name-independent identifiers — the component id and
-    /// the [`PAMM_ADDRESS_ATTRIBUTE`] — stay stable across such renames.
+    /// [`default_served_pamms`] recognizing it; the name-independent identifiers — the component id
+    /// and the [`PAMM_ADDRESS_ATTRIBUTE`] — stay stable across such renames.
     pub fn auto_detect(mut self, enabled: bool) -> Self {
         self.auto_detect = enabled;
         self
@@ -94,22 +96,53 @@ impl PriceLevelStreamBuilder {
         self
     }
 
-    /// Registers a pAMM to be served under the given configuration, overriding any default or
-    /// auto-detected one for the same address.
+    /// Registers a pAMM to be served under the given configuration, overriding any default,
+    /// denied, or auto-detected one for the same address.
+    ///
+    /// Between [`add_pamm`](Self::add_pamm) and [`deny_pamm`](Self::deny_pamm) for the same
+    /// address, the later call wins; the defaults applied by
+    /// [`with_known_pamms`](Self::with_known_pamms) never override either, in any call order.
     pub fn add_pamm(mut self, config: PriceLevelStreamConfig) -> Self {
+        self.denied.remove(&config.address);
         self.registry
             .insert(config.address.clone(), config);
         self
     }
 
-    /// Registers the known venues ([`default_pamms`]) to be served. For an address also
-    /// registered via [`add_pamm`](Self::add_pamm), that configuration wins regardless of call
-    /// order.
-    pub fn with_default_pamms(mut self) -> Self {
-        for config in default_pamms() {
+    /// Excludes a venue from being served: drops its current registration (default or explicit)
+    /// and blocks auto-detecting it.
+    ///
+    /// Between [`add_pamm`](Self::add_pamm) and [`deny_pamm`](Self::deny_pamm) for the same
+    /// address, the later call wins; the defaults applied by
+    /// [`with_known_pamms`](Self::with_known_pamms) never override either, in any call order —
+    /// so denying a venue from the default set works whether the denial comes before or after
+    /// [`with_known_pamms`](Self::with_known_pamms).
+    pub fn deny_pamm(mut self, address: Bytes) -> Self {
+        self.registry.remove(&address);
+        self.denied.insert(address);
+        self
+    }
+
+    /// Applies what is known about the streamed venues: registers the known-good ones
+    /// ([`default_served_pamms`]) to be served and denies the known-bad ones
+    /// ([`default_denied_pamms`]) — venues that stream quotes but whose swaps are not executable.
+    ///
+    /// These defaults never override an explicit [`add_pamm`](Self::add_pamm) or
+    /// [`deny_pamm`](Self::deny_pamm) for the same address, regardless of call order.
+    pub fn with_known_pamms(mut self) -> Self {
+        for config in default_served_pamms() {
+            if self.denied.contains(&config.address) {
+                continue;
+            }
             self.registry
                 .entry(config.address.clone())
                 .or_insert(config);
+        }
+        for address in default_denied_pamms() {
+            if self.registry.contains_key(&address) {
+                continue;
+            }
+            self.denied.insert(address);
         }
         self
     }
@@ -149,7 +182,8 @@ impl PriceLevelStreamBuilder {
         let url = self
             .url
             .unwrap_or_else(|| TITAN_PRICE_LEVEL_URL.to_string());
-        let mut tracker = SnapshotTracker::new(self.registry, self.tokens, self.auto_detect);
+        let mut tracker =
+            SnapshotTracker::new(self.registry, self.denied, self.tokens, self.auto_detect);
 
         titan::messages(url, self.connection).filter_map(move |message| tracker.process(message))
     }
@@ -159,6 +193,9 @@ impl PriceLevelStreamBuilder {
 /// additions and removals can be diffed against the last snapshot.
 struct SnapshotTracker {
     registry: HashMap<Bytes, PriceLevelStreamConfig>,
+    /// Venues excluded from auto-detection. The builder keeps this disjoint from the registry:
+    /// denying removes any registration and registering removes any denial.
+    denied: HashSet<Bytes>,
     tokens: HashMap<Bytes, Token>,
     /// Whether frames from pAMMs absent from the registry get an address-named configuration
     /// synthesized (and cached in the registry) instead of being skipped.
@@ -177,10 +214,11 @@ struct SnapshotTracker {
 impl SnapshotTracker {
     fn new(
         registry: HashMap<Bytes, PriceLevelStreamConfig>,
+        denied: HashSet<Bytes>,
         tokens: HashMap<Bytes, Token>,
         auto_detect: bool,
     ) -> Self {
-        Self { registry, tokens, auto_detect, components: HashMap::new(), newest_block: 0 }
+        Self { registry, denied, tokens, auto_detect, components: HashMap::new(), newest_block: 0 }
     }
 
     /// Processes one frame into an [`Update`], or `None` if the frame targets an older block
@@ -209,6 +247,10 @@ impl SnapshotTracker {
                 Entry::Vacant(entry) => {
                     if !self.auto_detect {
                         tracing::debug!(%pamm, "Skipping unregistered pAMM");
+                        continue;
+                    }
+                    if self.denied.contains(&pamm) {
+                        tracing::debug!(%pamm, "Skipping denied pAMM");
                         continue;
                     }
                     tracing::info!(%pamm, "Serving auto-detected pAMM");
@@ -351,7 +393,12 @@ mod tests {
             Bytes::from_str(PAMM).unwrap(),
             BigUint::from(120_000u64),
         );
-        SnapshotTracker::new(HashMap::from([(config.address.clone(), config)]), tokens(), false)
+        SnapshotTracker::new(
+            HashMap::from([(config.address.clone(), config)]),
+            HashSet::new(),
+            tokens(),
+            false,
+        )
     }
 
     fn level(amount_in: u64, amount_out: u64) -> TitanPriceLevel {
@@ -528,15 +575,81 @@ mod tests {
 
     #[test]
     fn unregistered_pamm_produces_no_update_without_auto_detection() {
-        let mut tracker = SnapshotTracker::new(HashMap::new(), tokens(), false);
+        let mut tracker = SnapshotTracker::new(HashMap::new(), HashSet::new(), tokens(), false);
         assert!(tracker
             .process(message(100, wbtc_usdc_pairs()))
             .is_none());
     }
 
     #[test]
+    fn denied_pamm_is_not_auto_detected() {
+        let denied = HashSet::from([Bytes::from_str(PAMM).unwrap()]);
+        let mut tracker = SnapshotTracker::new(HashMap::new(), denied, tokens(), true);
+        assert!(tracker
+            .process(message(100, wbtc_usdc_pairs()))
+            .is_none());
+    }
+
+    #[test]
+    fn explicit_add_and_deny_are_last_wins() {
+        let address = Bytes::from_str(PAMM).unwrap();
+        let custom =
+            || PriceLevelStreamConfig::new("custom", Bytes::from_str(PAMM).unwrap(), 1u64.into());
+
+        let builder = PriceLevelStreamBuilder::new()
+            .add_pamm(custom())
+            .deny_pamm(address.clone());
+        assert!(!builder.registry.contains_key(&address));
+        assert!(builder.denied.contains(&address));
+
+        let builder = PriceLevelStreamBuilder::new()
+            .deny_pamm(address.clone())
+            .add_pamm(custom());
+        assert_eq!(builder.registry[&address].protocol, "custom");
+        assert!(builder.denied.is_empty());
+    }
+
+    #[test]
+    fn defaults_never_override_explicit_calls() {
+        // Denying a venue from the default set works in either call order.
+        let fermiswap_router = Bytes::from_str(PAMM).unwrap();
+        for builder in [
+            PriceLevelStreamBuilder::new()
+                .deny_pamm(fermiswap_router.clone())
+                .with_known_pamms(),
+            PriceLevelStreamBuilder::new()
+                .with_known_pamms()
+                .deny_pamm(fermiswap_router.clone()),
+        ] {
+            assert!(!builder
+                .registry
+                .contains_key(&fermiswap_router));
+            assert!(builder
+                .denied
+                .contains(&fermiswap_router));
+            // The other defaults are unaffected.
+            assert!(!builder.registry.is_empty());
+        }
+
+        // Registering a venue from the default deny set works in either call order.
+        let denied_venue = default_denied_pamms().remove(0);
+        let custom = || PriceLevelStreamConfig::new("custom", denied_venue.clone(), 1u64.into());
+        for builder in [
+            PriceLevelStreamBuilder::new()
+                .add_pamm(custom())
+                .with_known_pamms(),
+            PriceLevelStreamBuilder::new()
+                .with_known_pamms()
+                .add_pamm(custom()),
+        ] {
+            assert_eq!(builder.registry[&denied_venue].protocol, "custom");
+            assert!(!builder.denied.contains(&denied_venue));
+        }
+    }
+
+    #[test]
     fn auto_detected_pamm_is_served_under_its_address() {
-        let mut tracker = SnapshotTracker::new(HashMap::new(), tokens(), true);
+        let mut tracker = SnapshotTracker::new(HashMap::new(), HashSet::new(), tokens(), true);
         let update = tracker
             .process(message(100, wbtc_usdc_pairs()))
             .expect("update expected");
@@ -560,15 +673,25 @@ mod tests {
     }
 
     #[test]
-    fn with_default_pamms_registers_known_venues() {
+    fn with_known_pamms_registers_known_venues() {
         // PAMM is the FermiSwap router, one of the default venues.
         let fermiswap_router = Bytes::from_str(PAMM).unwrap();
 
         let builder = PriceLevelStreamBuilder::new();
         assert!(builder.registry.is_empty());
+        assert!(builder.denied.is_empty());
 
-        let builder = builder.with_default_pamms();
+        let builder = builder.with_known_pamms();
         assert_eq!(builder.registry[&fermiswap_router].protocol, "fermiswap");
+        // The known-bad venues get denied alongside, and never overlap the served defaults.
+        assert!(!builder.denied.is_empty());
+        assert!(builder.denied.is_disjoint(
+            &builder
+                .registry
+                .keys()
+                .cloned()
+                .collect()
+        ));
 
         // An `add_pamm` entry wins over the default for the same address, in either call order.
         let custom =
@@ -576,9 +699,9 @@ mod tests {
         for builder in [
             PriceLevelStreamBuilder::new()
                 .add_pamm(custom())
-                .with_default_pamms(),
+                .with_known_pamms(),
             PriceLevelStreamBuilder::new()
-                .with_default_pamms()
+                .with_known_pamms()
                 .add_pamm(custom()),
         ] {
             assert_eq!(builder.registry[&fermiswap_router].protocol, "custom");
