@@ -45,8 +45,8 @@ impl PriceLevelStreamConfig {
 /// of the known venue profiles (see [`default_pamms`]), which span roughly 165k–341k.
 const DEFAULT_GAS_COST: u64 = 260_000;
 
-/// The pAMMs known to be served by the Titan price level stream (as of 2026-07): FermiSwap and
-/// Kipseli.
+/// The pAMMs known to be served by the Titan price level stream (as of 2026-08): FermiSwap,
+/// Kipseli, and Metric.
 ///
 /// Registered on a builder via
 /// [`with_default_pamms`](super::stream::PriceLevelStreamBuilder::with_default_pamms), so their
@@ -59,17 +59,25 @@ const DEFAULT_GAS_COST: u64 = 260_000;
 /// ([`PAMM_ADDRESS_ATTRIBUTE`](super::stream::PAMM_ADDRESS_ATTRIBUTE)): unlike the state-override
 /// stream, which also publishes frames under non-executable oracle aliases, an entry here must
 /// be an address a swap can be sent to.
+///
+/// The stream serves one further venue, `0x00000003f1ec2379e79f58e12ec6c4f51ee92149` (unverified,
+/// identity not public), which is deliberately not registered here: its `swap` enforces a taker
+/// allowlist (replays revert for arbitrary callers and succeed only from allowlisted takers), so
+/// it is not executable through the generic executor. Opt-in auto-detection still serves it.
 pub fn default_pamms() -> Vec<PriceLevelStreamConfig> {
-    // The venues' `IPropAMM::swap` gas, calibrated from real fills (2026-07-15) by replaying
-    // them on the live venues at their fill blocks via `debug_traceCall`: ~162k-167k (FermiSwap)
-    // and ~339k-343k (Kipseli), plus a small headroom. Deliberately excludes router-level
-    // overhead (user/input/fee transfers): tycho-execution's gas estimator accounts for those on
-    // top of this per-swap value.
+    // The venues' `IPropAMM::swap` gas, calibrated from real fills (FermiSwap/Kipseli 2026-07-15,
+    // Metric 2026-08-11) by replaying them on the live venues at their fill blocks via
+    // `debug_traceCall`: ~162k-167k (FermiSwap), ~339k-343k (Kipseli), and ~203k (Metric), plus a
+    // small headroom. Deliberately excludes router-level overhead (user/input/fee transfers):
+    // tycho-execution's gas estimator accounts for those on top of this per-swap value.
     let pamms = [
         // The FermiSwapper router.
         ("fermiswap", "0x5979458912f80b96d30d4220af8e2e4925a33320", 170_000u64),
         // The KipseliPropAMMWrapper router.
         ("kipseli", "0x71e790dd841c8a9061487cb3e78c288e75ce0b3d", 350_000u64),
+        // The Metric router (unverified; identified via its pools' pricing reads of the Metric
+        // oracle 0x28d9cced… listed in Titan's venue docs).
+        ("metric", "0xe715dc29d2c273d0fc5a03e5cca9ccb0abb1dcdb", 210_000u64),
     ];
     pamms
         .into_iter()
