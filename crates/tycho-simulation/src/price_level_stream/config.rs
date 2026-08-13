@@ -42,11 +42,11 @@ impl PriceLevelStreamConfig {
 }
 
 /// Per-swap gas estimate for auto-detected pAMMs whose venue has not been measured: the midpoint
-/// of the known venue profiles (see [`default_served_pamms`]), which span roughly 165k–341k.
-const DEFAULT_GAS_COST: u64 = 260_000;
+/// of the known venue profiles (see [`default_served_pamms`]), which span roughly 102k–343k.
+const DEFAULT_GAS_COST: u64 = 220_000;
 
 /// The pAMMs known to be served by the Titan price level stream (as of 2026-08): FermiSwap,
-/// Kipseli, and Metric.
+/// Kipseli, Metric, Bebop, and TaurusFi.
 ///
 /// Registered on a builder via
 /// [`with_known_pamms`](super::stream::PriceLevelStreamBuilder::with_known_pamms), so their
@@ -61,18 +61,25 @@ const DEFAULT_GAS_COST: u64 = 260_000;
 /// be an address a swap can be sent to.
 pub fn default_served_pamms() -> Vec<PriceLevelStreamConfig> {
     // The venues' `IPropAMM::swap` gas, calibrated from real fills (FermiSwap/Kipseli 2026-07-15,
-    // Metric 2026-08-11) by replaying them on the live venues at their fill blocks via
-    // `debug_traceCall`: ~162k-167k (FermiSwap), ~339k-343k (Kipseli), and ~203k (Metric), plus a
-    // small headroom. Deliberately excludes router-level overhead (user/input/fee transfers):
-    // tycho-execution's gas estimator accounts for those on top of this per-swap value.
+    // Metric 2026-08-11, Bebop/TaurusFi 2026-08-13) by replaying them on the live venues at
+    // fresh-oracle blocks via `debug_traceCall`: ~162k-167k (FermiSwap), ~339k-343k (Kipseli),
+    // ~203k (Metric), ~123k (Bebop), and ~102k (TaurusFi), plus a small headroom. Deliberately
+    // excludes router-level overhead (user/input/fee transfers): tycho-execution's gas estimator
+    // accounts for those on top of this per-swap value.
     let pamms = [
         // The FermiSwapper router.
         ("fermiswap", "0x5979458912f80b96d30d4220af8e2e4925a33320", 170_000u64),
-        // The KipseliPropAMMWrapper router.
+        // The KipseliPropAMMWrapper router. Titan's venue docs list a newer Kipseli router
+        // (0x342b8458…), but the stream still keys Kipseli quotes by this address and the newer
+        // one has no activity.
         ("kipseli", "0x71e790dd841c8a9061487cb3e78c288e75ce0b3d", 350_000u64),
         // The Metric router (unverified; identified via its pools' pricing reads of the Metric
-        // oracle 0x28d9cced… listed in Titan's venue docs).
+        // oracle 0x28d9cced…).
         ("metric", "0xe715dc29d2c273d0fc5a03e5cca9ccb0abb1dcdb", 210_000u64),
+        // The BopAMM (Bebop) router, per Titan's venue docs.
+        ("bebop", "0xb09aaa5614916d7aeb59c295c52c92ca82addd76", 130_000u64),
+        // The TaurusFi router, per Titan's venue docs.
+        ("taurusfi", "0x217d58931a8549ca539426aa8152e33dafc3d95a", 110_000u64),
     ];
     pamms
         .into_iter()
@@ -93,10 +100,10 @@ pub fn default_served_pamms() -> Vec<PriceLevelStreamConfig> {
 /// [`add_pamm`](super::stream::PriceLevelStreamBuilder::add_pamm) entry for one of these
 /// addresses overrides the denial.
 pub fn default_denied_pamms() -> Vec<Bytes> {
-    // Unverified venue, identity not public (streamed since 2026-07-29). Its `swap` enforces a
-    // taker allowlist: replays of real fills (2026-08-11) revert with `TakerNotAllowed()`
-    // (0xf774ea08) for arbitrary callers regardless of recipient and succeed only from
-    // allowlisted takers, so swaps sent by the executor would revert.
+    // Tempest, per Titan's venue docs (unverified contract). Its `swap` enforces a taker
+    // allowlist: replays of real fills (2026-08-11) revert with `TakerNotAllowed()` (0xf774ea08)
+    // for arbitrary callers regardless of recipient and succeed only from allowlisted takers, so
+    // swaps sent by the executor would revert.
     ["0x00000003f1ec2379e79f58e12ec6c4f51ee92149"]
         .into_iter()
         .map(|address| Bytes::from_str(address).expect("hardcoded pAMM address must parse"))
