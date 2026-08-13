@@ -1,3 +1,39 @@
+## [0.357.2](https://github.com/propeller-heads/tycho/compare/0.357.1...0.357.2) (2026-08-12)
+
+
+### Bug Fixes
+
+* **rfq:** count Bebop failures until pricing data arrives ([771022b](https://github.com/propeller-heads/tycho/commit/771022b5051a3c67b7177ac0ad37b3a645d00861))
+* **rfq:** log Bebop WebSocket close reason ([98b2711](https://github.com/propeller-heads/tycho/commit/98b27115fd2e320e87bebfa7914099346de265db))
+* **rfq:** surface why the Bebop WebSocket closes ([#1293](https://github.com/propeller-heads/tycho/issues/1293)) ([0ba9843](https://github.com/propeller-heads/tycho/commit/0ba984395c1721eabdbe07c1b3cadc92ad9d244d))
+
+## [0.357.1](https://github.com/propeller-heads/tycho/compare/0.357.0...0.357.1) (2026-08-12)
+
+
+### Bug Fixes
+
+* bump alloy-chains version to support Robinhood chain ([4dfb482](https://github.com/propeller-heads/tycho/commit/4dfb482b84cc14a06baf54d8d42141c6ab454455))
+* bump alloy-chains version to support Robinhood chain ([#1315](https://github.com/propeller-heads/tycho/issues/1315)) ([6b8ac6c](https://github.com/propeller-heads/tycho/commit/6b8ac6c944fe60a62a0c1a022539e174d6d5cf4a))
+
+## [0.357.0](https://github.com/propeller-heads/tycho/compare/0.356.0...0.357.0) (2026-08-11)
+
+
+### Features
+
+* **sushiswap-v2:** add Base and Arbitrum manifests ([68f03be](https://github.com/propeller-heads/tycho/commit/68f03be0edba45d9ef947fb50f1d283bd24ac446))
+* **sushiswap-v2:** add Base support ([#1301](https://github.com/propeller-heads/tycho/issues/1301)) ([5f1310b](https://github.com/propeller-heads/tycho/commit/5f1310bb77fc6b5dddfc1da9fa1b23db8bcd6f5c))
+* **sushiswap-v2:** wire up Base and Arbitrum support ([e3ae666](https://github.com/propeller-heads/tycho/commit/e3ae66667679945a4167fa5c4460e3dea21406d0))
+
+
+### Bug Fixes
+
+* **tycho-client:** classify reverts to partial-retained heights ([26e25b8](https://github.com/propeller-heads/tycho/commit/26e25b873adb058a2c8c28c99483f8df925126c7))
+* **tycho-client:** log BlockHistory height-fallback decisions ([b52aae4](https://github.com/propeller-heads/tycho/commit/b52aae476f827cd6b1afc8ab0cf5872e17bea365))
+* **tycho-client:** prefer hash fork point over partial height match ([54ad564](https://github.com/propeller-heads/tycho/commit/54ad5648d84b1dbaf26b5fb5228518df82dad473))
+* **tycho-client:** prefer hash match over partial at the same height ([f8fa7a1](https://github.com/propeller-heads/tycho/commit/f8fa7a1c47ae62c8defd2b4006db34430c394803))
+* **tycho-client:** resolve reverts whose fork point is a partial ([9e6d6e8](https://github.com/propeller-heads/tycho/commit/9e6d6e866d2a342af0a826a65ec8c73df568a356))
+* **tycho-client:** stitch partial parents by height on history init ([3230cda](https://github.com/propeller-heads/tycho/commit/3230cda108fa9412d3ad781e93b2cd899d92bc9a))
+
 ## [0.356.0](https://github.com/propeller-heads/tycho/compare/0.355.1...0.356.0) (2026-08-10)
 
 
