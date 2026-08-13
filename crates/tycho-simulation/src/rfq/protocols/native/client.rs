@@ -335,6 +335,20 @@ impl NativeClient {
                 order.deadline_timestamp, now
             )));
         }
+
+        let quoted_amount_in = BigUint::from_str(&quote_response.amount_in).map_err(|_| {
+            RFQError::ParsingError(format!(
+                "Failed to parse amount_in: {}",
+                quote_response.amount_in
+            ))
+        })?;
+        if quoted_amount_in != params.amount_in {
+            return Err(RFQError::ParsingError(format!(
+                "Native Relay quote input amount mismatch: expected {}, got {}",
+                params.amount_in, quoted_amount_in
+            )));
+        }
+
         if quote_response
             .tx_request
             .calldata
@@ -397,12 +411,7 @@ impl NativeClient {
         Ok(SignedQuote {
             base_token: params.token_in.clone(),
             quote_token: params.token_out.clone(),
-            amount_in: BigUint::from_str(&quote_response.amount_in).map_err(|_| {
-                RFQError::ParsingError(format!(
-                    "Failed to parse amount_in: {}",
-                    quote_response.amount_in
-                ))
-            })?,
+            amount_in: quoted_amount_in,
             amount_out: BigUint::from_str(&quote_response.amount_out).map_err(|_| {
                 RFQError::ParsingError(format!(
                     "Failed to parse amount_out: {}",
@@ -728,6 +737,60 @@ mod tests {
     use super::*;
     use crate::rfq::protocols::native::models::NativePriceLevel;
 
+    fn successful_quote_response(amount_in: &str) -> FirmQuoteResponse {
+        serde_json::from_value(serde_json::json!({
+            "success": true,
+            "orders": [{
+                "pool": "0x1111111111111111111111111111111111111111",
+                "signer": "0x2222222222222222222222222222222222222222",
+                "recipient": "0x4444444444444444444444444444444444444444",
+                "sellerToken": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+                "buyerToken": "0xdAC17F958D2ee523a2206206994597C13D831ec7",
+                "effectiveSellerTokenAmount": amount_in,
+                "sellerTokenAmount": amount_in,
+                "buyerTokenAmount": "2",
+                "deadlineTimestamp": u64::MAX,
+                "nonce": 1,
+                "quoteId": "test-quote",
+                "multiHop": false,
+                "signature": "",
+                "externalSwapCalldata": "",
+                "amountOutMinimum": "2",
+                "widgetFee": {
+                    "signer": "0x0000000000000000000000000000000000000000",
+                    "feeRecipient": "0x0000000000000000000000000000000000000000",
+                    "feeRate": 0.0
+                },
+                "widgetFeeSignature": ""
+            }],
+            "widgetFee": {
+                "signer": "0x0000000000000000000000000000000000000000",
+                "feeRecipient": "0x0000000000000000000000000000000000000000",
+                "feeRate": 0.0
+            },
+            "widgetFeeSignature": "",
+            "recipient": "0x4444444444444444444444444444444444444444",
+            "amountIn": amount_in,
+            "amountOut": "2",
+            "amountOutBeforeFee": "2",
+            "fallbackSwapDataArray": null,
+            "tokenTransferFeeOnPercent": 0.0,
+            "txRequest": {
+                "target": "0x8a2ddc0461Fcf96F81a05529Bed540d4f1eb2a00",
+                "calldata": "0x0947c2d9",
+                "value": "0"
+            },
+            "source": [6],
+            "errorMessage": "",
+            "router_version": "4",
+            "toWrap": false,
+            "toUnwrap": false,
+            "amountInOffset": 0,
+            "amountOutMinimumOffset": 0
+        }))
+        .unwrap()
+    }
+
     #[test]
     fn test_native_client_serialization() {
         let mut tokens = HashSet::new();
@@ -896,6 +959,29 @@ mod tests {
             sender: Bytes::from_str("0x3333333333333333333333333333333333333333").unwrap(),
             receiver: Bytes::from_str("0x4444444444444444444444444444444444444444").unwrap(),
         }
+    }
+
+    #[test]
+    fn accepts_quote_with_requested_input_amount() {
+        let params = create_test_quote_params();
+        let response = successful_quote_response(&params.amount_in.to_string());
+
+        let quote = NativeClient::process_quote_response(response, &params).unwrap();
+
+        assert_eq!(quote.amount_in, params.amount_in);
+    }
+
+    #[test]
+    fn rejects_quote_with_mismatched_input_amount() {
+        let params = create_test_quote_params();
+        let response = successful_quote_response("2");
+
+        let result = NativeClient::process_quote_response(response, &params);
+
+        assert!(matches!(
+            result,
+            Err(RFQError::ParsingError(message)) if message.contains("input amount mismatch")
+        ));
     }
 
     fn create_test_client(endpoint: String) -> NativeClient {
