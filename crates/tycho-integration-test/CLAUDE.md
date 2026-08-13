@@ -28,7 +28,7 @@ cargo run -p tycho-integration-test -- \
 Key optional flags: `--no-tls`, `--disable-onchain`, `--disable-rfq`,
 `--disable-price-level-stream`, `--disable-execution`, `--protocols uniswap_v2,curve`,
 `--max-blocks 100`, `--parallel-simulations 5`, `--always-test-components <id,...>`,
-`--price-level-stream-block-interval 1`, `--price-level-stream-stale-threshold-secs 15`.
+`--price-level-stream-block-interval 1`, `--price-level-stream-stale-threshold-secs 10`.
 
 ## Module Structure
 
