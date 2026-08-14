@@ -2410,6 +2410,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "balancer-maths-rust"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "41d64ad259dd7ffe34754fb6f6a99e888fd18943bb0e620ae1e4b4e05c4f128f"
+dependencies = [
+ "alloy-primitives 1.6.1",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "base16ct"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9752,6 +9763,7 @@ dependencies = [
  "approx",
  "async-stream",
  "async-trait",
+ "balancer-maths-rust",
  "chrono",
  "clap",
  "crossterm",
