@@ -306,7 +306,6 @@ impl TryFrom<tycho_common::models::Chain> for NativeSupportedChain {
     }
 }
 
-// TODO: take intersection of the tycho supported chains and native supported chain
 impl NativeSupportedChain {
     pub fn as_str(&self) -> &'static str {
         match self {

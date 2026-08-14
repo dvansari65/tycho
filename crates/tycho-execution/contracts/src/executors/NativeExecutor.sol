@@ -9,6 +9,7 @@ import {ETH_ADDRESS} from "../../lib/NativeETH.sol";
 error NativeExecutor__InvalidDataLength();
 error NativeExecutor__InvalidTarget();
 error NativeExecutor__InvalidPayload();
+error NativeExecutor__InvalidValue();
 error NativeExecutor__ZeroAddress();
 error NativeExecutor__NotAContract();
 
@@ -76,17 +77,16 @@ contract NativeExecutor is IExecutor {
             revert NativeExecutor__InvalidPayload();
         }
 
-        // Prevent Dispatcher ETH drain vulnerability:
-        // The `value` from the Native API could maliciously be set to drain the Dispatcher.
-        // If tokenIn is ETH, we strictly bound `ethValue` to the maximum available `amountIn`.
-        // If tokenIn is not ETH, we must pass 0 to prevent spending Dispatcher's unrelated ETH.
-        uint256 ethValue = 0;
-        if (tokenIn == ETH_ADDRESS) {
-            ethValue = amountIn > value ? value : amountIn;
+        // `value` comes from Native's txRequest. It must exactly match the ETH
+        // input, or be zero for ERC-20 swaps, so the executor never silently
+        // changes the quoted input or spends unrelated Dispatcher ETH.
+        uint256 expectedValue = tokenIn == ETH_ADDRESS ? amountIn : 0;
+        if (value != expectedValue) {
+            revert NativeExecutor__InvalidValue();
         }
 
         // slither-disable-next-line unused-return
-        target.functionCallWithValue(payload, ethValue);
+        target.functionCallWithValue(payload, value);
     }
 
     function _decodeData(bytes calldata data)

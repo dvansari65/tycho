@@ -251,7 +251,7 @@ contract NativeExecutorUnitTest is Test, Constants {
         assertEq(mockVault.lastValue(), 0);
     }
 
-    function test_Swap_ETH_CappedByAmountIn() public {
+    function test_Swap_ETH_RevertsWhenApiValueExceedsAmountIn() public {
         bytes memory payload =
             abi.encodeWithSelector(ALLOWED_SELECTOR, hex"1234");
         bytes memory data = _encodeExecutorData(
@@ -259,13 +259,11 @@ contract NativeExecutorUnitTest is Test, Constants {
         );
 
         vm.deal(address(this), 1 ether);
+        vm.expectRevert(NativeExecutor__InvalidValue.selector);
         executor.swap{value: 1 ether}(1 ether, data, address(0));
-
-        assertTrue(mockV4.called());
-        assertEq(mockV4.lastValue(), 1 ether);
     }
 
-    function test_Swap_ETH_CappedByApiValue() public {
+    function test_Swap_ETH_RevertsWhenApiValueIsBelowAmountIn() public {
         bytes memory payload =
             abi.encodeWithSelector(ALLOWED_SELECTOR, hex"1234");
         bytes memory data = _encodeExecutorData(
@@ -273,10 +271,22 @@ contract NativeExecutorUnitTest is Test, Constants {
         );
 
         vm.deal(address(this), 1 ether);
+        vm.expectRevert(NativeExecutor__InvalidValue.selector);
+        executor.swap{value: 1 ether}(1 ether, data, address(0));
+    }
+
+    function test_Swap_ETH_ForwardsMatchingValue() public {
+        bytes memory payload =
+            abi.encodeWithSelector(ALLOWED_SELECTOR, hex"1234");
+        bytes memory data = _encodeExecutorData(
+            ETH_ADDR, USDC_ADDR, address(mockV4), 1 ether, payload
+        );
+
+        vm.deal(address(this), 1 ether);
         executor.swap{value: 1 ether}(1 ether, data, address(0));
 
         assertTrue(mockV4.called());
-        assertEq(mockV4.lastValue(), 0.5 ether);
+        assertEq(mockV4.lastValue(), 1 ether);
     }
 
     function test_Swap_ETH_ZeroAmountInAndZeroValue() public {
@@ -292,17 +302,15 @@ contract NativeExecutorUnitTest is Test, Constants {
         assertEq(mockV4.lastValue(), 0);
     }
 
-    function test_Swap_NonETH_IgnoresApiValue() public {
+    function test_Swap_NonETH_RevertsWithNonzeroApiValue() public {
         bytes memory payload =
             abi.encodeWithSelector(ALLOWED_SELECTOR, hex"1234");
         bytes memory data = _encodeExecutorData(
             USDC_ADDR, ETH_ADDR, address(mockV4), 1 ether, payload
         );
 
+        vm.expectRevert(NativeExecutor__InvalidValue.selector);
         executor.swap(1000000, data, address(0));
-
-        assertTrue(mockV4.called());
-        assertEq(mockV4.lastValue(), 0);
     }
 
     function test_Swap_Reverts_InvalidTarget() public {

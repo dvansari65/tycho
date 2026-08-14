@@ -155,7 +155,7 @@ impl NativeClient {
             .header("apikey", &self.api_key)
             .send()
             .await
-            .map_err(|e| RFQError::FatalError(e.to_string()))?;
+            .map_err(|e| RFQError::ConnectionError(e.to_string()))?;
 
         if !response.status().is_success() {
             return Err(RFQError::ConnectionError(format!(
@@ -982,6 +982,48 @@ mod tests {
             result,
             Err(RFQError::ParsingError(message)) if message.contains("input amount mismatch")
         ));
+    }
+
+    #[test]
+    fn accepts_native_eth_response_using_tycho_zero_address() {
+        let mut params = create_test_quote_params();
+        params.token_in = Bytes::zero(20);
+        let mut response = successful_quote_response(&params.amount_in.to_string());
+        response.orders[0].seller_token = "0x0000000000000000000000000000000000000000".to_string();
+        response.tx_request.value = params.amount_in.to_string();
+
+        let quote = NativeClient::process_quote_response(response, &params).unwrap();
+
+        assert_eq!(quote.amount_in, params.amount_in);
+    }
+
+    #[test]
+    fn accepts_native_eth_orderbook_using_tycho_zero_address() {
+        let tycho_native_eth = Bytes::zero(20);
+        let usdc = Bytes::from_str("0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48").unwrap();
+        let client = NativeClient::new(
+            Chain::Ethereum,
+            "test-api-key".to_string(),
+            HashSet::from([tycho_native_eth.clone(), usdc.clone()]),
+            0.0,
+            HashSet::from([usdc.clone()]),
+            Duration::from_secs(1),
+            Duration::from_secs(5),
+        )
+        .unwrap();
+
+        let books = client.group_orderbook(vec![NativeOrderbookEntry {
+            base_symbol: "ETH".to_string(),
+            quote_symbol: "USDC".to_string(),
+            base_address: tycho_native_eth.clone(),
+            quote_address: usdc,
+            minimum_in_base: 1.0,
+            side: NativeOrderbookSide::Bid,
+            levels: vec![NativePriceLevel { quantity: 1.0, price: 3_000.0 }],
+        }]);
+
+        let book = books.values().next().unwrap();
+        assert_eq!(book.base_address, tycho_native_eth);
     }
 
     fn create_test_client(endpoint: String) -> NativeClient {

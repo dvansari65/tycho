@@ -52,10 +52,9 @@ impl TryFromWithBlock<ComponentWithState, TimestampHeader> for NativeState {
             .clone();
 
         // Parse the Relay orderbook snapshot stored by the stream.
-        let empty_book_array: Bytes = "{}".as_bytes().to_vec().into();
         let book_data = state_attrs
             .get("book")
-            .unwrap_or(&empty_book_array);
+            .ok_or_else(|| InvalidSnapshotError::MissingAttribute("book".to_string()))?;
 
         let book: NativePriceData = serde_json::from_slice(book_data)
             .map_err(|e| InvalidSnapshotError::ValueError(format!("Invalid book JSON: {e}")))?;
@@ -211,8 +210,10 @@ mod tests {
         )
         .await;
 
-        assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), InvalidSnapshotError::ValueError(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            InvalidSnapshotError::MissingAttribute(attribute) if attribute == "book"
+        ));
     }
 
     #[tokio::test]

@@ -56,6 +56,11 @@ impl NativeClientBuilder {
         self
     }
 
+    pub fn quote_timeout(mut self, quote_timeout: Duration) -> Self {
+        self.quote_timeout = quote_timeout;
+        self
+    }
+
     pub fn build(self) -> Result<NativeClient, RFQError> {
         let quote_tokens = match self.quote_tokens {
             Some(tokens) => tokens,
