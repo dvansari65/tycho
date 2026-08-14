@@ -1210,17 +1210,17 @@ async fn process_update(
         // when the target block was built by Titan AND the maker's oracle update landed on-chain.
         // A staleness revert is that designed outcome, not an integration failure — record it
         // separately and keep the revert metrics meaningful.
-        if execution_info
+        if let Some(pamm) = execution_info
             .protocol_system
-            .starts_with(PRICE_LEVEL_STREAM_PREFIX)
+            .strip_prefix(PRICE_LEVEL_STREAM_PREFIX)
         {
             if let TychoExecutionResult::Revert { reason, .. } = result {
-                if is_oracle_stale_revert(reason) {
+                if is_oracle_stale_revert(pamm, reason) {
                     debug!(
                         block = block.number(),
                         protocol = %execution_info.protocol_system,
-                        "Oracle lane not stamped for the quoted block (block not built by Titan \
-                         or update missing); skipping execution comparison"
+                        "pAMM price feed not fresh for the quoted block (block not built by \
+                         Titan or update missing); skipping execution comparison"
                     );
                     metrics::record_execution_stale_quote(&execution_info.protocol_system);
                     continue;
@@ -1863,13 +1863,26 @@ fn process_execution_result(
     }
 }
 
-/// Selector of the priority-update-registry's `StaleUpdate()` error, matched raw in case the
-/// four-byte lookup cannot decode it.
-const STALE_UPDATE_SELECTOR: &str = "0x666a2814";
+/// Selector of the priority-update-registry's `StaleUpdate()` error, the freshness guard of the
+/// registry-priced pAMMs (FermiSwap, Kipseli, Bebop, TaurusFi).
+const STALE_UPDATE_SELECTOR: &str = "666a2814";
 
-/// Returns whether a revert reason is the pAMM oracle-staleness guard (`StaleUpdate()`).
-fn is_oracle_stale_revert(reason: &str) -> bool {
-    reason.contains("StaleUpdate") || reason.contains(STALE_UPDATE_SELECTOR)
+/// Selector of `FeedStalled()`, the equivalent freshness guard of the Metric pAMM's own price
+/// feed.
+const FEED_STALLED_SELECTOR: &str = "9a0423af";
+
+/// Returns whether a revert reason is the freshness guard of the given pAMM (the bare venue
+/// name, without the `pricelevelstream:` prefix): `StaleUpdate()` from the priority-update
+/// registry for every pAMM, plus `FeedStalled()` from Metric's own price feed.
+///
+/// Selectors are matched without a `0x` prefix: the guard error can reach the router wrapped in
+/// an outer error (e.g. `WrappedError(feed, 0x…, …)`) whose decoded reason carries the inner
+/// selector only as ABI-encoded bytes — a bare hex substring with no `0x`.
+fn is_oracle_stale_revert(pamm: &str, reason: &str) -> bool {
+    if reason.contains("StaleUpdate") || reason.contains(STALE_UPDATE_SELECTOR) {
+        return true;
+    }
+    pamm == "metric" && (reason.contains("FeedStalled") || reason.contains(FEED_STALLED_SELECTOR))
 }
 
 /// Extract the error name from a revert reason string
@@ -1923,4 +1936,37 @@ fn format_error_chain(e: &miette::Error) -> String {
         chain.push(format!("{cause}"));
     }
     chain.join(" -> ")
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::is_oracle_stale_revert;
+
+    #[rstest]
+    #[case::stale_update_name("fermiswap", "execution reverted: StaleUpdate()")]
+    #[case::stale_update_bare_selector("kipseli", "execution reverted: 0x666a2814")]
+    // Metric's FeedStalled() reaches the router wrapped in an outer error whose decoded reason
+    // carries the inner selector only as ABI-encoded bytes, without a `0x` prefix (realistic
+    // shape captured from a live run log).
+    #[case::feed_stalled_inside_wrapped_error(
+        "metric",
+        "WrappedError(0xc0b06c4adfabb5be10ddb1dcd1c80caa6742f7bc, \
+         0xc1701b6700000000000000000000000000000000000000000000000000000000, \
+         0x9a0423af00000000000000000000000000000000000000000000000000000000, 0x)"
+    )]
+    #[case::feed_stalled_name("metric", "execution reverted: FeedStalled()")]
+    fn stale_guard_reverts_are_expected(#[case] pamm: &str, #[case] reason: &str) {
+        assert!(is_oracle_stale_revert(pamm, reason));
+    }
+
+    #[rstest]
+    #[case::negative_slippage("metric", "TychoRouter__NegativeSlippage(1000, 990)")]
+    #[case::plain_revert("fermiswap", "execution reverted")]
+    #[case::arithmetic("fermiswap", "arithmetic underflow or overflow")]
+    #[case::feed_stalled_on_non_metric_pamm("fermiswap", "execution reverted: FeedStalled()")]
+    fn other_reverts_stay_real_failures(#[case] pamm: &str, #[case] reason: &str) {
+        assert!(!is_oracle_stale_revert(pamm, reason));
+    }
 }

@@ -47,7 +47,8 @@ pub fn initialize_metrics() {
     describe_counter!(
         "tycho_integration_execution_stale_quotes_total",
         "Price level stream executions skipped because the quoted block was not built by Titan \
-         or the pAMM's oracle update did not land on-chain (StaleUpdate revert; expected outcome)"
+         or the pAMM's oracle update did not land on-chain (freshness-guard revert; expected \
+         outcome)"
     );
     describe_counter!(
         "tycho_integration_price_level_target_block_misses_total",
