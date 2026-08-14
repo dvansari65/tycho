@@ -10,6 +10,25 @@ import {
     SafeERC20
 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
+contract MockBebopSettlement {
+    using SafeERC20 for IERC20;
+
+    IERC20 private constant _TOKEN_IN =
+        IERC20(0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2);
+    IERC20 private constant _TOKEN_OUT =
+        IERC20(0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48);
+    uint256 private constant _AMOUNT_OUT = 10_000_000;
+
+    uint256 public filledTakerAmount;
+
+    fallback() external {
+        require(msg.sig == 0xa2f74893, "unexpected selector");
+        filledTakerAmount = uint256(bytes32(msg.data[68:100]));
+        _TOKEN_IN.safeTransferFrom(msg.sender, address(this), filledTakerAmount);
+        _TOKEN_OUT.safeTransfer(msg.sender, _AMOUNT_OUT);
+    }
+}
+
 contract BebopExecutorExposed is BebopExecutor {
     constructor(address _bebopSettlement, address _bebopRouter)
         BebopExecutor(_bebopSettlement, _bebopRouter)
@@ -501,5 +520,46 @@ contract TychoRouterForBebopTest is TychoRouterTestSetup {
         );
 
         vm.stopPrank();
+    }
+
+    function testBebopPartialFillThroughRouter() public {
+        address user = 0xd2068e04Cf586f76EEcE7BA5bEB779D7bB1474A1;
+        uint256 runtimeAmountIn = 10 ether;
+        uint256 expectedAmountOut = 10_000_000;
+        MockBebopSettlement mockSettlement = new MockBebopSettlement();
+        vm.etch(BEBOP_SETTLEMENT, address(mockSettlement).code);
+        deal(WETH_ADDR, user, runtimeAmountIn);
+        deal(USDC_ADDR, BEBOP_SETTLEMENT, expectedAmountOut);
+
+        uint256 outputBalanceBefore = IERC20(USDC_ADDR).balanceOf(user);
+        vm.startPrank(user);
+        IERC20(WETH_ADDR).approve(tychoRouterAddr, runtimeAmountIn);
+        bytes memory callData = loadCallDataFromFile(
+            "test_single_encoding_strategy_bebop_partial_fill"
+        );
+        (bool success,) = tychoRouterAddr.call(callData);
+        vm.stopPrank();
+
+        assertTrue(success, "Call Failed");
+        assertEq(
+            MockBebopSettlement(BEBOP_SETTLEMENT).filledTakerAmount(),
+            runtimeAmountIn,
+            "provider received the wrong filled taker amount"
+        );
+        assertEq(
+            IERC20(USDC_ADDR).balanceOf(user) - outputBalanceBefore,
+            expectedAmountOut,
+            "user received the wrong output amount"
+        );
+        assertEq(
+            IERC20(WETH_ADDR).balanceOf(BEBOP_SETTLEMENT),
+            runtimeAmountIn,
+            "settlement received the wrong input amount"
+        );
+        assertEq(
+            IERC20(WETH_ADDR).balanceOf(tychoRouterAddr),
+            0,
+            "weth left in router"
+        );
     }
 }
