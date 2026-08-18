@@ -536,28 +536,9 @@ async fn run(cli: Cli) -> miette::Result<()> {
                             .as_mut()
                             .reset(tokio::time::Instant::now() + stale_threshold);
 
-                        if cli.max_blocks > 0 {
-                            if let Some(stats) = statistics.as_ref() {
-                                let stats = stats
-                                    .read()
-                                    .expect("Failed to get read lock for statistics (max-block check)");
-                                if stats.blocks_processed >= cli.max_blocks {
-                                    drop(stats);
-                                    info!("Reached max blocks ({}), stopping...", cli.max_blocks);
-                                    break;
-                                }
-                                let block_num = update.update.block_number_or_timestamp;
-                                if !stats.blocks_seen.contains(&block_num)
-                                    && stats.blocks_processed >= cli.max_blocks
-                                {
-                                    drop(stats);
-                                    info!(
-                                        "Next block would exceed max blocks ({}), stopping...",
-                                        cli.max_blocks
-                                    );
-                                    break;
-                                }
-                            }
+                        if reached_max_blocks(cli.max_blocks, statistics.as_ref()) {
+                            info!("Reached max blocks ({}), stopping...", cli.max_blocks);
+                            break;
                         }
 
                         let cli = cli.clone();
@@ -633,6 +614,11 @@ async fn run(cli: Cli) -> miette::Result<()> {
                                 continue;
                             }
                         };
+
+                        if reached_max_blocks(cli.max_blocks, statistics.as_ref()) {
+                            info!("Reached max blocks ({}), stopping...", cli.max_blocks);
+                            break;
+                        }
 
                         let cli = cli.clone();
                         let rpc_tools = rpc_tools.clone();
@@ -985,7 +971,7 @@ async fn process_update(
                 let mut stats = stats
                     .write()
                     .expect("Failed to get write lock for statistics (record block)");
-                stats.record_block_processed();
+                stats.record_block_processed(update.update.block_number_or_timestamp);
             }
 
             block
@@ -1021,7 +1007,15 @@ async fn process_update(
             match await_target_block(&rpc_tools, target_block, cli.rpc_poll_attempts, poll_interval)
                 .await?
             {
-                Some(b) => Arc::new(b),
+                Some(b) => {
+                    if let Some(stats) = statistics.as_ref() {
+                        let mut stats = stats
+                            .write()
+                            .expect("Failed to get write lock for statistics (record block)");
+                        stats.record_block_processed(target_block);
+                    }
+                    Arc::new(b)
+                }
                 None => {
                     metrics::record_price_level_target_block_miss();
                     debug!(
@@ -1861,6 +1855,21 @@ fn process_execution_result(
             );
         }
     }
+}
+
+/// Whether the run has processed `--max-blocks` blocks. Always false when no cap is set or
+/// statistics are disabled.
+fn reached_max_blocks(max_blocks: u64, statistics: Option<&Arc<RwLock<TestStatistics>>>) -> bool {
+    if max_blocks == 0 {
+        return false;
+    }
+    let Some(stats) = statistics else {
+        return false;
+    };
+    let stats = stats
+        .read()
+        .expect("Failed to get read lock for statistics (max-block check)");
+    stats.blocks_processed >= max_blocks
 }
 
 /// Selector of the priority-update-registry's `StaleUpdate()` error, the freshness guard of the
