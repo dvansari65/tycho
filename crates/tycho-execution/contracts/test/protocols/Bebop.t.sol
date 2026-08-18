@@ -534,8 +534,7 @@ contract TychoRouterForBebopTest is TychoRouterTestSetup {
         address user = 0xd2068e04Cf586f76EEcE7BA5bEB779D7bB1474A1;
         uint256 runtimeAmountIn = 10 ether;
         uint256 expectedAmountOut = 10_000_000;
-        MockBebopSettlement mockSettlement = new MockBebopSettlement();
-        vm.etch(BEBOP_SETTLEMENT, address(mockSettlement).code);
+        vm.etch(BEBOP_SETTLEMENT, type(MockBebopSettlement).runtimeCode);
         deal(WETH_ADDR, user, runtimeAmountIn);
         deal(USDC_ADDR, BEBOP_SETTLEMENT, expectedAmountOut);
 
