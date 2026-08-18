@@ -13,6 +13,12 @@
 //! venue address (e.g. `pricelevelstream:0x5979…`). The prefix keeps these components distinct
 //! from those any other integration path may produce for the same venue (e.g. `vm:fermiswap`).
 //!
+//! Opting in with `via_fallback_router` (requires the `evm` feature) emits whitelisted venues
+//! under `propammfallback:{pamm}` instead: tycho-execution routes their swaps through Titan's
+//! PropAMMRouter, which falls back to a single-hop Uniswap V3 pool when the venue reverts. The
+//! builder reads the router's on-chain whitelist via the node at `RPC_URL`; without the
+//! variable, or when the read fails, it warns and keeps every venue on the direct path.
+//!
 //! Distinct identifiers do not imply distinct liquidity, though: a venue served here may also be
 //! integrated through another path (FermiSwap, for example, also exists as `vm:fermiswap`), in
 //! which case the components of both paths price the same underlying inventory. Consumers
@@ -29,6 +35,8 @@
 //! [`Update`](crate::protocol::models::Update)s.
 
 pub mod config;
+#[cfg(feature = "evm")]
+pub mod fallback_router;
 pub mod state;
 pub mod stream;
 mod titan;

@@ -49,6 +49,7 @@ pub struct PriceLevelStreamBuilder {
     auto_detect: bool,
     auto_detected_gas_cost: Option<BigUint>,
     connection: ConnectionSettings,
+    router_venues: HashSet<Bytes>,
 }
 
 impl PriceLevelStreamBuilder {
@@ -168,6 +169,47 @@ impl PriceLevelStreamBuilder {
         self
     }
 
+    /// Emits whitelisted venues' components under `propammfallback:{name}` instead of
+    /// `pricelevelstream:{name}`, so tycho-execution routes their swaps through Titan's
+    /// PropAMMRouter. The router falls back to a single-hop Uniswap V3 pool when the venue
+    /// reverts — which a stale maker quote does in any simulation against a mined block.
+    ///
+    /// Reads the router's on-chain venue whitelist once, via the node at `RPC_URL` (from the
+    /// environment, falling back to `.env`). Only whitelisted venues may use the family — the
+    /// router reverts `UnknownVenue` for others, so every swap would execute on the Uniswap V3
+    /// fallback at a worse price than the venue gives.
+    ///
+    /// Degrades instead of failing: without `RPC_URL`, or when the whitelist read fails, a
+    /// warning is logged and every venue stays on the direct `pricelevelstream:` path.
+    #[cfg(feature = "evm")]
+    pub async fn via_fallback_router(mut self) -> Self {
+        use super::fallback_router::fetch_fallback_router_venues;
+
+        let rpc_url = std::env::var("RPC_URL")
+            .ok()
+            .or_else(|| {
+                dotenv::dotenv().ok()?;
+                std::env::var("RPC_URL").ok()
+            });
+        let Some(rpc_url) = rpc_url else {
+            tracing::warn!(
+                "RPC_URL is not set; pAMM swaps execute on the venues directly, without the \
+                 PropAMMRouter's Uniswap V3 fallback"
+            );
+            return self;
+        };
+
+        match fetch_fallback_router_venues(&rpc_url).await {
+            Ok(venues) => self.router_venues.extend(venues),
+            Err(e) => tracing::warn!(
+                error = %e,
+                "Could not read the PropAMMRouter venue whitelist; pAMM swaps execute on the \
+                 venues directly, without the Uniswap V3 fallback"
+            ),
+        }
+        self
+    }
+
     /// Consumes the builder and opens the stream.
     ///
     /// The connection is established lazily on first poll and maintained (with reconnects) for as
@@ -205,6 +247,7 @@ impl PriceLevelStreamBuilder {
             self.tokens,
             self.auto_detect,
             auto_detected_gas_cost,
+            self.router_venues,
         );
 
         titan::messages(url, self.connection).filter_map(move |message| tracker.process(message))
@@ -224,6 +267,9 @@ struct SnapshotTracker {
     auto_detect: bool,
     /// The per-swap gas cost synthesized auto-detected configurations are served with.
     auto_detected_gas_cost: BigUint,
+    /// Venues whose components are emitted under the `propammfallback:` family, so their swaps
+    /// execute through Titan's PropAMMRouter instead of the venue directly.
+    router_venues: HashSet<Bytes>,
     /// Components of the last emitted snapshot, across all pAMMs. A frame is a complete
     /// snapshot of everything Titan currently streams, so removals are diffed globally: a
     /// known component a frame does not re-emit is gone — including when its venue vanishes
@@ -242,6 +288,7 @@ impl SnapshotTracker {
         tokens: HashMap<Bytes, Token>,
         auto_detect: bool,
         auto_detected_gas_cost: BigUint,
+        router_venues: HashSet<Bytes>,
     ) -> Self {
         Self {
             registry,
@@ -249,6 +296,7 @@ impl SnapshotTracker {
             tokens,
             auto_detect,
             auto_detected_gas_cost,
+            router_venues,
             components: HashMap::new(),
             newest_block: 0,
         }
@@ -327,7 +375,11 @@ impl SnapshotTracker {
                 let component = previous
                     .remove(&id_string)
                     .unwrap_or_else(|| {
-                        let component = build_component(&self.tokens, config, id, &token0, &token1);
+                        let via_router = self
+                            .router_venues
+                            .contains(&config.address);
+                        let component =
+                            build_component(&self.tokens, config, id, &token0, &token1, via_router);
                         new_pairs.insert(id_string.clone(), component.clone());
                         component
                     });
@@ -370,8 +422,10 @@ fn build_component(
     id: Bytes,
     token0: &Bytes,
     token1: &Bytes,
+    via_router: bool,
 ) -> ProtocolComponent {
-    let protocol_system = config.protocol_system();
+    let protocol_system =
+        if via_router { config.fallback_protocol_system() } else { config.protocol_system() };
     ProtocolComponent::new(
         id,
         protocol_system.clone(),
@@ -435,6 +489,7 @@ mod tests {
             tokens(),
             false,
             BigUint::from(DEFAULT_AUTO_DETECTED_GAS_COST),
+            HashSet::new(),
         )
     }
 
@@ -618,6 +673,7 @@ mod tests {
             tokens(),
             false,
             BigUint::from(DEFAULT_AUTO_DETECTED_GAS_COST),
+            HashSet::new(),
         );
         assert!(tracker
             .process(message(100, wbtc_usdc_pairs()))
@@ -633,6 +689,7 @@ mod tests {
             tokens(),
             true,
             BigUint::from(DEFAULT_AUTO_DETECTED_GAS_COST),
+            HashSet::new(),
         );
         assert!(tracker
             .process(message(100, wbtc_usdc_pairs()))
@@ -704,6 +761,7 @@ mod tests {
             tokens(),
             true,
             BigUint::from(DEFAULT_AUTO_DETECTED_GAS_COST),
+            HashSet::new(),
         );
         let update = tracker
             .process(message(100, wbtc_usdc_pairs()))
@@ -732,6 +790,7 @@ mod tests {
             tokens(),
             true,
             BigUint::from(42_000u64),
+            HashSet::new(),
         );
         let update = tracker
             .process(message(100, wbtc_usdc_pairs()))
@@ -779,6 +838,56 @@ mod tests {
             assert_eq!(builder.registry[&fermiswap_router].protocol, "custom");
             assert_eq!(builder.registry[&fermiswap_router].gas_cost, BigUint::from(1u64));
         }
+    }
+
+    /// A venue on the router's whitelist is emitted under `propammfallback:{name}`, so its swaps
+    /// execute through Titan's PropAMMRouter; identity and attributes stay the same.
+    #[test]
+    fn whitelisted_venue_is_served_under_the_fallback_family() {
+        let config = PriceLevelStreamConfig::new(
+            "fermiswap",
+            Bytes::from_str(PAMM).unwrap(),
+            BigUint::from(120_000u64),
+        );
+        let mut tracker = SnapshotTracker::new(
+            HashMap::from([(config.address.clone(), config)]),
+            HashSet::new(),
+            tokens(),
+            false,
+            BigUint::from(DEFAULT_AUTO_DETECTED_GAS_COST),
+            HashSet::from([Bytes::from_str(PAMM).unwrap()]),
+        );
+
+        let update = tracker
+            .process(message(100, wbtc_usdc_pairs()))
+            .expect("update expected");
+
+        let component = &update.new_pairs[&expected_id()];
+        assert_eq!(component.protocol_system, "propammfallback:fermiswap");
+        assert_eq!(
+            component.static_attributes[PAMM_ADDRESS_ATTRIBUTE],
+            Bytes::from_str(PAMM).unwrap()
+        );
+    }
+
+    /// The whitelist check is by address, so it also covers auto-detected, address-named venues.
+    #[test]
+    fn auto_detected_whitelisted_venue_is_served_under_the_fallback_family() {
+        let mut tracker = SnapshotTracker::new(
+            HashMap::new(),
+            HashSet::new(),
+            tokens(),
+            true,
+            BigUint::from(DEFAULT_AUTO_DETECTED_GAS_COST),
+            HashSet::from([Bytes::from_str(PAMM).unwrap()]),
+        );
+
+        let update = tracker
+            .process(message(100, wbtc_usdc_pairs()))
+            .expect("update expected");
+
+        let component = &update.new_pairs[&expected_id()];
+        assert_eq!(component.protocol_system, format!("propammfallback:{PAMM}"));
     }
 
     #[test]
