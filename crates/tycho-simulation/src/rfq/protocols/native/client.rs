@@ -4,6 +4,7 @@ use std::{
     time::SystemTime,
 };
 
+use alloy::primitives::utils::keccak256;
 use async_trait::async_trait;
 use futures::stream::BoxStream;
 use num_bigint::BigUint;
@@ -265,7 +266,11 @@ impl NativeClient {
 
             let bids = if direct_bids.is_empty() { mirrored_bids } else { direct_bids };
             let asks = if direct_asks.is_empty() { mirrored_asks } else { direct_asks };
-            let component_id = format!("native_relay_{}_{}", base_address, quote_address);
+            // Component IDs are decoded as hex bytes downstream, so use the same stable hashed
+            // pair format as the other RFQ clients.
+            let pair =
+                format!("native_{}/{}", hex::encode(&base_address), hex::encode(&quote_address));
+            let component_id = keccak256(pair.as_bytes()).to_string();
             books.insert(
                 component_id,
                 NativePriceData {
@@ -941,7 +946,8 @@ mod tests {
 
         assert_eq!(books, reversed_books);
         assert_eq!(books.len(), 1);
-        let component_id = format!("native_relay_{}_{}", weth, usdc);
+        let pair = format!("native_{}/{}", hex::encode(&weth), hex::encode(&usdc));
+        let component_id = keccak256(pair.as_bytes()).to_string();
         let book = books.get(&component_id).unwrap();
         assert_eq!(book.base_address, weth);
         assert_eq!(book.quote_address, usdc);
