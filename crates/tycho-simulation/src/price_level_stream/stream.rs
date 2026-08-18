@@ -4,6 +4,7 @@ use std::{
 };
 
 use chrono::Utc;
+use num_bigint::BigUint;
 use tokio_stream::{Stream, StreamExt};
 use tycho_common::{
     models::{token::Token, Chain},
@@ -12,7 +13,10 @@ use tycho_common::{
 };
 
 use super::{
-    config::{default_denied_pamms, default_served_pamms, PriceLevelStreamConfig},
+    config::{
+        default_denied_pamms, default_served_pamms, PriceLevelStreamConfig,
+        DEFAULT_AUTO_DETECTED_GAS_COST,
+    },
     state::{PriceLevelStreamQuote, PriceLevelStreamState},
     titan::{
         self, ConnectionSettings, TitanPairLevels, TitanPammLevels, TitanPriceLevel,
@@ -43,6 +47,7 @@ pub struct PriceLevelStreamBuilder {
     tokens: HashMap<Bytes, Token>,
     url: Option<String>,
     auto_detect: bool,
+    auto_detected_gas_cost: Option<BigUint>,
     connection: ConnectionSettings,
 }
 
@@ -64,6 +69,15 @@ impl PriceLevelStreamBuilder {
     /// and the [`PAMM_ADDRESS_ATTRIBUTE`] — stay stable across such renames.
     pub fn auto_detect(mut self, enabled: bool) -> Self {
         self.auto_detect = enabled;
+        self
+    }
+
+    /// Overrides the per-swap gas cost that auto-detected pAMMs (see
+    /// [`auto_detect`](Self::auto_detect)) are served with. Defaults to the maximum over the
+    /// known venue profiles, as the conservative choice. Registered venues are unaffected —
+    /// their gas cost comes from their [`PriceLevelStreamConfig`].
+    pub fn auto_detected_gas_cost(mut self, gas_cost: BigUint) -> Self {
+        self.auto_detected_gas_cost = Some(gas_cost);
         self
     }
 
@@ -182,8 +196,16 @@ impl PriceLevelStreamBuilder {
         let url = self
             .url
             .unwrap_or_else(|| TITAN_PRICE_LEVEL_URL.to_string());
-        let mut tracker =
-            SnapshotTracker::new(self.registry, self.denied, self.tokens, self.auto_detect);
+        let auto_detected_gas_cost = self
+            .auto_detected_gas_cost
+            .unwrap_or_else(|| BigUint::from(DEFAULT_AUTO_DETECTED_GAS_COST));
+        let mut tracker = SnapshotTracker::new(
+            self.registry,
+            self.denied,
+            self.tokens,
+            self.auto_detect,
+            auto_detected_gas_cost,
+        );
 
         titan::messages(url, self.connection).filter_map(move |message| tracker.process(message))
     }
@@ -200,6 +222,8 @@ struct SnapshotTracker {
     /// Whether frames from pAMMs absent from the registry get an address-named configuration
     /// synthesized (and cached in the registry) instead of being skipped.
     auto_detect: bool,
+    /// The per-swap gas cost synthesized auto-detected configurations are served with.
+    auto_detected_gas_cost: BigUint,
     /// Components of the last emitted snapshot, across all pAMMs. A frame is a complete
     /// snapshot of everything Titan currently streams, so removals are diffed globally: a
     /// known component a frame does not re-emit is gone — including when its venue vanishes
@@ -217,8 +241,17 @@ impl SnapshotTracker {
         denied: HashSet<Bytes>,
         tokens: HashMap<Bytes, Token>,
         auto_detect: bool,
+        auto_detected_gas_cost: BigUint,
     ) -> Self {
-        Self { registry, denied, tokens, auto_detect, components: HashMap::new(), newest_block: 0 }
+        Self {
+            registry,
+            denied,
+            tokens,
+            auto_detect,
+            auto_detected_gas_cost,
+            components: HashMap::new(),
+            newest_block: 0,
+        }
     }
 
     /// Processes one frame into an [`Update`], or `None` if the frame targets an older block
@@ -254,7 +287,10 @@ impl SnapshotTracker {
                         continue;
                     }
                     tracing::info!(%pamm, "Serving auto-detected pAMM");
-                    &*entry.insert(PriceLevelStreamConfig::auto_detected(pamm.clone()))
+                    &*entry.insert(PriceLevelStreamConfig::auto_detected(
+                        pamm.clone(),
+                        self.auto_detected_gas_cost.clone(),
+                    ))
                 }
             };
 
@@ -398,6 +434,7 @@ mod tests {
             HashSet::new(),
             tokens(),
             false,
+            BigUint::from(DEFAULT_AUTO_DETECTED_GAS_COST),
         )
     }
 
@@ -575,7 +612,13 @@ mod tests {
 
     #[test]
     fn unregistered_pamm_produces_no_update_without_auto_detection() {
-        let mut tracker = SnapshotTracker::new(HashMap::new(), HashSet::new(), tokens(), false);
+        let mut tracker = SnapshotTracker::new(
+            HashMap::new(),
+            HashSet::new(),
+            tokens(),
+            false,
+            BigUint::from(DEFAULT_AUTO_DETECTED_GAS_COST),
+        );
         assert!(tracker
             .process(message(100, wbtc_usdc_pairs()))
             .is_none());
@@ -584,7 +627,13 @@ mod tests {
     #[test]
     fn denied_pamm_is_not_auto_detected() {
         let denied = HashSet::from([Bytes::from_str(PAMM).unwrap()]);
-        let mut tracker = SnapshotTracker::new(HashMap::new(), denied, tokens(), true);
+        let mut tracker = SnapshotTracker::new(
+            HashMap::new(),
+            denied,
+            tokens(),
+            true,
+            BigUint::from(DEFAULT_AUTO_DETECTED_GAS_COST),
+        );
         assert!(tracker
             .process(message(100, wbtc_usdc_pairs()))
             .is_none());
@@ -649,7 +698,13 @@ mod tests {
 
     #[test]
     fn auto_detected_pamm_is_served_under_its_address() {
-        let mut tracker = SnapshotTracker::new(HashMap::new(), HashSet::new(), tokens(), true);
+        let mut tracker = SnapshotTracker::new(
+            HashMap::new(),
+            HashSet::new(),
+            tokens(),
+            true,
+            BigUint::from(DEFAULT_AUTO_DETECTED_GAS_COST),
+        );
         let update = tracker
             .process(message(100, wbtc_usdc_pairs()))
             .expect("update expected");
@@ -660,16 +715,33 @@ mod tests {
             .as_any()
             .downcast_ref::<PriceLevelStreamState>()
             .expect("price level state");
-        assert_eq!(
-            state.gas_cost,
-            PriceLevelStreamConfig::auto_detected(Bytes::default()).gas_cost
-        );
+        assert_eq!(state.gas_cost, BigUint::from(DEFAULT_AUTO_DETECTED_GAS_COST));
 
         // The synthesized config is cached: the next snapshot is not a new pair again.
         let update = tracker
             .process(message(101, wbtc_usdc_pairs()))
             .expect("update expected");
         assert!(update.new_pairs.is_empty());
+    }
+
+    #[test]
+    fn auto_detected_gas_cost_override_applies() {
+        let mut tracker = SnapshotTracker::new(
+            HashMap::new(),
+            HashSet::new(),
+            tokens(),
+            true,
+            BigUint::from(42_000u64),
+        );
+        let update = tracker
+            .process(message(100, wbtc_usdc_pairs()))
+            .expect("update expected");
+
+        let state = update.states[&expected_id()]
+            .as_any()
+            .downcast_ref::<PriceLevelStreamState>()
+            .expect("price level state");
+        assert_eq!(state.gas_cost, BigUint::from(42_000u64));
     }
 
     #[test]

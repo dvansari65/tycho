@@ -29,10 +29,11 @@ impl PriceLevelStreamConfig {
     }
 
     /// The configuration an auto-detected pAMM (streamed by Titan but not otherwise configured)
-    /// is served under: named by its full lowercase hex address, with the default gas cost.
-    pub(super) fn auto_detected(address: Bytes) -> Self {
+    /// is served under: named by its full lowercase hex address, with the given per-swap gas
+    /// cost.
+    pub(super) fn auto_detected(address: Bytes, gas_cost: BigUint) -> Self {
         let protocol = address.to_string();
-        Self::new(protocol, address, BigUint::from(DEFAULT_GAS_COST))
+        Self::new(protocol, address, gas_cost)
     }
 
     /// The protocol system identifier of components emitted for this pAMM.
@@ -43,7 +44,9 @@ impl PriceLevelStreamConfig {
 
 /// Per-swap gas estimate for auto-detected pAMMs whose venue has not been measured: the maximum
 /// over the known venue profiles (see [`default_served_pamms`]), as the conservative choice.
-const DEFAULT_GAS_COST: u64 = 335_000;
+/// Overridable per stream via
+/// [`auto_detected_gas_cost`](super::stream::PriceLevelStreamBuilder::auto_detected_gas_cost).
+pub const DEFAULT_AUTO_DETECTED_GAS_COST: u64 = 335_000;
 
 /// The pAMMs known to be served by the Titan price level stream (as of 2026-08-13): FermiSwap,
 /// Kipseli, Metric, Bebop, and TaurusFi.
