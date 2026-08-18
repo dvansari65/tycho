@@ -10,6 +10,13 @@ import {
     SafeERC20
 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
+/// @dev BebopSettlement.swapSingle
+bytes4 constant SWAP_SINGLE_SELECTOR = 0x4dcebcba;
+/// @dev BebopSettlement.swapAggregate
+bytes4 constant SWAP_AGGREGATE_SELECTOR = 0xa2f74893;
+/// @dev BebopRouter.swap
+bytes4 constant ROUTER_SWAP_SELECTOR = 0x9586d0e8;
+
 contract MockBebopSettlement {
     using SafeERC20 for IERC20;
 
@@ -22,7 +29,7 @@ contract MockBebopSettlement {
     uint256 public filledTakerAmount;
 
     fallback() external {
-        require(msg.sig == 0xa2f74893, "unexpected selector");
+        require(msg.sig == SWAP_AGGREGATE_SELECTOR, "unexpected selector");
         filledTakerAmount = uint256(bytes32(msg.data[68:100]));
         _TOKEN_IN.safeTransferFrom(msg.sender, address(this), filledTakerAmount);
         _TOKEN_OUT.safeTransfer(msg.sender, _AMOUNT_OUT);
@@ -65,7 +72,7 @@ contract BebopExecutorTest is Constants, Permit2TestHelper, TestUtils {
         bebopExecutor = new BebopExecutorExposed(BEBOP_SETTLEMENT, BEBOP_ROUTER);
 
         bytes memory bebopCalldata = abi.encodePacked(
-            bytes4(0x4dcebcba), // swapSingle selector
+            SWAP_SINGLE_SELECTOR,
             hex"00000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000068470140"
         );
 
@@ -105,7 +112,7 @@ contract BebopExecutorTest is Constants, Permit2TestHelper, TestUtils {
         bebopExecutor = new BebopExecutorExposed(BEBOP_SETTLEMENT, BEBOP_ROUTER);
 
         bytes memory bebopCalldata = abi.encodePacked(
-            bytes4(0x4dcebcba), // swapSingle selector
+            SWAP_SINGLE_SELECTOR,
             hex"00000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000068470140"
         );
 
@@ -331,8 +338,9 @@ contract BebopExecutorTest is Constants, Permit2TestHelper, TestUtils {
         bebopExecutor = new BebopExecutorExposed(BEBOP_SETTLEMENT, BEBOP_ROUTER);
 
         // Create a mock bebop calldata
-        bytes memory bebopCalldata = hex"47fb5891" // swapSingle selector
-            hex"1234567890abcdef"; // some mock data
+        // An arbitrary selector plus some mock data
+        bytes memory bebopCalldata =
+            abi.encodePacked(bytes4(0x47fb5891), hex"1234567890abcdef");
 
         // Create params with correct length first
         uint256 originalAmountIn = 1e18;
@@ -367,7 +375,7 @@ contract BebopExecutorTest is Constants, Permit2TestHelper, TestUtils {
         bebopExecutor = new BebopExecutorExposed(BEBOP_SETTLEMENT, BEBOP_ROUTER);
 
         bytes memory routerCalldata =
-            abi.encodePacked(bytes4(0x9586d0e8), hex"00");
+            abi.encodePacked(ROUTER_SWAP_SELECTOR, hex"00");
         bytes memory params = abi.encodePacked(
             USDC_ADDR,
             ONDO_ADDR,
@@ -401,7 +409,7 @@ contract BebopExecutorTest is Constants, Permit2TestHelper, TestUtils {
             address(0xdead),
             uint8(0),
             uint256(1e6),
-            abi.encodePacked(bytes4(0x4dcebcba))
+            abi.encodePacked(SWAP_SINGLE_SELECTOR)
         );
 
         vm.expectRevert(BebopExecutor.BebopExecutor__InvalidTarget.selector);
@@ -417,7 +425,7 @@ contract BebopExecutorTest is Constants, Permit2TestHelper, TestUtils {
             address(0xdead),
             uint8(0),
             uint256(1e6),
-            abi.encodePacked(bytes4(0x4dcebcba))
+            abi.encodePacked(SWAP_SINGLE_SELECTOR)
         );
 
         vm.expectRevert(BebopExecutor.BebopExecutor__InvalidTarget.selector);
@@ -451,7 +459,7 @@ contract BebopExecutorTest is Constants, Permit2TestHelper, TestUtils {
             BEBOP_SETTLEMENT,
             uint8(0),
             uint256(1e6),
-            abi.encodePacked(bytes4(0x9586d0e8))
+            abi.encodePacked(ROUTER_SWAP_SELECTOR)
         );
 
         vm.expectRevert(BebopExecutor.BebopExecutor__InvalidSelector.selector);
