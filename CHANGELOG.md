@@ -1,3 +1,16 @@
+## [0.358.0](https://github.com/propeller-heads/tycho/compare/0.357.3...0.358.0) (2026-08-17)
+
+
+### Features
+
+* serve get_tokens from an in-memory token cache ([1e24735](https://github.com/propeller-heads/tycho/commit/1e247351a5958438b6d87e091849040d9c7c3ff8))
+* serve get_tokens from an in-memory token cache ([#1302](https://github.com/propeller-heads/tycho/issues/1302)) ([2e9052a](https://github.com/propeller-heads/tycho/commit/2e9052a4f6065d6c0bcef0c61c1e9dd5efd54724))
+
+
+### Bug Fixes
+
+* scope token cache to the configured chains ([cfc2f35](https://github.com/propeller-heads/tycho/commit/cfc2f356103574725c797aaa3fd88004aaf68724))
+
 ## [0.357.3](https://github.com/propeller-heads/tycho/compare/0.357.2...0.357.3) (2026-08-13)
 
 
