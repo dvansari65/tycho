@@ -43,7 +43,7 @@ impl PriceLevelStreamConfig {
 
 /// Per-swap gas estimate for auto-detected pAMMs whose venue has not been measured: the maximum
 /// over the known venue profiles (see [`default_served_pamms`]), as the conservative choice.
-const DEFAULT_GAS_COST: u64 = 350_000;
+const DEFAULT_GAS_COST: u64 = 335_000;
 
 /// The pAMMs known to be served by the Titan price level stream (as of 2026-08-13): FermiSwap,
 /// Kipseli, Metric, Bebop, and TaurusFi.
@@ -65,18 +65,18 @@ pub fn default_served_pamms() -> Vec<PriceLevelStreamConfig> {
     // router-level overhead (user/input/fee transfers): tycho-execution's gas estimator accounts
     // for those on top of this per-swap value.
     let pamms = [
-        // The FermiSwapper router. Measured ~162k-167k (2026-07-15).
-        ("fermiswap", "0x5979458912f80b96d30d4220af8e2e4925a33320", 170_000u64),
-        // The KipseliPropAMMWrapper router. Measured ~339k-343k (2026-07-15). Titan's venue docs
-        // list a newer Kipseli router (0x342b8458…), but the stream still keys Kipseli quotes by
-        // this address and the newer one has no activity.
-        ("kipseli", "0x71e790dd841c8a9061487cb3e78c288e75ce0b3d", 350_000u64),
+        // The FermiSwapper router. Measured ~177k-182k (2026-08-18).
+        ("fermiswap", "0x5979458912f80b96d30d4220af8e2e4925a33320", 185_000u64),
+        // The KipseliPropAMMWrapper router. Measured ~308k-329k (2026-08-18). Titan's venue docs
+        // list a newer Kipseli router (0x342b8458…), but the stream still keys Kipseli
+        // quotes by this address and the newer one has no activity.
+        ("kipseli", "0x71e790dd841c8a9061487cb3e78c288e75ce0b3d", 335_000u64),
         // The Metric router (unverified; identified via its pools' pricing reads of the Metric
-        // oracle 0x28d9cced…). Measured ~203k (2026-08-11).
-        ("metric", "0xe715dc29d2c273d0fc5a03e5cca9ccb0abb1dcdb", 210_000u64),
-        // The BopAMM (Bebop) router, per Titan's venue docs. Measured ~123k (2026-08-13).
-        ("bebop", "0xb09aaa5614916d7aeb59c295c52c92ca82addd76", 130_000u64),
-        // The TaurusFi router, per Titan's venue docs. Measured ~102k (2026-08-13).
+        // oracle 0x28d9cced…). Measured ~225k (2026-08-18).
+        ("metric", "0xe715dc29d2c273d0fc5a03e5cca9ccb0abb1dcdb", 230_000u64),
+        // The BopAMM (Bebop) router, per Titan's venue docs. Measured ~133k-136k (2026-08-18).
+        ("bebop", "0xb09aaa5614916d7aeb59c295c52c92ca82addd76", 140_000u64),
+        // The TaurusFi router, per Titan's venue docs. Measured ~105k (2026-08-18).
         ("taurusfi", "0x217d58931a8549ca539426aa8152e33dafc3d95a", 110_000u64),
     ];
     pamms
