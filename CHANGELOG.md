@@ -1,3 +1,34 @@
+## [0.358.1](https://github.com/propeller-heads/tycho/compare/0.358.0...0.358.1) (2026-08-19)
+
+
+### Bug Fixes
+
+* **deps:** resolve RUSTSEC-2026-0258 (h2 unbounded empty DATA frames) ([fc8c95a](https://github.com/propeller-heads/tycho/commit/fc8c95aca95affb0068bc9d1fcadef9fa0dc88a3))
+* **deps:** resolve RUSTSEC-2026-0258 (h2 unbounded empty DATA frames) ([#1332](https://github.com/propeller-heads/tycho/issues/1332)) ([979abe5](https://github.com/propeller-heads/tycho/commit/979abe576900192e825ddf34aa4d69b7eb5d5ced))
+
+## [0.358.0](https://github.com/propeller-heads/tycho/compare/0.357.3...0.358.0) (2026-08-17)
+
+
+### Features
+
+* serve get_tokens from an in-memory token cache ([1e24735](https://github.com/propeller-heads/tycho/commit/1e247351a5958438b6d87e091849040d9c7c3ff8))
+* serve get_tokens from an in-memory token cache ([#1302](https://github.com/propeller-heads/tycho/issues/1302)) ([2e9052a](https://github.com/propeller-heads/tycho/commit/2e9052a4f6065d6c0bcef0c61c1e9dd5efd54724))
+
+
+### Bug Fixes
+
+* scope token cache to the configured chains ([cfc2f35](https://github.com/propeller-heads/tycho/commit/cfc2f356103574725c797aaa3fd88004aaf68724))
+
+## [0.357.3](https://github.com/propeller-heads/tycho/compare/0.357.2...0.357.3) (2026-08-13)
+
+
+### Bug Fixes
+
+* adjust chain specific tokens fetch defaults ([b011f94](https://github.com/propeller-heads/tycho/commit/b011f94a5167987bcc9137e5ebe57ad5d71016a3))
+* adjust chain specific tokens fetch defaults ([#1319](https://github.com/propeller-heads/tycho/issues/1319)) ([9c0917a](https://github.com/propeller-heads/tycho/commit/9c0917a6772f695cc5011abb34aed2a6bd3e2e23))
+* reduce Ethereum 'days since last traded' token default to 30 ([9e77044](https://github.com/propeller-heads/tycho/commit/9e770445e4724cf21ce16c30c85f21198967eda9))
+* reduce Ethereum 'days since last traded' token default to 30 ([#1320](https://github.com/propeller-heads/tycho/issues/1320)) ([9e90467](https://github.com/propeller-heads/tycho/commit/9e90467b59d26d8005bfe4d815f8cea4d45030de))
+
 ## [0.357.2](https://github.com/propeller-heads/tycho/compare/0.357.1...0.357.2) (2026-08-12)
 
 
