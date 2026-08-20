@@ -1,3 +1,24 @@
+## [0.359.0](https://github.com/propeller-heads/tycho/compare/0.358.1...0.359.0) (2026-08-20)
+
+
+### ⚠ BREAKING CHANGES
+
+* **execution:** require explicit native wrap swaps in solutions (#1328)
+* **execution:** require explicit native wrap swaps in solutions
+
+### Features
+
+* **execution:** require explicit native wrap swaps in solutions ([bbac62b](https://github.com/propeller-heads/tycho/commit/bbac62bfcf885763c017a9239999a7825be2b5c5))
+* **execution:** require explicit native wrap swaps in solutions ([#1328](https://github.com/propeller-heads/tycho/issues/1328)) ([ffb4a2c](https://github.com/propeller-heads/tycho/commit/ffb4a2c1f45d7b0f067d8de8fbbc7ff31aebb3ed))
+
+
+### Bug Fixes
+
+* add height-aware purge_to to ReorgBuffer ([c2ce8b8](https://github.com/propeller-heads/tycho/commit/c2ce8b87b3f905c5bf9958d28bfb9b52abd4b4a2))
+* **indexer:** address review feedback on revert fatal paths ([72a580b](https://github.com/propeller-heads/tycho/commit/72a580b972ee00c7ca68d35094e4108a496eef28))
+* survive reverts targeting blocks not sealed in the reorg buffer ([60f66a2](https://github.com/propeller-heads/tycho/commit/60f66a22ae9cb3566b1376fb12987c98dc9e789f))
+* tighten revert hash-miss fallbacks to provable shapes ([79ea29e](https://github.com/propeller-heads/tycho/commit/79ea29e3bbe30f01e56bc9e2e235098292f99c56))
+
 ## [0.358.1](https://github.com/propeller-heads/tycho/compare/0.358.0...0.358.1) (2026-08-19)
 
 
