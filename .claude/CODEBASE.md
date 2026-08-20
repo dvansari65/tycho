@@ -44,7 +44,7 @@ Protocol Substreams modules live under `protocols/` as a separate WASM workspace
 
 | Crate | Description |
 |---|---|
-| `tycho-simulation` | DEX swap simulation library: protocol-specific state machines (`ProtocolSim`) for 20+ DEXs; `evm` module for EVM storage-based protocols, `protocol` module for custom implementations, `rfq` for request-for-quote protocols |
+| `tycho-simulation` | DEX swap simulation library: protocol-specific state machines (`ProtocolSim`) for 20+ DEXs; `evm` module for EVM storage-based protocols, `protocol` module for custom implementations, `rfq` for request-for-quote protocols, `price_level_stream` for the Titan pAMM price level stream |
 | `tycho-execution` | Swap encoding and execution: Solidity TychoRouterV3 contract + Rust encoding library; multi-hop swaps with fee-taking, vault-based accounting, delegatecall executor dispatch |
 
 ### Consumer SDK
