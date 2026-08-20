@@ -151,6 +151,14 @@ pub const PROPAMM_FALLBACK_KEY: &str = "propammfallback";
 mod tests {
     use super::*;
 
+    /// `get_encoder` matches on the prefix but looks the executor up under the key, so the two
+    /// must name the same family.
+    #[test]
+    fn test_family_keys_and_prefixes_agree() {
+        assert_eq!(format!("{PRICE_LEVEL_STREAM_KEY}:"), PRICE_LEVEL_STREAM_PREFIX);
+        assert_eq!(format!("{PROPAMM_FALLBACK_KEY}:"), PROPAMM_FALLBACK_PREFIX);
+    }
+
     /// The timings only keep inline fetches off the encoding path while a timed-out refresh plus
     /// the retry that follows it still fit inside the maximum window age.
     #[test]

@@ -17,6 +17,7 @@ use super::{
         default_denied_pamms, default_served_pamms, PriceLevelStreamConfig,
         DEFAULT_AUTO_DETECTED_GAS_COST,
     },
+    fallback_router::fetch_fallback_router_venues,
     state::{PriceLevelStreamQuote, PriceLevelStreamState},
     titan::{
         self, ConnectionSettings, TitanPairLevels, TitanPammLevels, TitanPriceLevel,
@@ -38,9 +39,10 @@ pub const PAMM_ADDRESS_ATTRIBUTE: &str = "pamm_address";
 ///
 /// One component is emitted per (pAMM, token pair), identified by the concatenation
 /// `pamm ++ token0 ++ token1` (tokens sorted ascending), under the protocol system
-/// `pricelevelstream:{pamm}`. The venue address is exposed through the
-/// [`PAMM_ADDRESS_ATTRIBUTE`] static attribute for downstream encoding.
-#[derive(Default)]
+/// `pricelevelstream:{pamm}` — or `propammfallback:{pamm}` for venues on the PropAMMRouter
+/// whitelist, unless [`without_fallback_router`](Self::without_fallback_router) turns that off.
+/// The venue address is exposed through the [`PAMM_ADDRESS_ATTRIBUTE`] static attribute for
+/// downstream encoding.
 pub struct PriceLevelStreamBuilder {
     registry: HashMap<Bytes, PriceLevelStreamConfig>,
     denied: HashSet<Bytes>,
@@ -49,7 +51,24 @@ pub struct PriceLevelStreamBuilder {
     auto_detect: bool,
     auto_detected_gas_cost: Option<BigUint>,
     connection: ConnectionSettings,
-    router_venues: HashSet<Bytes>,
+    /// Whether [`build`](Self::build) reads the PropAMMRouter whitelist and serves the venues on
+    /// it under the `propammfallback:` family.
+    fallback_router: bool,
+}
+
+impl Default for PriceLevelStreamBuilder {
+    fn default() -> Self {
+        Self {
+            registry: HashMap::new(),
+            denied: HashSet::new(),
+            tokens: HashMap::new(),
+            url: None,
+            auto_detect: false,
+            auto_detected_gas_cost: None,
+            connection: ConnectionSettings::default(),
+            fallback_router: true,
+        }
+    }
 }
 
 impl PriceLevelStreamBuilder {
@@ -169,48 +188,36 @@ impl PriceLevelStreamBuilder {
         self
     }
 
-    /// Emits whitelisted venues' components under `propammfallback:{name}` instead of
-    /// `pricelevelstream:{name}`, so tycho-execution routes their swaps through Titan's
-    /// PropAMMRouter. The router falls back to a single-hop Uniswap V3 pool when the venue
-    /// reverts — which a stale maker quote does in any simulation against a mined block.
+    /// Keeps every venue on the direct `pricelevelstream:{name}` path, so swaps execute on the
+    /// venues themselves and a stale maker quote reverts the route.
     ///
-    /// Reads the router's on-chain venue whitelist once, via the node at `RPC_URL` (from the
-    /// environment, falling back to `.env`). Only whitelisted venues may use the family — the
-    /// router reverts `UnknownVenue` for others, so every swap would execute on the Uniswap V3
-    /// fallback at a worse price than the venue gives.
-    ///
-    /// Degrades instead of failing: without `RPC_URL`, or when the whitelist read fails, a
-    /// warning is logged and every venue stays on the direct `pricelevelstream:` path.
-    #[cfg(feature = "evm")]
-    pub async fn via_fallback_router(mut self) -> Self {
-        use super::fallback_router::fetch_fallback_router_venues;
-
-        let rpc_url = std::env::var("RPC_URL")
-            .ok()
-            .or_else(|| {
-                dotenv::dotenv().ok()?;
-                std::env::var("RPC_URL").ok()
-            });
-        let Some(rpc_url) = rpc_url else {
-            tracing::warn!(
-                "RPC_URL is not set; pAMM swaps execute on the venues directly, without the \
-                 PropAMMRouter's Uniswap V3 fallback"
-            );
-            return self;
-        };
-
-        match fetch_fallback_router_venues(&rpc_url).await {
-            Ok(venues) => self.router_venues.extend(venues),
-            Err(e) => tracing::warn!(
-                error = %e,
-                "Could not read the PropAMMRouter venue whitelist; pAMM swaps execute on the \
-                 venues directly, without the Uniswap V3 fallback"
-            ),
-        }
+    /// By default [`build`](Self::build) emits venues on Titan's PropAMMRouter whitelist under
+    /// `propammfallback:{name}` instead, so tycho-execution routes their swaps through the
+    /// router. Opt out when the direct call is what you want to measure or execute, or to skip
+    /// the whitelist read at startup.
+    pub fn without_fallback_router(mut self) -> Self {
+        self.fallback_router = false;
         self
     }
 
     /// Consumes the builder and opens the stream.
+    ///
+    /// Venues on Titan's PropAMMRouter whitelist are served under `propammfallback:{name}`, so
+    /// tycho-execution routes their swaps through the router. The router falls back to a
+    /// single-hop Uniswap V3 pool when the venue reverts — which a stale maker quote does in any
+    /// simulation against a mined block. Only whitelisted venues may use the family: the router
+    /// reverts `UnknownVenue` for others, so every swap would execute on the Uniswap V3 fallback
+    /// at a worse price than the venue gives.
+    ///
+    /// Reading that whitelist needs a node at `RPC_URL` (from the environment, falling back to
+    /// `.env`), and degrades instead of failing: without the variable, or when the read fails, a
+    /// warning is logged and every venue stays on the direct `pricelevelstream:` path.
+    /// [`without_fallback_router`](Self::without_fallback_router) skips the read and takes the
+    /// direct path unconditionally.
+    ///
+    /// The whitelist is read once here and never re-read — it is governance-gated and changes
+    /// rarely, and renaming a running component's protocol system would churn every consumer's
+    /// component set. Restart the stream to pick up a whitelist change.
     ///
     /// The connection is established lazily on first poll and maintained (with reconnects) for as
     /// long as the stream is polled; it never terminates on its own, and dropping the stream
@@ -222,7 +229,7 @@ impl PriceLevelStreamBuilder {
     /// venue) the stream stops serving is removed. Frames older than an already processed one
     /// are skipped, so updates never move backwards in block number. Pairs whose tokens are
     /// missing from the provided token metadata are skipped.
-    pub fn build(self) -> impl Stream<Item = Update> + Send {
+    pub async fn build(self) -> impl Stream<Item = Update> + Send {
         if self.registry.is_empty() && !self.auto_detect {
             tracing::warn!(
                 "No pAMMs registered and auto-detection is off; the stream will never produce \
@@ -241,16 +248,57 @@ impl PriceLevelStreamBuilder {
         let auto_detected_gas_cost = self
             .auto_detected_gas_cost
             .unwrap_or_else(|| BigUint::from(DEFAULT_AUTO_DETECTED_GAS_COST));
+        let router_venues = if self.fallback_router {
+            fetch_router_venues(rpc_url_from_env()).await
+        } else {
+            HashSet::new()
+        };
         let mut tracker = SnapshotTracker::new(
             self.registry,
             self.denied,
             self.tokens,
             self.auto_detect,
             auto_detected_gas_cost,
-            self.router_venues,
+            router_venues,
         );
 
         titan::messages(url, self.connection).filter_map(move |message| tracker.process(message))
+    }
+}
+
+/// The node URL the whitelist is read from: `RPC_URL` from the environment, falling back to
+/// `.env`.
+fn rpc_url_from_env() -> Option<String> {
+    std::env::var("RPC_URL")
+        .ok()
+        .or_else(|| {
+            dotenv::dotenv().ok()?;
+            std::env::var("RPC_URL").ok()
+        })
+}
+
+/// The PropAMMRouter's whitelisted venues, or an empty set when they cannot be read — no node
+/// URL, or a failed call. Both cases warn and leave every venue on the direct path, so a
+/// misconfigured deployment loses the Uniswap V3 fallback instead of losing the stream.
+async fn fetch_router_venues(rpc_url: Option<String>) -> HashSet<Bytes> {
+    let Some(rpc_url) = rpc_url else {
+        tracing::warn!(
+            "RPC_URL is not set; pAMM swaps execute on the venues directly, without the \
+             PropAMMRouter's Uniswap V3 fallback"
+        );
+        return HashSet::new();
+    };
+
+    match fetch_fallback_router_venues(&rpc_url).await {
+        Ok(venues) => venues.into_iter().collect(),
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "Could not read the PropAMMRouter venue whitelist; pAMM swaps execute on the \
+                 venues directly, without the Uniswap V3 fallback"
+            );
+            HashSet::new()
+        }
     }
 }
 
@@ -888,6 +936,74 @@ mod tests {
 
         let component = &update.new_pairs[&expected_id()];
         assert_eq!(component.protocol_system, format!("propammfallback:{PAMM}"));
+    }
+
+    /// A venue absent from the whitelist keeps the direct `pricelevelstream:{name}` family — the
+    /// router reverts `UnknownVenue` for it, which would send every swap to the Uniswap V3
+    /// fallback.
+    #[test]
+    fn unwhitelisted_venue_keeps_the_direct_family() {
+        let other_venue =
+            Bytes::from_str("0x71e790dd841c8a9061487cb3e78c288e75ce0b3d").expect("valid address");
+        let config = PriceLevelStreamConfig::new(
+            "fermiswap",
+            Bytes::from_str(PAMM).unwrap(),
+            BigUint::from(120_000u64),
+        );
+        let mut tracker = SnapshotTracker::new(
+            HashMap::from([(config.address.clone(), config)]),
+            HashSet::new(),
+            tokens(),
+            false,
+            BigUint::from(DEFAULT_AUTO_DETECTED_GAS_COST),
+            HashSet::from([other_venue]),
+        );
+
+        let update = tracker
+            .process(message(100, wbtc_usdc_pairs()))
+            .expect("update expected");
+
+        assert_eq!(update.new_pairs[&expected_id()].protocol_system, "pricelevelstream:fermiswap");
+    }
+
+    /// The PropAMMRouter path is the default; `without_fallback_router` is the way off it.
+    #[test]
+    fn fallback_router_is_on_unless_opted_out() {
+        assert!(PriceLevelStreamBuilder::new().fallback_router);
+        assert!(
+            !PriceLevelStreamBuilder::new()
+                .without_fallback_router()
+                .fallback_router
+        );
+    }
+
+    /// Without a node URL there is nothing to read the whitelist from: every venue stays on the
+    /// direct path instead of the build failing.
+    #[tokio::test]
+    async fn missing_rpc_url_leaves_every_venue_on_the_direct_path() {
+        assert!(fetch_router_venues(None)
+            .await
+            .is_empty());
+    }
+
+    /// A failed whitelist read degrades the same way as a missing node URL.
+    #[tokio::test]
+    async fn failed_whitelist_read_leaves_every_venue_on_the_direct_path() {
+        assert!(fetch_router_venues(Some("not a url".to_string()))
+            .await
+            .is_empty());
+    }
+
+    /// The families this stream emits are the ones tycho-execution resolves an encoder for. A
+    /// drift between the two makes every route through a pAMM fail to encode.
+    #[test]
+    fn families_match_the_execution_side_prefixes() {
+        use tycho_execution::encoding::evm::{PRICE_LEVEL_STREAM_PREFIX, PROPAMM_FALLBACK_PREFIX};
+
+        use super::super::config::{PRICE_LEVEL_STREAM_FAMILY, PROPAMM_FALLBACK_FAMILY};
+
+        assert_eq!(format!("{PRICE_LEVEL_STREAM_FAMILY}:"), PRICE_LEVEL_STREAM_PREFIX);
+        assert_eq!(format!("{PROPAMM_FALLBACK_FAMILY}:"), PROPAMM_FALLBACK_PREFIX);
     }
 
     #[test]

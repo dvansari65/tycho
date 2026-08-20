@@ -108,4 +108,17 @@ mod tests {
         let result = fetch_fallback_router_venues("not a url").await;
         assert!(matches!(result, Err(FetchVenuesError::InvalidUrl { .. })));
     }
+
+    /// Reading the whitelist from a different router than the executor calls would let a venue
+    /// be served under `propammfallback:` that the executed router rejects.
+    #[test]
+    fn test_router_address_matches_the_executor() {
+        let executor = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../tycho-execution/contracts/src/executors/PropAMMFallbackExecutor.sol");
+        let source = std::fs::read_to_string(&executor)
+            .unwrap_or_else(|e| panic!("failed to read {}: {e}", executor.display()));
+
+        let address = FALLBACK_ROUTER_ADDRESS.to_string();
+        assert!(source.contains(&address), "PropAMMFallbackExecutor.sol does not use {address}");
+    }
 }
