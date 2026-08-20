@@ -68,8 +68,7 @@ impl PriceLevelStreamProcessor {
             .auto_detect(true)
             .with_tokens(all_tokens.clone())
             .without_fallback_router()
-            .build()
-            .await;
+            .build();
 
         let mut emitter = SampledEmitter::new(self.sample_size, self.block_interval);
         let stale_threshold = self.stale_threshold;

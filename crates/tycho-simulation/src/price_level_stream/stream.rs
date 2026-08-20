@@ -215,9 +215,9 @@ impl PriceLevelStreamBuilder {
     /// [`without_fallback_router`](Self::without_fallback_router) skips the read and takes the
     /// direct path unconditionally.
     ///
-    /// The whitelist is read once here and never re-read — it is governance-gated and changes
-    /// rarely, and renaming a running component's protocol system would churn every consumer's
-    /// component set. Restart the stream to pick up a whitelist change.
+    /// The whitelist is read once, on the first poll, and never re-read — it is governance-gated
+    /// and changes rarely, and renaming a running component's protocol system would churn every
+    /// consumer's component set. Restart the stream to pick up a whitelist change.
     ///
     /// The connection is established lazily on first poll and maintained (with reconnects) for as
     /// long as the stream is polled; it never terminates on its own, and dropping the stream
@@ -229,40 +229,50 @@ impl PriceLevelStreamBuilder {
     /// venue) the stream stops serving is removed. Frames older than an already processed one
     /// are skipped, so updates never move backwards in block number. Pairs whose tokens are
     /// missing from the provided token metadata are skipped.
-    pub async fn build(self) -> impl Stream<Item = Update> + Send {
-        if self.registry.is_empty() && !self.auto_detect {
+    pub fn build(self) -> impl Stream<Item = Update> + Send {
+        let Self {
+            registry,
+            denied,
+            tokens,
+            url,
+            auto_detect,
+            auto_detected_gas_cost,
+            connection,
+            fallback_router,
+        } = self;
+        if registry.is_empty() && !auto_detect {
             tracing::warn!(
                 "No pAMMs registered and auto-detection is off; the stream will never produce \
                  an update"
             );
         }
-        if self.tokens.is_empty() {
+        if tokens.is_empty() {
             tracing::warn!(
                 "No token metadata provided; every streamed pair will be skipped and the stream \
                  will never produce an update"
             );
         }
-        let url = self
-            .url
-            .unwrap_or_else(|| TITAN_PRICE_LEVEL_URL.to_string());
-        let auto_detected_gas_cost = self
-            .auto_detected_gas_cost
-            .unwrap_or_else(|| BigUint::from(DEFAULT_AUTO_DETECTED_GAS_COST));
-        let router_venues = if self.fallback_router {
-            fetch_router_venues(rpc_url_from_env()).await
-        } else {
-            HashSet::new()
-        };
-        let mut tracker = SnapshotTracker::new(
-            self.registry,
-            self.denied,
-            self.tokens,
-            self.auto_detect,
-            auto_detected_gas_cost,
-            router_venues,
-        );
+        let url = url.unwrap_or_else(|| TITAN_PRICE_LEVEL_URL.to_string());
+        let auto_detected_gas_cost =
+            auto_detected_gas_cost.unwrap_or_else(|| BigUint::from(DEFAULT_AUTO_DETECTED_GAS_COST));
 
-        titan::messages(url, self.connection).filter_map(move |message| tracker.process(message))
+        futures::FutureExt::flatten_stream(async move {
+            let router_venues = if fallback_router {
+                fetch_router_venues(rpc_url_from_env()).await
+            } else {
+                HashSet::new()
+            };
+            let mut tracker = SnapshotTracker::new(
+                registry,
+                denied,
+                tokens,
+                auto_detect,
+                auto_detected_gas_cost,
+                router_venues,
+            );
+
+            titan::messages(url, connection).filter_map(move |message| tracker.process(message))
+        })
     }
 }
 
