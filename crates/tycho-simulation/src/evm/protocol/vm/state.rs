@@ -58,6 +58,7 @@ use crate::evm::{
 /// Lock poisoning is recovered from rather than propagated: the critical sections only perform
 /// map reads/inserts/clears, so a poisoned guard cannot hold a torn value, while propagating
 /// would turn one panicked thread into a panic in every worker sharing the pool.
+#[derive(Default)]
 struct DerivedCaches {
     inner: RwLock<CacheState>,
 }
@@ -132,12 +133,6 @@ impl DerivedCaches {
         state.spot_prices.clear();
         state.limits.clear();
         state.limit_context = None;
-    }
-}
-
-impl Default for DerivedCaches {
-    fn default() -> Self {
-        Self { inner: RwLock::new(CacheState::default()) }
     }
 }
 
@@ -1655,6 +1650,62 @@ mod tests {
             .get_amount_limits(vec![dai_addr(), bal_addr()], Some(overwrites), None)
             .unwrap();
         assert_eq!(fresh, cached);
+
+        // The cache key deliberately excludes the overwrites: the limit must be independent of
+        // the caller's overwrite amounts. Guard that by computing fresh, on a cold state, with
+        // overwrites derived from a different amount, and comparing byte-for-byte.
+        let cold = setup_pool_state().await;
+        let different_overwrites = cold
+            .get_overwrites(vec![dai_addr(), bal_addr()], *MAX_BALANCE / U256::from(50), None)
+            .unwrap();
+        let independent = cold
+            .get_amount_limits(vec![dai_addr(), bal_addr()], Some(different_overwrites), None)
+            .unwrap();
+        assert_eq!(independent, fresh);
+    }
+
+    /// A cached limit must not survive an engine-block advance, even when the pool receives no
+    /// delta: the adapter computes limits against the engine's current block, so time-dependent
+    /// limits (e.g. an amplification ramp) change with zero pool-level events.
+    #[tokio::test]
+    async fn test_engine_block_advance_invalidates_cached_limits() {
+        let pool_state = setup_pool_state().await;
+        let overwrites = pool_state
+            .get_overwrites(vec![dai_addr(), bal_addr()], *MAX_BALANCE / U256::from(100), None)
+            .unwrap();
+        let real = pool_state
+            .get_amount_limits(vec![dai_addr(), bal_addr()], Some(overwrites.clone()), None)
+            .unwrap();
+        let sentinel = (U256::from(1u64), U256::from(1u64));
+        assert_ne!(real, sentinel);
+        pool_state
+            .caches
+            .write()
+            .limits
+            .insert((dai_addr(), bal_addr()), sentinel);
+
+        // Sanity: the sentinel is served while the engine block is unchanged.
+        let served = pool_state
+            .get_amount_limits(vec![dai_addr(), bal_addr()], Some(overwrites.clone()), None)
+            .unwrap();
+        assert_eq!(served, sentinel);
+
+        // Advance the engine's current block without any pool-level event.
+        let mut block = SHARED_TYCHO_DB
+            .get_current_block()
+            .expect("fixture sets an engine block");
+        block.number += 1;
+        block.timestamp += 12;
+        SHARED_TYCHO_DB
+            .update(vec![], Some(block))
+            .expect("engine block update");
+
+        // The stamp mismatch turns the read into a miss: the sentinel is dead.
+        let after = pool_state
+            .get_amount_limits(vec![dai_addr(), bal_addr()], Some(overwrites), None)
+            .unwrap();
+        assert_ne!(after, sentinel);
+        assert_eq!(after, real);
     }
 
     #[tokio::test]
