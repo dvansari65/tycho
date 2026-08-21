@@ -44,6 +44,7 @@ tracing = { workspace = true }
 dotenv = { workspace = true }
 enum_delegate = "0.2.0"
 itertools = { workspace = true }
+rustc-hash = "2.1.2"
 lunarbase-pmm-math = "0.2.4"
 num-traits = { workspace = true }
 
@@ -110,7 +111,7 @@ crossterm = { version = "0.28.1", features = ["event-stream"] }
 unicode-width = "0.1.13"
 tracing-appender = { workspace = true }
 dialoguer = "0.10.4"
-criterion = { version = "0.8.2", features = ["html_reports"] }
+criterion = "0.8.2"
 
 [features]
 default = ["evm", "rfq", "price-level-stream"]
@@ -144,6 +145,3 @@ harness = false
 [[bench]]
 name = "concurrency_throughput"
 harness = false
-
-[[example]]
-name = "capture_vm_fixtures"

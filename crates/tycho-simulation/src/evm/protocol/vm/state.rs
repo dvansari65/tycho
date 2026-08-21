@@ -4,7 +4,7 @@ use std::{
     collections::{HashMap, HashSet},
     fmt::{self, Debug},
     str::FromStr,
-    sync::RwLock,
+    sync::{PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -12,6 +12,7 @@ use alloy::primitives::{Address, U256};
 use itertools::Itertools;
 use num_bigint::BigUint;
 use revm::DatabaseRef;
+use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 use tracing::{debug, warn};
@@ -41,6 +42,113 @@ use crate::evm::{
     simulation::BlockEnvOverrides,
 };
 
+/// Cached derived values (spot prices, swap limits) for one pool-state version.
+///
+/// Both maps live behind a single lock so the invalidation policy has one home:
+/// - [`Self::invalidate`] drops everything; call it whenever the pool's own state changes (the
+///   per-block update, a post-swap child state, attaching live overrides).
+/// - Cached limits additionally carry the [`LimitContext`] they were computed under; a context
+///   mismatch at read time is a miss, so limits self-correct when the engine's current block or the
+///   pool's block-env overrides move without any pool-level event.
+///
+/// Spot prices deliberately carry no block context: they are eagerly re-warmed each block by
+/// `update_pool_state` and are allowed to go stale on paths that skip it (the documented
+/// `manual_updates` contract).
+///
+/// Lock poisoning is recovered from rather than propagated: the critical sections only perform
+/// map reads/inserts/clears, so a poisoned guard cannot hold a torn value, while propagating
+/// would turn one panicked thread into a panic in every worker sharing the pool.
+struct DerivedCaches {
+    inner: RwLock<CacheState>,
+}
+
+#[derive(Clone, Default)]
+struct CacheState {
+    /// Keyed by `(sell, buy)` — equivalently `(base, quote)` as used by
+    /// [`ProtocolSim::spot_price`].
+    spot_prices: FxHashMap<(Address, Address), f64>,
+    /// `(sell_limit, buy_limit)` keyed by `(sell, buy)`, valid only under `limit_context`.
+    limits: FxHashMap<(Address, Address), (U256, U256)>,
+    /// Context the cached `limits` were computed under; `None` while `limits` is empty.
+    limit_context: Option<LimitContext>,
+}
+
+/// Simulation context a cached limit depends on besides the pool's own state: the engine's
+/// current block and the pool's resolved block-env overrides.
+#[derive(Clone, Debug, PartialEq)]
+struct LimitContext {
+    /// `(number, timestamp, partial_block_index)` of the engine's current block.
+    block: Option<(u64, u64, Option<u32>)>,
+    block_env: Option<BlockEnvOverrides>,
+}
+
+impl DerivedCaches {
+    fn read(&self) -> RwLockReadGuard<'_, CacheState> {
+        self.inner
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn write(&self) -> RwLockWriteGuard<'_, CacheState> {
+        self.inner
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn get_spot_price(&self, key: (Address, Address)) -> Option<f64> {
+        self.read()
+            .spot_prices
+            .get(&key)
+            .copied()
+    }
+
+    fn insert_spot_price(&self, key: (Address, Address), price: f64) {
+        self.write()
+            .spot_prices
+            .insert(key, price);
+    }
+
+    fn get_limits(&self, key: (Address, Address), context: &LimitContext) -> Option<(U256, U256)> {
+        let state = self.read();
+        if state.limit_context.as_ref() != Some(context) {
+            return None;
+        }
+        state.limits.get(&key).copied()
+    }
+
+    fn insert_limits(&self, key: (Address, Address), limits: (U256, U256), context: LimitContext) {
+        let mut state = self.write();
+        if state.limit_context.as_ref() != Some(&context) {
+            state.limits.clear();
+            state.limit_context = Some(context);
+        }
+        state.limits.insert(key, limits);
+    }
+
+    /// Drops all cached values. The pool's own state changed, so nothing derived from the
+    /// previous version may be served again.
+    fn invalidate(&self) {
+        let mut state = self.write();
+        state.spot_prices.clear();
+        state.limits.clear();
+        state.limit_context = None;
+    }
+}
+
+impl Default for DerivedCaches {
+    fn default() -> Self {
+        Self { inner: RwLock::new(CacheState::default()) }
+    }
+}
+
+impl Clone for DerivedCaches {
+    /// Deep copy: a clone owns an independent cache, never a shared lock.
+    fn clone(&self) -> Self {
+        Self { inner: RwLock::new(self.read().clone()) }
+    }
+}
+
+#[derive(Clone)]
 pub struct EVMPoolState<D: EngineDatabaseInterface + Clone + Debug>
 where
     <D as DatabaseRef>::Error: Debug,
@@ -57,16 +165,14 @@ where
     /// simulations. This has been deprecated in favor of `contract_balances`.
     #[deprecated(note = "Use contract_balances instead")]
     balance_owner: Option<Address>,
-    /// Spot prices by `(sell, buy)`, cleared whenever pool state changes. For regular pools this
-    /// is a read-through cache: lazily populated by `spot_price`, eagerly warmed by
-    /// `update_pool_state`. Pools with live overrides only ever populate it eagerly (their
-    /// override-derived prices change sub-block, so `spot_price` errors on a miss instead of
-    /// computing against a possibly newer snapshot).
-    spot_price_cache: RwLock<HashMap<(Address, Address), f64>>,
-    /// Read-through cache of `(sell_limit, buy_limit)` by `(sell, buy)`. Stable per
-    /// pool-state-version; cleared whenever pool state changes. Fully bypassed (no reads or
-    /// writes) for pools with live overrides.
-    limit_cache: RwLock<HashMap<(Address, Address), (U256, U256)>>,
+    /// Derived values cached for the current pool-state version; see [`DerivedCaches`].
+    ///
+    /// Regular pools read through both caches: `spot_price` lazily populates on a miss and
+    /// `update_pool_state` eagerly re-warms each block. Pools with live overrides only ever
+    /// populate spot prices eagerly (their override-derived prices change sub-block, so
+    /// `spot_price` errors on a miss instead of computing against a possibly newer snapshot)
+    /// and bypass the limit cache entirely.
+    caches: DerivedCaches,
     /// The supported capabilities of this pool
     capabilities: HashSet<Capability>,
     /// Storage overwrites that will be applied to all simulations. They will be cleared
@@ -104,45 +210,6 @@ where
     /// block update. Takes precedence over [`Self::block_lasting_overwrites`] and
     /// [`Self::block_overrides`] on conflict.
     live_overrides: Option<watch::Receiver<OverrideSnapshot>>,
-}
-
-impl<D> Clone for EVMPoolState<D>
-where
-    D: EngineDatabaseInterface + Clone + Debug,
-    <D as DatabaseRef>::Error: Debug,
-    <D as EngineDatabaseInterface>::Error: Debug,
-{
-    fn clone(&self) -> Self {
-        Self {
-            id: self.id.clone(),
-            tokens: self.tokens.clone(),
-            balances: self.balances.clone(),
-            balance_owner: self.balance_owner,
-            spot_price_cache: RwLock::new(
-                self.spot_price_cache
-                    .read()
-                    .expect("spot_price_cache poisoned")
-                    .clone(),
-            ),
-            limit_cache: RwLock::new(
-                self.limit_cache
-                    .read()
-                    .expect("limit_cache poisoned")
-                    .clone(),
-            ),
-            capabilities: self.capabilities.clone(),
-            block_lasting_overwrites: self.block_lasting_overwrites.clone(),
-            involved_contracts: self.involved_contracts.clone(),
-            contract_balances: self.contract_balances.clone(),
-            manual_updates: self.manual_updates,
-            adapter_contract: self.adapter_contract.clone(),
-            disable_overwrite_tokens: self.disable_overwrite_tokens.clone(),
-            self_contained_tokens: self.self_contained_tokens.clone(),
-            block_overrides: self.block_overrides.clone(),
-            live_overrides: self.live_overrides.clone(),
-            spot_price_caller: self.spot_price_caller,
-        }
-    }
 }
 
 impl<D> Debug for EVMPoolState<D>
@@ -190,13 +257,14 @@ where
         block_overrides: Option<BlockEnvOverrides>,
         spot_price_caller: Option<Address>,
     ) -> Self {
+        let caches = DerivedCaches::default();
+        caches.write().spot_prices = spot_prices.into_iter().collect();
         Self {
             id,
             tokens,
             balances: component_balances,
             balance_owner,
-            spot_price_cache: RwLock::new(spot_prices),
-            limit_cache: RwLock::new(HashMap::new()),
+            caches,
             capabilities,
             block_lasting_overwrites,
             involved_contracts,
@@ -218,14 +286,43 @@ where
         self.live_overrides = Some(receiver);
         // Values cached before the channel was attached were computed without overrides and
         // would otherwise be served by the cache-read fast paths.
-        self.spot_price_cache
-            .write()
-            .expect("spot_price_cache poisoned")
-            .clear();
-        self.limit_cache
-            .write()
-            .expect("limit_cache poisoned")
-            .clear();
+        self.caches.invalidate();
+    }
+
+    /// A copy of this pool representing a new state version: identical inputs, fresh caches.
+    ///
+    /// Use this instead of `clone()` when the copy's state is about to diverge (e.g. the
+    /// post-swap state returned by `get_amount_out`), so the previous version's derived values
+    /// are never copied only to be discarded.
+    fn clone_invalidated(&self) -> Self {
+        Self {
+            id: self.id.clone(),
+            tokens: self.tokens.clone(),
+            balances: self.balances.clone(),
+            balance_owner: self.balance_owner,
+            caches: DerivedCaches::default(),
+            capabilities: self.capabilities.clone(),
+            block_lasting_overwrites: self.block_lasting_overwrites.clone(),
+            involved_contracts: self.involved_contracts.clone(),
+            contract_balances: self.contract_balances.clone(),
+            manual_updates: self.manual_updates,
+            adapter_contract: self.adapter_contract.clone(),
+            disable_overwrite_tokens: self.disable_overwrite_tokens.clone(),
+            self_contained_tokens: self.self_contained_tokens.clone(),
+            block_overrides: self.block_overrides.clone(),
+            spot_price_caller: self.spot_price_caller,
+            live_overrides: self.live_overrides.clone(),
+        }
+    }
+
+    /// `(number, timestamp, partial_block_index)` of the engine DB's current block, used to
+    /// stamp cached limits with the block they were computed under.
+    fn current_engine_block(&self) -> Option<(u64, u64, Option<u32>)> {
+        self.adapter_contract
+            .engine
+            .state
+            .get_current_block()
+            .map(|block| (block.number, block.timestamp, block.partial_block_index))
     }
 
     /// Reads the latest live override snapshot once, if a channel is attached and still fresh.
@@ -313,29 +410,6 @@ where
         Some(overrides)
     }
 
-    /// Ensures the pool supports the given capability
-    ///
-    /// # Arguments
-    ///
-    /// * `capability` - The capability that we would like to check for.
-    ///
-    /// # Returns
-    ///
-    /// * `Result<(), SimulationError>` - Returns `Ok(())` if the capability is supported, or a
-    ///   `SimulationError` otherwise.
-    ///
-    /// Only used by tests now that `set_spot_prices_with` inlines the capability check via
-    /// `compute_spot_price`.
-    #[cfg(test)]
-    fn ensure_capability(&self, capability: Capability) -> Result<(), SimulationError> {
-        if !self.capabilities.contains(&capability) {
-            return Err(SimulationError::FatalError(format!(
-                "capability {:?} not supported",
-                capability.to_string()
-            )));
-        }
-        Ok(())
-    }
     /// Sets the spot prices for a pool for all possible pairs of the given tokens.
     ///
     /// # Arguments
@@ -371,16 +445,12 @@ where
     /// Tip: Setting spot prices on the pool every time the pool actually changes will result in
     /// faster price fetching than if prices are only set immediately before attempting to retrieve
     /// prices.
-    pub fn set_spot_prices(
-        &mut self,
-        tokens: &HashMap<Bytes, Token>,
-    ) -> Result<(), SimulationError> {
+    pub fn set_spot_prices(&self, tokens: &HashMap<Bytes, Token>) -> Result<(), SimulationError> {
         // Read the live snapshot once, so every pair (and both sub-swaps in the no-capability
         // branch) simulates against one consistent snapshot.
         let live_snapshot = self.get_live_snapshot();
-        let pool_id = self.id.clone();
         Self::run_with_indexed_fallback(
-            &pool_id,
+            &self.id,
             "Spot prices",
             live_snapshot.as_ref(),
             |snapshot| self.set_spot_prices_with(tokens, snapshot),
@@ -388,17 +458,17 @@ where
     }
 
     /// Computes the spot price for a single `(sell, buy)` pair against `live_snapshot`'s overrides
-    /// (or the plain indexed state when `None`), using the same logic as `set_spot_prices_with`:
-    /// the adapter `price` function when `PriceFunction` is supported, otherwise a two-swap
-    /// finite-difference. Does not touch the cache.
+    /// (or the plain indexed state when `None`): via the adapter's `price` function when the pool
+    /// has the `PriceFunction` capability, otherwise approximated as a two-swap finite difference.
+    /// Does not touch the cache.
     fn compute_spot_price(
         &self,
         tokens: &HashMap<Bytes, Token>,
         sell_token_address: Address,
         buy_token_address: Address,
         live_snapshot: Option<&OverrideSnapshot>,
-        block_overrides: Option<BlockEnvOverrides>,
     ) -> Result<f64, SimulationError> {
+        let block_overrides = self.block_env(live_snapshot);
         if self
             .capabilities
             .contains(&Capability::PriceFunction)
@@ -516,11 +586,10 @@ where
     /// Computes and stores spot prices against `live_snapshot`'s overrides (or the plain indexed
     /// state when `None`).
     fn set_spot_prices_with(
-        &mut self,
+        &self,
         tokens: &HashMap<Bytes, Token>,
         live_snapshot: Option<&OverrideSnapshot>,
     ) -> Result<(), SimulationError> {
-        let block_overrides = self.block_env(live_snapshot);
         for [sell_token_address, buy_token_address] in self
             .tokens
             .iter()
@@ -535,13 +604,10 @@ where
                 sell_token_address,
                 buy_token_address,
                 live_snapshot,
-                block_overrides.clone(),
             )?;
 
-            self.spot_price_cache
-                .write()
-                .expect("spot_price_cache poisoned")
-                .insert((sell_token_address, buy_token_address), price);
+            self.caches
+                .insert_spot_price((sell_token_address, buy_token_address), price);
         }
 
         Ok(())
@@ -568,9 +634,13 @@ where
     /// Attempting to swap an amount of the sell token that exceeds the sell amount limit is not
     /// advised and in most cases will result in a revert.
     ///
-    /// Cached per `(sell, buy)` pair in `limit_cache`. Pools with live overrides derive limits
-    /// from a sub-block snapshot that changes intra-block, so caching is bypassed and the adapter
-    /// is called directly; see [`Self::live_overrides`].
+    /// Cached per `(sell, buy)` pair, stamped with the engine block and block-env overrides the
+    /// value was computed under; a stamp mismatch is a miss, so limits that depend on time (e.g.
+    /// an amplification ramp) self-correct each block even if the pool receives no deltas. The
+    /// cached value is assumed independent of the caller's overwrite amounts (guarded by
+    /// `test_get_limits_cached_matches_fresh`). Pools with live overrides derive limits from a
+    /// sub-block snapshot, so caching is bypassed and the adapter is called directly; see
+    /// [`Self::live_overrides`].
     ///
     /// # Arguments
     ///
@@ -589,18 +659,21 @@ where
         overwrites: Option<HashMap<Address, HashMap<U256, U256>>>,
         block_overrides: Option<BlockEnvOverrides>,
     ) -> Result<(U256, U256), SimulationError> {
-        let key = (tokens[0], tokens[1]);
+        if self.live_overrides.is_some() {
+            return self.adapter_contract.get_limits(
+                &self.id,
+                tokens[0],
+                tokens[1],
+                overwrites,
+                block_overrides,
+            );
+        }
 
-        if self.live_overrides.is_none() {
-            if let Some(limits) = self
-                .limit_cache
-                .read()
-                .expect("limit_cache poisoned")
-                .get(&key)
-                .copied()
-            {
-                return Ok(limits);
-            }
+        let key = (tokens[0], tokens[1]);
+        let context =
+            LimitContext { block: self.current_engine_block(), block_env: block_overrides.clone() };
+        if let Some(limits) = self.caches.get_limits(key, &context) {
+            return Ok(limits);
         }
 
         let limits = self.adapter_contract.get_limits(
@@ -610,13 +683,8 @@ where
             overwrites,
             block_overrides,
         )?;
-
-        if self.live_overrides.is_none() {
-            self.limit_cache
-                .write()
-                .expect("limit_cache poisoned")
-                .insert(key, limits);
-        }
+        self.caches
+            .insert_limits(key, limits, context);
 
         Ok(limits)
     }
@@ -644,14 +712,7 @@ where
                 SimulationError::FatalError(format!("Failed to clear temporary storage: {err:?}",))
             })?;
         self.block_lasting_overwrites.clear();
-        self.spot_price_cache
-            .write()
-            .expect("spot_price_cache poisoned")
-            .clear();
-        self.limit_cache
-            .write()
-            .expect("limit_cache poisoned")
-            .clear();
+        self.caches.invalidate();
 
         // Set balances. Component balances and contract balances are refreshed independently:
         // hybrid pools (e.g. Balancer V3) carry both, and `get_balance_overwrites` layers
@@ -918,7 +979,7 @@ where
             block_overrides,
         )?;
 
-        let mut new_state = self.clone();
+        let mut new_state = self.clone_invalidated();
 
         // Apply state changes to the new state
         for (address, state_update) in state_changes {
@@ -940,27 +1001,15 @@ where
         }
 
         if new_state.live_overrides.is_some() {
-            // Override pools do not cache spot prices lazily (they are override-derived and
-            // change sub-block), so keep eagerly warming the returned state exactly as before.
+            // Override pools serve only eagerly-warmed spot prices (`spot_price` errors on a
+            // miss rather than computing against a possibly newer snapshot), so the returned
+            // state must be warmed here; failures fall back to the indexed state inside
+            // `set_spot_prices`.
             let tokens = HashMap::from([
                 (token_in.address.clone(), token_in.clone()),
                 (token_out.address.clone(), token_out.clone()),
             ]);
             let _ = new_state.set_spot_prices(&tokens);
-        } else {
-            // The swap changed pool state; invalidate the derived caches so spot prices and
-            // limits are recomputed lazily on next read against `new_state`'s post-swap
-            // overwrites.
-            new_state
-                .spot_price_cache
-                .write()
-                .expect("spot_price_cache poisoned")
-                .clear();
-            new_state
-                .limit_cache
-                .write()
-                .expect("limit_cache poisoned")
-                .clear();
         }
 
         let buy_amount = trade.received_amount;
@@ -1065,38 +1114,38 @@ where
         let base_address = bytes_to_address(&base.address)?;
         let quote_address = bytes_to_address(&quote.address)?;
 
-        // Fast path: cache hit (all pools).
         if let Some(price) = self
-            .spot_price_cache
-            .read()
-            .expect("spot_price_cache poisoned")
-            .get(&(base_address, quote_address))
-            .copied()
+            .caches
+            .get_spot_price((base_address, quote_address))
         {
             return Ok(price);
         }
 
+        // A pair the pool does not hold can never have a price; failing here keeps the error
+        // actionable and spares the adapter one or two EVM simulations per bogus pair.
+        if !self.tokens.contains(&base.address) || !self.tokens.contains(&quote.address) {
+            return Err(SimulationError::FatalError(format!(
+                "Spot price not found for base token {base_address} and quote token {quote_address}"
+            )));
+        }
+
         // Pools with live overrides derive spot prices from a sub-block snapshot that changes
-        // intra-block, so lazily computing and caching would serve stale values. Preserve today's
-        // behavior: the eagerly-warmed value is authoritative, and a genuine miss is an error.
+        // intra-block, so a lazily computed value could mix snapshots with the eagerly-warmed
+        // pairs. Only the eagerly-warmed value is authoritative; a genuine miss is an error.
         if self.live_overrides.is_some() {
             return Err(SimulationError::FatalError(format!(
                 "Spot price not found for base token {base_address} and quote token {quote_address}"
             )));
         }
 
-        // Non-override pool: compute this single pair on demand and cache it.
+        // Compute this single pair on demand and cache it.
         let tokens = HashMap::from([
             (base.address.clone(), base.clone()),
             (quote.address.clone(), quote.clone()),
         ]);
-        let block_overrides = self.block_env(None);
-        let price =
-            self.compute_spot_price(&tokens, base_address, quote_address, None, block_overrides)?;
-        self.spot_price_cache
-            .write()
-            .expect("spot_price_cache poisoned")
-            .insert((base_address, quote_address), price);
+        let price = self.compute_spot_price(&tokens, base_address, quote_address, None)?;
+        self.caches
+            .insert_spot_price((base_address, quote_address), price);
         Ok(price)
     }
 
@@ -1130,8 +1179,6 @@ where
         tokens: &HashMap<Bytes, Token>,
         balances: &Balances,
     ) -> Result<(), TransitionError> {
-        let mut block_overrides_changed = false;
-
         if let Some(block_number) = delta
             .updated_attributes
             .get("override_block_number")
@@ -1147,7 +1194,6 @@ where
             self.block_overrides
                 .get_or_insert_with(BlockEnvOverrides::default)
                 .number = Some(number);
-            block_overrides_changed = true;
         }
 
         if let Some(block_timestamp) = delta
@@ -1165,22 +1211,12 @@ where
             self.block_overrides
                 .get_or_insert_with(BlockEnvOverrides::default)
                 .timestamp = Some(timestamp);
-            block_overrides_changed = true;
         }
 
-        // A block-environment change invalidates cached limits (which are computed against the
-        // block env via the adapter), even when `update_pool_state` is skipped for a
-        // `manual_updates` pool without an update marker. Only `limit_cache` is cleared:
-        // the old code recomputed limits fresh here, whereas the spot-price map was
-        // retained-stale in this path, so leaving `spot_price_cache` untouched preserves
-        // byte-identical behavior (and avoids breaking override pools, which error on a
-        // spot-price cache miss).
-        if block_overrides_changed {
-            self.limit_cache
-                .write()
-                .expect("limit_cache poisoned")
-                .clear();
-        }
+        // No explicit cache handling is needed for the block-env updates above: cached limits
+        // are stamped with the block env they were computed under (see `LimitContext`), so a
+        // change here turns into a miss on the next read. Spot prices are deliberately allowed
+        // to go stale when `update_pool_state` is skipped below — the `manual_updates` contract.
 
         if self.manual_updates {
             // Directly check for "update_marker" in `updated_attributes`
@@ -1422,18 +1458,6 @@ mod tests {
 
         assert_eq!(capabilities_state, expected_capabilities.clone());
 
-        for capability in expected_capabilities.clone() {
-            assert!(pool_state
-                .clone()
-                .ensure_capability(capability)
-                .is_ok());
-        }
-
-        assert!(pool_state
-            .clone()
-            .ensure_capability(Capability::MarginalPrice)
-            .is_err());
-
         // Verify all tokens are initialized in the engine
         let engine_accounts = pool_state
             .adapter_contract
@@ -1475,14 +1499,8 @@ mod tests {
             .downcast_ref::<EVMPoolState<PreCachedDB>>()
             .unwrap();
         assert_eq!(result.amount, BigUint::from_str("137780051463393923").unwrap());
-        // new_state has an invalidated (empty) spot-price cache; reading recomputes the
-        // post-swap price lazily, which differs from the pre-swap price because the swap moved
-        // the pool.
-        assert!(new_state
-            .spot_price_cache
-            .read()
-            .unwrap()
-            .is_empty());
+        // The returned state starts with fresh caches; reading recomputes the post-swap price
+        // lazily, which differs from the pre-swap price because the swap moved the pool.
         let pre = pool_state
             .spot_price(&dai(), &bal())
             .unwrap();
@@ -1509,13 +1527,8 @@ mod tests {
             .downcast_ref::<EVMPoolState<PreCachedDB>>()
             .unwrap();
         assert_eq!(result.amount, BigUint::from_str("137780051463393923").unwrap());
-        // The swap invalidates the returned state's spot-price cache; a lazily-computed price
-        // against the post-swap overwrites differs from the pre-swap price.
-        assert!(new_state
-            .spot_price_cache
-            .read()
-            .unwrap()
-            .is_empty());
+        // The returned state starts with fresh caches; a lazily-computed price against the
+        // post-swap overwrites differs from the pre-swap price.
         let price_before_first_swap = pool_state
             .spot_price(&dai(), &bal())
             .unwrap();
@@ -1534,13 +1547,8 @@ mod tests {
             .unwrap();
 
         assert_eq!(new_result.amount, BigUint::from_str("136964651490065626").unwrap());
-        // Same invalidation applies after the second swap: the cache is empty and the lazily
-        // recomputed price has moved again relative to the state right after the first swap.
-        assert!(new_state_second_swap
-            .spot_price_cache
-            .read()
-            .unwrap()
-            .is_empty());
+        // Same after the second swap: the lazily recomputed price has moved again relative to
+        // the state right after the first swap.
         let price_after_second_swap = new_state_second_swap
             .spot_price(&dai(), &bal())
             .unwrap();
@@ -1634,9 +1642,9 @@ mod tests {
             .unwrap();
         assert_eq!(
             pool_state
-                .limit_cache
+                .caches
                 .read()
-                .unwrap()
+                .limits
                 .get(&(dai_addr(), bal_addr()))
                 .copied(),
             Some(fresh)
@@ -1651,7 +1659,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_set_spot_prices() {
-        let mut pool_state = setup_pool_state().await;
+        let pool_state = setup_pool_state().await;
 
         pool_state
             .set_spot_prices(
@@ -1662,20 +1670,16 @@ mod tests {
             )
             .unwrap();
 
-        let dai_bal_spot_price = *pool_state
-            .spot_price_cache
-            .read()
-            .unwrap()
-            .get(&(
+        let dai_bal_spot_price = pool_state
+            .caches
+            .get_spot_price((
                 bytes_to_address(&pool_state.tokens[0]).unwrap(),
                 bytes_to_address(&pool_state.tokens[1]).unwrap(),
             ))
             .unwrap();
-        let bal_dai_spot_price = *pool_state
-            .spot_price_cache
-            .read()
-            .unwrap()
-            .get(&(
+        let bal_dai_spot_price = pool_state
+            .caches
+            .get_spot_price((
                 bytes_to_address(&pool_state.tokens[1]).unwrap(),
                 bytes_to_address(&pool_state.tokens[0]).unwrap(),
             ))
@@ -1702,20 +1706,16 @@ mod tests {
             )
             .unwrap();
 
-        let dai_bal_spot_price = *pool_state
-            .spot_price_cache
-            .read()
-            .unwrap()
-            .get(&(
+        let dai_bal_spot_price = pool_state
+            .caches
+            .get_spot_price((
                 bytes_to_address(&pool_state.tokens[0]).unwrap(),
                 bytes_to_address(&pool_state.tokens[1]).unwrap(),
             ))
             .unwrap();
-        let bal_dai_spot_price = *pool_state
-            .spot_price_cache
-            .read()
-            .unwrap()
-            .get(&(
+        let bal_dai_spot_price = pool_state
+            .caches
+            .get_spot_price((
                 bytes_to_address(&pool_state.tokens[1]).unwrap(),
                 bytes_to_address(&pool_state.tokens[0]).unwrap(),
             ))
@@ -1729,24 +1729,26 @@ mod tests {
         let pool_state = setup_pool_state().await;
         // Non-override pool with a cold cache: the builder does not warm spot prices.
         assert!(pool_state
-            .spot_price_cache
+            .caches
             .read()
-            .unwrap()
+            .spot_prices
             .is_empty());
 
-        // Reading a pair computes it on demand and caches it.
-        let price = pool_state
+        // Reading a pair computes it on demand, byte-identical to the eagerly-warmed values
+        // pinned in `test_set_spot_prices`, and caches it.
+        let dai_bal = pool_state
             .spot_price(&dai(), &bal())
             .unwrap();
-        assert!(price > 0.0);
+        assert_eq!(dai_bal, 0.137_778_914_319_047_9);
+        let bal_dai = pool_state
+            .spot_price(&bal(), &dai())
+            .unwrap();
+        assert_eq!(bal_dai, 7.071_503_245_428_246);
         assert_eq!(
             pool_state
-                .spot_price_cache
-                .read()
-                .unwrap()
-                .get(&(dai_addr(), bal_addr()))
-                .copied(),
-            Some(price)
+                .caches
+                .get_spot_price((dai_addr(), bal_addr())),
+            Some(dai_bal)
         );
     }
 
@@ -1899,16 +1901,9 @@ mod tests {
             .update_pool_state(&tokens, &balances)
             .unwrap();
 
-        assert!(!pool_state
-            .spot_price_cache
-            .read()
-            .expect("spot_price_cache poisoned")
-            .is_empty());
-        assert!(!pool_state
-            .limit_cache
-            .read()
-            .expect("limit_cache poisoned")
-            .is_empty());
+        let caches = pool_state.caches.read();
+        assert!(!caches.spot_prices.is_empty());
+        assert!(!caches.limits.is_empty());
     }
 
     #[tokio::test]
@@ -2008,27 +2003,34 @@ mod tests {
     }
 
     /// A block-environment-only delta (no `update_marker`) on a `manual_updates` pool skips
-    /// `update_pool_state`, but must still invalidate `limit_cache` since limits are computed
-    /// against the block env. `spot_price_cache` is not required to be cleared here: it stays
-    /// byte-identical to pre-optimization behavior, which also retained stale spot prices in this
-    /// skip path.
+    /// `update_pool_state`, but cached limits must not survive it: they are stamped with the
+    /// block env they were computed under, so the changed env turns the next read into a miss.
+    /// Spot prices are deliberately allowed to go stale in this skip path (the `manual_updates`
+    /// contract).
     #[tokio::test]
-    async fn test_block_override_delta_clears_limit_cache_when_update_skipped() {
+    async fn test_block_override_delta_invalidates_cached_limits() {
         let mut pool_state = setup_pool_state().await;
         pool_state.manual_updates = true;
 
-        // Populate the limit cache.
+        // Populate the limit cache, then poison the entry with a sentinel so a served cache hit
+        // is distinguishable from a fresh computation.
         let overwrites = pool_state
             .get_overwrites(vec![dai_addr(), bal_addr()], *MAX_BALANCE / U256::from(100), None)
             .unwrap();
-        let _ = pool_state
-            .get_amount_limits(vec![dai_addr(), bal_addr()], Some(overwrites), None)
+        let real = pool_state
+            .get_amount_limits(
+                vec![dai_addr(), bal_addr()],
+                Some(overwrites.clone()),
+                pool_state.block_env(None),
+            )
             .unwrap();
-        assert!(!pool_state
-            .limit_cache
-            .read()
-            .unwrap()
-            .is_empty());
+        let sentinel = (U256::from(1u64), U256::from(1u64));
+        assert_ne!(real, sentinel);
+        pool_state
+            .caches
+            .write()
+            .limits
+            .insert((dai_addr(), bal_addr()), sentinel);
 
         // A delta that only changes the block env, with no `update_marker`.
         let delta = ProtocolStateDelta {
@@ -2039,17 +2041,19 @@ mod tests {
             )]),
             deleted_attributes: HashSet::new(),
         };
-
         pool_state
             .delta_transition(delta, &HashMap::new(), &Balances::default())
             .unwrap();
 
-        // limit_cache must be cleared: the block env changed, so cached limits could be stale.
-        assert!(pool_state
-            .limit_cache
-            .read()
-            .unwrap()
-            .is_empty());
+        // The changed block env must invalidate the sentinel: the read recomputes fresh.
+        let after = pool_state
+            .get_amount_limits(
+                vec![dai_addr(), bal_addr()],
+                Some(overwrites),
+                pool_state.block_env(None),
+            )
+            .unwrap();
+        assert_ne!(after, sentinel);
     }
 
     #[test]
@@ -2226,30 +2230,22 @@ mod tests {
     #[tokio::test]
     async fn test_set_live_overrides_clears_caches() {
         let mut pool_state = setup_pool_state().await;
-        pool_state
-            .spot_price_cache
-            .write()
-            .unwrap()
-            .insert((dai_addr(), bal_addr()), 1.0);
-        pool_state
-            .limit_cache
-            .write()
-            .unwrap()
-            .insert((dai_addr(), bal_addr()), (U256::from(1u64), U256::from(1u64)));
+        {
+            let mut caches = pool_state.caches.write();
+            caches
+                .spot_prices
+                .insert((dai_addr(), bal_addr()), 1.0);
+            caches
+                .limits
+                .insert((dai_addr(), bal_addr()), (U256::from(1u64), U256::from(1u64)));
+        }
 
         let (_tx, rx) = watch::channel(OverrideSnapshot::default());
         pool_state.set_live_overrides(rx);
 
-        assert!(pool_state
-            .spot_price_cache
-            .read()
-            .unwrap()
-            .is_empty());
-        assert!(pool_state
-            .limit_cache
-            .read()
-            .unwrap()
-            .is_empty());
+        let caches = pool_state.caches.read();
+        assert!(caches.spot_prices.is_empty());
+        assert!(caches.limits.is_empty());
     }
 
     /// A live snapshot that corrupts the Balancer Vault's low storage slots (pause / reentrancy

@@ -9964,6 +9964,7 @@ dependencies = [
  "rstest 0.23.0",
  "rstest_reuse",
  "ruint",
+ "rustc-hash",
  "serde",
  "serde_json",
  "strum_macros 0.25.3",
