@@ -206,14 +206,14 @@ contract PropAMMFallbackExecutorTest is TestUtils, Constants {
         ISwapRouter02(PROPAMM_FALLBACK_SWAP_ROUTER)
             .exactInputSingle(
                 ISwapRouter02.ExactInputSingleParams({
-                tokenIn: WETH_ADDR,
-                tokenOut: USDC_ADDR,
-                fee: 500,
-                recipient: ALICE,
-                amountIn: 1 ether,
-                amountOutMinimum: 0,
-                sqrtPriceLimitX96: 0
-            })
+                    tokenIn: WETH_ADDR,
+                    tokenOut: USDC_ADDR,
+                    fee: 500,
+                    recipient: ALICE,
+                    amountIn: 1 ether,
+                    amountOutMinimum: 0,
+                    sqrtPriceLimitX96: 0
+                })
             );
         uint256 gasUsed = gasBefore - gasleft();
 
