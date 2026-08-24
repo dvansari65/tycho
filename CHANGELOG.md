@@ -1,3 +1,23 @@
+## [0.364.0](https://github.com/propeller-heads/tycho/compare/0.363.0...0.364.0) (2026-08-24)
+
+
+### Features
+
+* **sim:** cache get_amount_limits per (sell, buy) pair (bypassed under live overrides) ([1d4b417](https://github.com/propeller-heads/tycho/commit/1d4b417f53cc8cbd85c7acc95b00d62ad458b5ea))
+* **sim:** compute spot price lazily on cache miss (bypassed under live overrides) ([07393cb](https://github.com/propeller-heads/tycho/commit/07393cb34b52c41d7e7a64d91f9a705f82c7bf13))
+* **sim:** invalidate and re-warm caches in update_pool_state ([19a4894](https://github.com/propeller-heads/tycho/commit/19a4894b9471044515e6734b14148b567b418591))
+* **sim:** lazy spot prices + limit caching for VM get_amount_out ([#1219](https://github.com/propeller-heads/tycho/issues/1219)) ([1c12861](https://github.com/propeller-heads/tycho/commit/1c12861de961bc9547c75d1b58b2cd394f5cde03))
+* **sim:** stop eager spot-price recompute in get_amount_out; invalidate caches (override pools stay eager) ([1da181e](https://github.com/propeller-heads/tycho/commit/1da181e04f075b9d1582372903d85e0b8705ac73))
+
+
+### Bug Fixes
+
+* **sim:** clear limit_cache on block-env change in delta_transition ([43c592d](https://github.com/propeller-heads/tycho/commit/43c592d6013ef40221a6178abe0e4031a9324768))
+* **sim:** clone spot_price_caller in manual Clone impl ([4cb410a](https://github.com/propeller-heads/tycho/commit/4cb410addfe3dad41aa2d01b3a6b6c4711ba4e69))
+* **simulation:** exclude bench fixtures and test assets from cargo package ([a155dca](https://github.com/propeller-heads/tycho/commit/a155dcafd1fff484526a4f2b5527dc578fd09cf3))
+* **simulation:** import SHARED_TYCHO_DB in state tests ([5d4bd44](https://github.com/propeller-heads/tycho/commit/5d4bd448e30a3e7f43e059e13ef53a01bc45ee13))
+* **simulation:** stamp cached VM limits with block context; collapse caches ([94c400f](https://github.com/propeller-heads/tycho/commit/94c400f2a6448ab91381397db638160f915f0b3b)), closes [#1219](https://github.com/propeller-heads/tycho/issues/1219)
+
 ## [0.363.0](https://github.com/propeller-heads/tycho/compare/0.362.0...0.363.0) (2026-08-24)
 
 
