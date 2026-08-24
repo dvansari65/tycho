@@ -46,11 +46,6 @@ fn get_new_pools(
         // enabling event; skipping keeps the stream alive and avoids publishing a wrong
         // default_fee, and any test asserting the pool still fails on the missing component.
         let Some(default_fee) = tick_spacing_to_fee_store.get_last(&fee_key) else {
-            substreams::log::info!(
-                "Skipping pool {}: no fee stored for {}",
-                event.pool.to_hex(),
-                fee_key
-            );
             return;
         };
         new_pools.push(TransactionChanges {
