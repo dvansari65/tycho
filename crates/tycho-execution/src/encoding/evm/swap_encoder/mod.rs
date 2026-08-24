@@ -19,6 +19,7 @@ mod maverick_v2;
 mod metric;
 mod native;
 mod native_wrap;
+mod propamm;
 mod ring_swap_v2;
 mod rocketpool;
 mod slipstreams;
