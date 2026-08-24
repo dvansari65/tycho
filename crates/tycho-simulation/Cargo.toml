@@ -122,6 +122,9 @@ network_tests = []
 price-level-stream = [
     "dep:async-stream",
     "dep:tokio-tungstenite",
+    # The PropAMMRouter whitelist read (`price_level_stream::fallback_router`).
+    "dep:alloy",
+    "dep:reqwest",
 ]
 evm = [
     "dep:foundry-block-explorers",
