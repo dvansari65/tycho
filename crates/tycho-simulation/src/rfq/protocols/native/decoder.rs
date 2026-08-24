@@ -73,7 +73,8 @@ impl TryFromWithBlock<ComponentWithState, TimestampHeader> for NativeState {
                 InvalidSnapshotError::MissingAttribute(format!("Couldn't create NativeClient: {e}"))
             })?;
 
-        Ok(NativeState::new(base_token, quote_token, book, client))
+        NativeState::new(base_token, quote_token, book, client)
+            .map_err(|e| InvalidSnapshotError::ValueError(e.to_string()))
     }
 }
 
@@ -119,8 +120,6 @@ mod tests {
 
     fn create_test_book() -> NativePriceData {
         NativePriceData {
-            base_symbol: "WETH".to_string(),
-            quote_symbol: "USDC".to_string(),
             base_address: weth().address,
             quote_address: usdc().address,
             minimum_in_base: 0.0,
@@ -231,7 +230,6 @@ mod tests {
         )
         .await;
 
-        assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), InvalidSnapshotError::ValueError(_)));
     }
 }

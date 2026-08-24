@@ -32,6 +32,9 @@ pub fn bytes_to_address(address: &Bytes) -> Result<Address, RFQError> {
     if address.len() == 20 {
         Ok(Address::from_slice(address))
     } else {
-        Err(RFQError::InvalidInput(format!("Invalid ERC20 token address: {address:?}")))
+        Err(RFQError::InvalidInput(format!(
+            "Invalid EVM address length: expected 20 bytes, got {}",
+            address.len()
+        )))
     }
 }

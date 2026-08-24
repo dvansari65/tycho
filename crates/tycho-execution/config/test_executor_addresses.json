@@ -29,17 +29,18 @@
     "aerodrome_slipstreams": "0x2a07706473244BC757E10F2a9E86fB532828afe3",
     "aerodrome_v1": "0x1aF7f588A501EA2B5bB3feeFA744892aA2CF00e6",
     "rfq:metric": "0x3Cff5E7eBecb676c3Cb602D0ef2d46710b88854E",
-    "rfq:native": "0xaEC634d949df14Be76dC317504C7b9a6a8A5f576"
+    "rfq:native": "0x92a6649Fdcc044DA968d94202465578a9371C7b1"
   },
   "arbitrum": {
     "uniswap_v3": "0x2e234DAe75C793f67A35089C9d99245E1C58470b",
-    "rfq:native": "0x0FC85a171bD0b53BF0bBace74F04B66170Ae3eAb"
+    "rfq:native": "0x92a6649Fdcc044DA968d94202465578a9371C7b1"
   },
   "polygon": {
     "uniswap_v3": "0x2e234DAe75C793f67A35089C9d99245E1C58470b",
     "ramses_v3": "0x2e234DAe75C793f67A35089C9d99245E1C58470b"
   },
   "bsc": {
-    "uniswap_v3": "0x2e234DAe75C793f67A35089C9d99245E1C58470b"
+    "uniswap_v3": "0x2e234DAe75C793f67A35089C9d99245E1C58470b",
+    "rfq:native": "0x92a6649Fdcc044DA968d94202465578a9371C7b1"
   }
 }

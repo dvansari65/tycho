@@ -41,10 +41,17 @@ impl NativeState {
     pub fn new(
         base_token: Token,
         quote_token: Token,
-        book: NativePriceData,
+        mut book: NativePriceData,
         client: NativeClient,
-    ) -> Self {
-        NativeState { base_token, quote_token, book, client }
+    ) -> Result<Self, SimulationError> {
+        // Zero-quantity levels carry no liquidity and must not influence spot prices or limits.
+        book.bids
+            .retain(|level| level.quantity != 0.0);
+        book.asks
+            .retain(|level| level.quantity != 0.0);
+        let state = NativeState { base_token, quote_token, book, client };
+        state.validate_book()?;
+        Ok(state)
     }
 
     fn validate_book(&self) -> Result<(), SimulationError> {
@@ -71,7 +78,7 @@ impl NativeState {
             .chain(self.book.asks.iter())
             .any(|level| {
                 !level.quantity.is_finite() ||
-                    level.quantity <= 0.0 ||
+                    level.quantity < 0.0 ||
                     !level.price.is_finite() ||
                     level.price <= 0.0
             })
@@ -92,8 +99,6 @@ impl ProtocolSim for NativeState {
     }
 
     fn spot_price(&self, base: &Token, quote: &Token) -> Result<f64, SimulationError> {
-        self.validate_book()?;
-
         let best_bid = self
             .book
             .bids
@@ -134,8 +139,6 @@ impl ProtocolSim for NativeState {
         token_in: &Token,
         token_out: &Token,
     ) -> Result<GetAmountOutResult, SimulationError> {
-        self.validate_book()?;
-
         let is_sell_base = token_in.address == self.base_token.address &&
             token_out.address == self.quote_token.address;
         let is_sell_quote = token_in.address == self.quote_token.address &&
@@ -214,8 +217,6 @@ impl ProtocolSim for NativeState {
         sell_token: Bytes,
         buy_token: Bytes,
     ) -> Result<(BigUint, BigUint), SimulationError> {
-        self.validate_book()?;
-
         let is_sell_base =
             sell_token == self.base_token.address && buy_token == self.quote_token.address;
         let is_sell_quote =
@@ -340,8 +341,6 @@ mod tests {
         let base_token = token("0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2", "WETH", 18);
         let quote_token = token("0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", "USDC", 6);
         let book = NativePriceData {
-            base_symbol: "WETH".to_string(),
-            quote_symbol: "USDC".to_string(),
             base_address: base_token.address.clone(),
             quote_address: quote_token.address.clone(),
             minimum_in_base: 100_000_000_000.0,
@@ -360,7 +359,7 @@ mod tests {
         )
         .unwrap();
 
-        NativeState::new(base_token, quote_token, book, client)
+        NativeState::new(base_token, quote_token, book, client).unwrap()
     }
 
     #[test]
@@ -412,6 +411,35 @@ mod tests {
     #[test]
     fn calculates_amount_out_for_base_sell() {
         let state = state();
+
+        let result = state
+            .get_amount_out(
+                BigUint::from(500_000_000_000_000_000u64),
+                &state.base_token,
+                &state.quote_token,
+            )
+            .unwrap();
+
+        assert_eq!(result.amount, BigUint::from(1_000_000_000u64));
+    }
+
+    #[test]
+    fn ignores_zero_quantity_levels() {
+        let mut state = state();
+        state
+            .book
+            .bids
+            .insert(0, NativePriceLevel { quantity: 0.0, price: 1_000.0 });
+        let state = NativeState::new(state.base_token, state.quote_token, state.book, state.client)
+            .unwrap();
+
+        assert_eq!(state.book.bids.len(), 1);
+        assert_eq!(
+            state
+                .spot_price(&state.base_token, &state.quote_token)
+                .unwrap(),
+            2_000.0
+        );
 
         let result = state
             .get_amount_out(
@@ -519,11 +547,7 @@ mod tests {
         state.book.bids[0].price = 0.0;
 
         assert!(matches!(
-            state.get_amount_out(
-                BigUint::from(500_000_000_000_000_000u64),
-                &state.base_token,
-                &state.quote_token,
-            ),
+            NativeState::new(state.base_token, state.quote_token, state.book, state.client),
             Err(SimulationError::FatalError(_))
         ));
     }
@@ -534,7 +558,7 @@ mod tests {
         state.book.base_address = Bytes::zero(20);
 
         assert!(matches!(
-            state.get_limits(state.base_token.address.clone(), state.quote_token.address.clone()),
+            NativeState::new(state.base_token, state.quote_token, state.book, state.client),
             Err(SimulationError::FatalError(_))
         ));
     }

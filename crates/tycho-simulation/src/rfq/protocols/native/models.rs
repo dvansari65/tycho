@@ -1,8 +1,8 @@
 use std::str::FromStr;
 
-use alloy::primitives::Address;
+use alloy::primitives::{address, Address};
 use serde::{Deserialize, Serialize};
-use tycho_common::Bytes;
+use tycho_common::{models::Chain, Bytes};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -40,19 +40,27 @@ where
     })
 }
 
+const NATIVE_TOKEN_ALIAS: Address = address!("EeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE");
+
+pub(super) fn normalize_native_address(address: Address) -> Address {
+    if address == NATIVE_TOKEN_ALIAS {
+        Address::ZERO
+    } else {
+        address
+    }
+}
+
 fn deserialize_address<'de, D>(deserializer: D) -> Result<Bytes, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
     let address = String::deserialize(deserializer)?;
     let address = Address::from_str(&address).map_err(serde::de::Error::custom)?;
-    Bytes::from_str(&address.to_checksum(None)).map_err(serde::de::Error::custom)
+    Ok(Bytes::from(normalize_native_address(address).as_slice()))
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct NativeOrderbookEntry {
-    pub base_symbol: String,
-    pub quote_symbol: String,
     #[serde(deserialize_with = "deserialize_address")]
     pub base_address: Bytes,
     #[serde(deserialize_with = "deserialize_address")]
@@ -65,12 +73,9 @@ pub struct NativeOrderbookEntry {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NativePriceData {
-    pub base_symbol: String,
-    pub quote_symbol: String,
     pub base_address: Bytes,
     pub quote_address: Bytes,
     pub minimum_in_base: f64,
-    #[serde(default)]
     pub minimum_in_quote: f64,
     pub bids: Vec<NativePriceLevel>,
     pub asks: Vec<NativePriceLevel>,
@@ -209,71 +214,46 @@ pub struct TxRequest {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FirmQuoteOrder {
     pub pool: String,
     pub signer: String,
     pub recipient: String,
-    #[serde(rename = "sellerToken")]
     pub seller_token: String,
-    #[serde(rename = "buyerToken")]
     pub buyer_token: String,
-    #[serde(rename = "effectiveSellerTokenAmount")]
     pub effective_seller_token_amount: String,
-    #[serde(rename = "sellerTokenAmount")]
     pub seller_token_amount: String,
-    #[serde(rename = "buyerTokenAmount")]
     pub buyer_token_amount: String,
-    #[serde(rename = "deadlineTimestamp")]
     pub deadline_timestamp: u64,
     pub nonce: u64,
-    #[serde(rename = "quoteId")]
     pub quote_id: String,
-    #[serde(rename = "multiHop")]
     pub multi_hop: bool,
     pub signature: String,
-    #[serde(rename = "externalSwapCalldata")]
     pub external_swap_calldata: String,
-    #[serde(rename = "amountOutMinimum")]
     pub amount_out_minimum: String,
-    #[serde(rename = "widgetFee")]
     pub widget_fee: WidgetFee,
-    #[serde(rename = "widgetFeeSignature")]
     pub widget_fee_signature: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FirmQuoteResponse {
     pub success: bool,
     pub orders: Vec<FirmQuoteOrder>,
-    #[serde(rename = "widgetFee")]
     pub widget_fee: WidgetFee,
-    #[serde(rename = "widgetFeeSignature")]
     pub widget_fee_signature: String,
     pub recipient: String,
-    #[serde(rename = "amountIn")]
     pub amount_in: String,
-    #[serde(rename = "amountOut")]
     pub amount_out: String,
-    #[serde(rename = "amountOutBeforeFee")]
     pub amount_out_before_fee: String,
-    #[serde(rename = "fallbackSwapDataArray")]
     pub fallback_swap_data_array: Option<serde_json::Value>,
-    #[serde(rename = "tokenTransferFeeOnPercent")]
     pub token_transfer_fee_on_percent: f64,
-    #[serde(rename = "txRequest")]
     pub tx_request: TxRequest,
     pub source: Vec<u32>,
-    #[serde(rename = "errorMessage")]
     pub error_message: String,
     #[serde(rename = "router_version")]
     pub router_version: String,
-    #[serde(rename = "toWrap")]
-    pub to_wrap: bool,
-    #[serde(rename = "toUnwrap")]
-    pub to_unwrap: bool,
-    #[serde(rename = "amountInOffset")]
     pub amount_in_offset: u32,
-    #[serde(rename = "amountOutMinimumOffset")]
     pub amount_out_minimum_offset: u32,
 }
 
@@ -292,16 +272,16 @@ pub enum NativeSupportedChain {
     Base,
 }
 
-impl TryFrom<tycho_common::models::Chain> for NativeSupportedChain {
+impl TryFrom<Chain> for NativeSupportedChain {
     type Error = String;
 
-    fn try_from(chain: tycho_common::models::Chain) -> Result<Self, Self::Error> {
-        match chain.id() {
-            1 => Ok(NativeSupportedChain::Ethereum),
-            56 => Ok(NativeSupportedChain::Bsc),
-            42161 => Ok(NativeSupportedChain::Arbitrum),
-            8453 => Ok(NativeSupportedChain::Base),
-            id => Err(format!("Chain ID {} not supported by Native API", id)),
+    fn try_from(chain: Chain) -> Result<Self, Self::Error> {
+        match chain {
+            Chain::Ethereum => Ok(NativeSupportedChain::Ethereum),
+            Chain::Bsc => Ok(NativeSupportedChain::Bsc),
+            Chain::Arbitrum => Ok(NativeSupportedChain::Arbitrum),
+            Chain::Base => Ok(NativeSupportedChain::Base),
+            unsupported => Err(format!("Chain {unsupported:?} not supported by Native API")),
         }
     }
 }
@@ -338,7 +318,6 @@ mod tests {
         }"#;
 
         let entry: NativeOrderbookEntry = serde_json::from_str(json).unwrap();
-        assert_eq!(entry.base_symbol, "WETH");
         assert_eq!(entry.side, NativeOrderbookSide::Bid);
         assert_eq!(entry.levels[0].quantity, 0.0001);
         assert_eq!(entry.levels[0].price, 3213.12345);
@@ -347,8 +326,6 @@ mod tests {
     #[test]
     fn calculates_tvl_as_average_bid_ask_quote_value() {
         let price_data = NativePriceData {
-            base_symbol: "WETH".to_string(),
-            quote_symbol: "USDC".to_string(),
             base_address: addr("0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"),
             quote_address: addr("0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"),
             minimum_in_base: 0.0,
@@ -371,8 +348,6 @@ mod tests {
         let tamara = addr("0x1234567890123456789012345678901234567890");
         let usdc = addr("0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48");
         let price_data_eth_tamara = NativePriceData {
-            base_symbol: "WETH".to_string(),
-            quote_symbol: "TAMARA".to_string(),
             base_address: addr("0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"),
             quote_address: tamara.clone(),
             minimum_in_base: 0.0,
@@ -381,8 +356,6 @@ mod tests {
             asks: vec![NativePriceLevel { quantity: 3.0, price: 100.0 }],
         };
         let price_data_tamara_usdc = NativePriceData {
-            base_symbol: "TAMARA".to_string(),
-            quote_symbol: "USDC".to_string(),
             base_address: tamara,
             quote_address: usdc,
             minimum_in_base: 0.0,
@@ -398,8 +371,6 @@ mod tests {
     fn calculates_and_normalizes_tvl_for_one_sided_bid_books() {
         let tamara = addr("0x1234567890123456789012345678901234567890");
         let price_data_eth_tamara = NativePriceData {
-            base_symbol: "WETH".to_string(),
-            quote_symbol: "TAMARA".to_string(),
             base_address: addr("0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"),
             quote_address: tamara.clone(),
             minimum_in_base: 0.0,
@@ -408,8 +379,6 @@ mod tests {
             asks: vec![],
         };
         let price_data_tamara_usdc = NativePriceData {
-            base_symbol: "TAMARA".to_string(),
-            quote_symbol: "USDC".to_string(),
             base_address: tamara,
             quote_address: addr("0xA0b86991c6218b36c1d19d4a2e9Eb0cE3606eB48"),
             minimum_in_base: 0.0,

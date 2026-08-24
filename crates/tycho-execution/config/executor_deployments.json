@@ -47,11 +47,7 @@
     },
     "rfq:native": {
       "contract": "NativeExecutor",
-      "args": [
-        "0x8a2ddc0461Fcf96F81a05529Bed540d4f1eb2a00",
-        "0xa540ec8C73322200d68E1B86c471A5C850854f22",
-        "0xe3D41d19564922C9952f692C5Dd0563030f5f2EF"
-      ]
+      "args": ["0x8a2ddc0461Fcf96F81a05529Bed540d4f1eb2a00"]
     },
     "fluid_v1": {
       "contract": "FluidV1Executor",
@@ -118,11 +114,7 @@
     },
     "rfq:native": {
       "contract": "NativeExecutor",
-      "args": [
-        "0xaEC634d949df14Be76dC317504C7b9a6a8A5f576",
-        "0xd547727b926648Af3F31DbB89E3B93E49F78dCb8",
-        "0x74a4Cd023e5AfB88369E3f22b02440F2614a1367"
-      ]
+      "args": ["0xaEC634d949df14Be76dC317504C7b9a6a8A5f576"]
     }
   },
   "unichain": {
@@ -168,11 +160,7 @@
     },
     "rfq:native": {
       "contract": "NativeExecutor",
-      "args": [
-        "0x0FC85a171bD0b53BF0bBace74F04B66170Ae3eAb",
-        "0x7d1c4889DF6113B3e4581a8c0484374bdeC3341B",
-        "0xbA1cf8A63227b46575AF823BEB4d83D1025eff09"
-      ]
+      "args": ["0x0FC85a171bD0b53BF0bBace74F04B66170Ae3eAb"]
     }
   },
   "polygon": {
@@ -215,11 +203,7 @@
     },
     "rfq:native": {
       "contract": "NativeExecutor",
-      "args": [
-        "0xF064b069Ed18Eb5c61159247C55C5af79B28a968",
-        "0x0f9f2366C6157F2aCD3C2bFA45Cd9031c152D2Cf",
-        "0xBA8dB0CAf781cAc69b6acf6C848aC148264Cc05d"
-      ]
+      "args": ["0xF064b069Ed18Eb5c61159247C55C5af79B28a968"]
     }
   },
   "plasma": {

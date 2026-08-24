@@ -9,7 +9,8 @@ import {ETH_ADDRESS} from "../../lib/NativeETH.sol";
 error NativeExecutor__InvalidDataLength();
 error NativeExecutor__InvalidTarget();
 error NativeExecutor__InvalidPayload();
-error NativeExecutor__InvalidValue();
+error NativeExecutor__InvalidAmountIn();
+error NativeExecutor__InvalidAmountInOffset();
 error NativeExecutor__ZeroAddress();
 error NativeExecutor__NotAContract();
 
@@ -17,32 +18,21 @@ contract NativeExecutor is IExecutor {
     using Address for address;
 
     address public immutable nativeRouterV4;
-    address public immutable nativeRouterV3;
-    address public immutable creditVault;
 
-    // this function selector is consistent across all versions
-    // of the native router (v3, v4)
-    bytes4 private constant _SELECTOR = 0x0947c2d9;
+    // Native Router entrypoint:
+    // tradeRFQT(RFQTQuote quote, uint256 actualSellerAmount, uint256 actualMinOutputAmount)
+    bytes4 public constant TRADE_RFQT_SELECTOR = 0x0947c2d9;
+    uint256 private constant _FIXED_HEADER_LENGTH = 96;
+    uint256 private constant _MIN_TRADE_RFQT_CALLDATA_LENGTH = 4 + 3 * 32;
 
-    constructor(
-        address _nativeRouterV4,
-        address _nativeRouterV3,
-        address _creditVault
-    ) {
-        // Some supported chains do not deploy V3. V4 and CreditVault are always required.
-        if (_nativeRouterV4 == address(0) || _creditVault == address(0)) {
+    constructor(address _nativeRouterV4) {
+        if (_nativeRouterV4 == address(0)) {
             revert NativeExecutor__ZeroAddress();
         }
-        if (
-            _nativeRouterV4.code.length == 0 || _creditVault.code.length == 0
-                || (_nativeRouterV3 != address(0)
-                    && _nativeRouterV3.code.length == 0)
-        ) {
+        if (_nativeRouterV4.code.length == 0) {
             revert NativeExecutor__NotAContract();
         }
         nativeRouterV4 = _nativeRouterV4;
-        nativeRouterV3 = _nativeRouterV3;
-        creditVault = _creditVault;
     }
 
     function fundsExpectedAddress(
@@ -63,7 +53,8 @@ contract NativeExecutor is IExecutor {
             address tokenIn,
             /* address tokenOut */,
             address target,
-            uint256 value,
+            uint32 amountInOffset,
+            uint256 signedAmountIn,
             bytes memory payload
         ) = _decodeData(data);
 
@@ -73,20 +64,30 @@ contract NativeExecutor is IExecutor {
 
         // check payload against function selector
         bytes4 selector = bytes4(payload);
-        if (selector != _SELECTOR) {
+        if (selector != TRADE_RFQT_SELECTOR) {
             revert NativeExecutor__InvalidPayload();
         }
 
-        // `value` comes from Native's txRequest. It must exactly match the ETH
-        // input, or be zero for ERC-20 swaps, so the executor never silently
-        // changes the quoted input or spends unrelated Dispatcher ETH.
-        uint256 expectedValue = tokenIn == ETH_ADDRESS ? amountIn : 0;
-        if (value != expectedValue) {
-            revert NativeExecutor__InvalidValue();
+        // Native treats a zero actualSellerAmount as "use the signed amount".
+        // Therefore zero cannot represent an under-delivery, and an amount above
+        // the signed maximum must not be sent to the Router.
+        if (amountIn == 0 || signedAmountIn == 0 || amountIn > signedAmountIn) {
+            revert NativeExecutor__InvalidAmountIn();
         }
 
+        _validateAmountInOffset(payload, amountInOffset);
+
+        if (amountIn < signedAmountIn) {
+            _setActualSellerAmount(payload, amountInOffset, amountIn);
+        }
+
+        // amountIn is authoritative at execution time. It equals Native's quoted
+        // payable value for exact fills and reflects Tycho's smaller delivered
+        // amount for under-filled native-token swaps.
+        uint256 executionValue = tokenIn == ETH_ADDRESS ? amountIn : 0;
+
         // slither-disable-next-line unused-return
-        target.functionCallWithValue(payload, value);
+        target.functionCallWithValue(payload, executionValue);
     }
 
     function _decodeData(bytes calldata data)
@@ -96,30 +97,60 @@ contract NativeExecutor is IExecutor {
             address tokenIn,
             address tokenOut,
             address target,
-            uint256 value,
+            uint32 amountInOffset,
+            uint256 signedAmountIn,
             bytes memory payload
         )
     {
-        // Decode the 92 bytes fixed header injected by NativeSwapEncoder
-        // 20 (tokenIn) + 20 (tokenOut) + 20 (target) + 32 (value) = 92 bytes header
-        if (data.length < 92) {
+        // Decode the 96-byte fixed header injected by NativeSwapEncoder.
+        // 20 tokenIn + 20 tokenOut + 20 target + 4 amountInOffset
+        // + 32 signedAmountIn = 96 bytes.
+        // The tradeRFQT payload must contain its 4-byte selector and three
+        // 32-byte ABI head words. Its dynamic quote data remains opaque and is
+        // validated by the Native Router.
+        if (
+            data.length < _FIXED_HEADER_LENGTH + _MIN_TRADE_RFQT_CALLDATA_LENGTH
+        ) {
             revert NativeExecutor__InvalidDataLength();
         }
 
         tokenIn = address(bytes20(data[0:20]));
         tokenOut = address(bytes20(data[20:40]));
         target = address(bytes20(data[40:60]));
-        value = uint256(bytes32(data[60:92]));
+        amountInOffset = uint32(bytes4(data[60:64]));
+        signedAmountIn = uint256(bytes32(data[64:96]));
 
         // The remaining bytes are the opaque Native Router calldata
-        payload = data[92:];
+        payload = data[_FIXED_HEADER_LENGTH:];
+    }
+
+    function _validateAmountInOffset(
+        bytes memory payload,
+        uint32 amountInOffset
+    ) private pure {
+        // Native's offset is relative to the complete Router calldata. The first
+        // ABI word begins after the 4-byte selector, and every argument word is
+        // 32-byte aligned from there.
+        if (
+            amountInOffset < 4 || (amountInOffset - 4) % 32 != 0
+                || payload.length < 32 || amountInOffset > payload.length - 32
+        ) {
+            revert NativeExecutor__InvalidAmountInOffset();
+        }
+    }
+
+    function _setActualSellerAmount(
+        bytes memory payload,
+        uint32 amountInOffset,
+        uint256 amountIn
+    ) private pure {
+        assembly ("memory-safe") {
+            mstore(add(add(payload, 0x20), amountInOffset), amountIn)
+        }
     }
 
     function _isValidTarget(address target) private view returns (bool) {
-        return target != address(0)
-            && (target == nativeRouterV4
-                || target == creditVault
-                || (nativeRouterV3 != address(0) && target == nativeRouterV3));
+        return target == nativeRouterV4;
     }
 
     function getTransferData(bytes calldata data)
@@ -134,7 +165,7 @@ contract NativeExecutor is IExecutor {
         )
     {
         address target;
-        (tokenIn, tokenOut, target,,) = _decodeData(data);
+        (tokenIn, tokenOut, target,,,) = _decodeData(data);
 
         if (!_isValidTarget(target)) {
             revert NativeExecutor__InvalidTarget();

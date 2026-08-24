@@ -17,7 +17,7 @@ mod liquorice;
 mod lunarbase;
 mod maverick_v2;
 mod metric;
-pub(crate) mod native;
+mod native;
 mod native_wrap;
 mod ring_swap_v2;
 mod rocketpool;

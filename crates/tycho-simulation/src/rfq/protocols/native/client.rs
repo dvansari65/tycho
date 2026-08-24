@@ -1,10 +1,11 @@
 use std::{
     collections::{HashMap, HashSet},
     str::FromStr,
+    sync::LazyLock,
     time::SystemTime,
 };
 
-use alloy::primitives::utils::keccak256;
+use alloy::primitives::{utils::keccak256, Address};
 use async_trait::async_trait;
 use futures::stream::BoxStream;
 use num_bigint::BigUint;
@@ -18,7 +19,9 @@ use tycho_common::{
     Bytes,
 };
 
-use super::models::{NativeOrderbookEntry, NativeOrderbookSide, NativePriceData};
+use super::models::{
+    normalize_native_address, NativeOrderbookEntry, NativeOrderbookSide, NativePriceData,
+};
 use crate::{
     rfq::{
         client::RFQClient,
@@ -34,6 +37,26 @@ use crate::{
     tycho_client::feed::synchronizer::{ComponentWithState, Snapshot, StateSyncMessage},
     tycho_common::models::protocol::{ProtocolComponent, ProtocolComponentState},
 };
+
+static NATIVE_HTTP_CLIENT: LazyLock<Client> = LazyLock::new(Client::new);
+const MAX_QUOTE_ATTEMPTS: u32 = 3;
+const TRANSIENT_RETRY_DELAY: Duration = Duration::from_millis(100);
+const NATIVE_API_RETRY_DELAY: Duration = Duration::from_secs(1);
+// tradeRFQT(RFQTQuote,uint256,uint256): 4-byte selector plus three ABI head words.
+const MIN_TRADE_RFQT_CALLDATA_LEN: usize = 4 + 3 * 32;
+
+enum QuoteAttemptError {
+    Retry { error: RFQError, delay: Duration },
+    Fatal(RFQError),
+}
+
+impl QuoteAttemptError {
+    fn into_error(self) -> RFQError {
+        match self {
+            Self::Retry { error, .. } | Self::Fatal(error) => error,
+        }
+    }
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct NativeClient {
@@ -52,43 +75,40 @@ impl NativeClient {
     pub const PROTOCOL_SYSTEM: &'static str = "rfq:native";
     pub const DEFAULT_ENDPOINT: &'static str = "https://v2.api.native.org/swap-api-v2/v1";
 
-    fn classify_api_error(error: &NativeApiErrorResponse) -> (bool, RFQError) {
+    fn http_client(&self) -> &Client {
+        &NATIVE_HTTP_CLIENT
+    }
+
+    // Native API error codes:
+    // <https://docs.native.org/native-dev/build-with-native/swap-aggregators/firmquote-swap-apis/miscellaneous/error-handling#error-codes>
+    fn classify_api_error(error: &NativeApiErrorResponse) -> QuoteAttemptError {
         let message = format!("Native API error {}: {}", error.code, error.message);
         match error.code {
             // Native documents these as temporary risk/rate-limit failures.
-            301016 | 405030 => (true, RFQError::QuoteNotFound(message)),
-            201005 => (true, RFQError::ConnectionError(message)),
+            301016 | 405030 => QuoteAttemptError::Retry {
+                error: RFQError::QuoteNotFound(message),
+                delay: NATIVE_API_RETRY_DELAY,
+            },
+            201005 => QuoteAttemptError::Retry {
+                error: RFQError::ConnectionError(message),
+                delay: NATIVE_API_RETRY_DELAY,
+            },
             // The requested quote is unavailable for the current orderbook/liquidity.
-            101010 | 171037 | 171011 | 171015 | 101007 => (false, RFQError::QuoteNotFound(message)),
+            // 171055 is not in the public table, but Native returns it when the seller amount is
+            // below the current book minimum.
+            101010 | 171037 | 171011 | 171015 | 171055 | 101007 => {
+                QuoteAttemptError::Fatal(RFQError::QuoteNotFound(message))
+            }
             // The request itself must be corrected before another attempt can succeed.
             131003 | 131004 | 131011 | 171018 | 171053 | 131005 => {
-                (false, RFQError::InvalidInput(message))
+                QuoteAttemptError::Fatal(RFQError::InvalidInput(message))
             }
-            201001 => (false, RFQError::FatalError(message)),
-            _ => (
-                false,
-                RFQError::FatalError(format!(
-                    "Unknown Native API error {}: {}",
-                    error.code, error.message
-                )),
-            ),
+            201001 => QuoteAttemptError::Fatal(RFQError::FatalError(message)),
+            _ => QuoteAttemptError::Fatal(RFQError::FatalError(format!(
+                "Unknown Native API error {}: {}",
+                error.code, error.message
+            ))),
         }
-    }
-
-    async fn wait_before_retry(
-        start_time: &std::time::Instant,
-        quote_timeout: Duration,
-        retry_delay: Duration,
-    ) -> bool {
-        let Some(remaining_time) = quote_timeout.checked_sub(start_time.elapsed()) else {
-            return false;
-        };
-        if remaining_time.is_zero() {
-            return false;
-        }
-
-        tokio::time::sleep(retry_delay.min(remaining_time)).await;
-        start_time.elapsed() < quote_timeout
     }
 
     pub fn new(
@@ -100,6 +120,7 @@ impl NativeClient {
         poll_time: Duration,
         quote_timeout: Duration,
     ) -> Result<Self, RFQError> {
+        NativeSupportedChain::try_from(chain).map_err(RFQError::InvalidInput)?;
         Ok(Self {
             chain,
             endpoint: Self::DEFAULT_ENDPOINT.to_string(),
@@ -145,31 +166,38 @@ impl NativeClient {
         }
     }
 
-    async fn fetch_orderbook(
-        &self,
-        http_client: &Client,
-    ) -> Result<Vec<NativeOrderbookEntry>, RFQError> {
-        let response = http_client
+    async fn fetch_orderbook(&self) -> Result<Vec<NativeOrderbookEntry>, RFQError> {
+        let chain = NativeSupportedChain::try_from(self.chain).map_err(RFQError::InvalidInput)?;
+        let response = self
+            .http_client()
             .get(format!("{}/orderbook", self.endpoint))
-            .query(&[("chain", self.chain.to_string())])
+            .query(&[("chain", chain.as_str()), ("showNative", "true")])
             .header("accept", "application/json")
             .header("apikey", &self.api_key)
             .send()
             .await
             .map_err(|e| RFQError::ConnectionError(e.to_string()))?;
 
-        if !response.status().is_success() {
+        let status = response.status();
+        let response_body = response
+            .bytes()
+            .await
+            .map_err(|e| RFQError::ConnectionError(e.to_string()))?;
+
+        // Native can return an API error envelope with HTTP 200.
+        if let Ok(api_error) = serde_json::from_slice::<NativeApiErrorResponse>(&response_body) {
+            return Err(Self::classify_api_error(&api_error).into_error());
+        }
+
+        if !status.is_success() {
             return Err(RFQError::ConnectionError(format!(
                 "Native Relay orderbook HTTP error {}: {}",
-                response.status(),
-                response
-                    .text()
-                    .await
-                    .unwrap_or_default()
+                status,
+                String::from_utf8_lossy(&response_body)
             )));
         }
 
-        response.json().await.map_err(|e| {
+        serde_json::from_slice(&response_body).map_err(|e| {
             RFQError::ParsingError(format!("Failed to parse Native Relay orderbook: {e}"))
         })
     }
@@ -204,7 +232,7 @@ impl NativeClient {
         }
 
         let mut books = HashMap::new();
-        for entries in entries_by_pair.into_values() {
+        for ((token0, token1), entries) in entries_by_pair {
             let Some(first) = entries.first() else {
                 continue;
             };
@@ -234,8 +262,6 @@ impl NativeClient {
                 first
             };
 
-            let base_symbol = canonical.base_symbol.clone();
-            let quote_symbol = canonical.quote_symbol.clone();
             let base_address = canonical.base_address.clone();
             let quote_address = canonical.quote_address.clone();
             let mut direct_bids = Vec::new();
@@ -266,16 +292,13 @@ impl NativeClient {
 
             let bids = if direct_bids.is_empty() { mirrored_bids } else { direct_bids };
             let asks = if direct_asks.is_empty() { mirrored_asks } else { direct_asks };
-            // Component IDs are decoded as hex bytes downstream, so use the same stable hashed
-            // pair format as the other RFQ clients.
-            let pair =
-                format!("native_{}/{}", hex::encode(&base_address), hex::encode(&quote_address));
+            // Use the sorted pair key so the component ID remains stable if Native returns the
+            // opposite book direction in a later poll.
+            let pair = format!("native_{}/{}", hex::encode(&token0), hex::encode(&token1));
             let component_id = keccak256(pair.as_bytes()).to_string();
             books.insert(
                 component_id,
                 NativePriceData {
-                    base_symbol,
-                    quote_symbol,
                     base_address,
                     quote_address,
                     minimum_in_base,
@@ -309,22 +332,44 @@ impl NativeClient {
                     "No Native Relay orders for {} {} -> {}",
                     params.amount_in, params.token_in, params.token_out,
                 ))
-            })?
-            .clone();
+            })?;
 
         // Prevents silently accepting a mismatched/malicious quote.
-        let seller_token = bytes_to_address(&params.token_in)?;
-        let buyer_token = bytes_to_address(&params.token_out)?;
-        if !order
-            .seller_token
-            .eq_ignore_ascii_case(&seller_token.to_string()) ||
-            !order
-                .buyer_token
-                .eq_ignore_ascii_case(&buyer_token.to_string())
-        {
+        let seller_token = normalize_native_address(bytes_to_address(&params.token_in)?);
+        let buyer_token = normalize_native_address(bytes_to_address(&params.token_out)?);
+        let order_seller_token = Address::from_str(&order.seller_token)
+            .map(normalize_native_address)
+            .map_err(|e| {
+                RFQError::ParsingError(format!(
+                    "Invalid Native seller token {}: {e}",
+                    order.seller_token
+                ))
+            })?;
+        let order_buyer_token = Address::from_str(&order.buyer_token)
+            .map(normalize_native_address)
+            .map_err(|e| {
+                RFQError::ParsingError(format!(
+                    "Invalid Native buyer token {}: {e}",
+                    order.buyer_token
+                ))
+            })?;
+        if order_seller_token != seller_token || order_buyer_token != buyer_token {
             return Err(RFQError::ParsingError(format!(
                 "Native Relay quote token mismatch: expected {}/{}, got {}/{}",
-                seller_token, buyer_token, order.seller_token, order.buyer_token
+                seller_token, buyer_token, order_seller_token, order_buyer_token
+            )));
+        }
+
+        let receiver = bytes_to_address(&params.receiver)?;
+        let order_recipient = Address::from_str(&order.recipient).map_err(|e| {
+            RFQError::ParsingError(format!(
+                "Invalid Native order recipient {}: {e}",
+                order.recipient
+            ))
+        })?;
+        if order_recipient != receiver {
+            return Err(RFQError::ParsingError(format!(
+                "Native Relay quote recipient mismatch: expected {receiver}, got {order_recipient}"
             )));
         }
 
@@ -341,6 +386,8 @@ impl NativeClient {
             )));
         }
 
+        // Tycho transfers params.amount_in before execution. Both Native's response and the
+        // signed order must cover that exact amount so no unspent input remains in the Router.
         let quoted_amount_in = BigUint::from_str(&quote_response.amount_in).map_err(|_| {
             RFQError::ParsingError(format!(
                 "Failed to parse amount_in: {}",
@@ -354,12 +401,59 @@ impl NativeClient {
             )));
         }
 
+        let signed_amount_in = BigUint::from_str(&order.seller_token_amount).map_err(|_| {
+            RFQError::ParsingError(format!(
+                "Failed to parse signed seller token amount: {}",
+                order.seller_token_amount
+            ))
+        })?;
+        if signed_amount_in != params.amount_in {
+            return Err(RFQError::ParsingError(format!(
+                "Native Relay signed input amount mismatch: expected {}, got {}",
+                params.amount_in, signed_amount_in
+            )));
+        }
+
+        let effective_amount_in =
+            BigUint::from_str(&order.effective_seller_token_amount).map_err(|_| {
+                RFQError::ParsingError(format!(
+                    "Failed to parse effective seller token amount: {}",
+                    order.effective_seller_token_amount
+                ))
+            })?;
+        if effective_amount_in != params.amount_in {
+            return Err(RFQError::ParsingError(format!(
+                "Native Relay effective input amount mismatch: expected {}, got {}",
+                params.amount_in, effective_amount_in
+            )));
+        }
+
+        // Native requires txRequest.value for native-token quotes. Validate the
+        // quoted value here, while it still describes the original signed amount.
+        // During execution, Tycho's actual amountIn may be smaller due to under-delivery.
+        let quoted_value = BigUint::from_str(&quote_response.tx_request.value).map_err(|_| {
+            RFQError::ParsingError(format!(
+                "Failed to parse Native txRequest.value: {}",
+                quote_response.tx_request.value
+            ))
+        })?;
+        let expected_value =
+            if seller_token == Address::ZERO { quoted_amount_in.clone() } else { BigUint::ZERO };
+        if quoted_value != expected_value {
+            return Err(RFQError::ParsingError(format!(
+                "Native Relay payable value mismatch: expected {}, got {}",
+                expected_value, quoted_value
+            )));
+        }
+
         if quote_response
             .tx_request
             .calldata
             .is_empty()
         {
-            return Err(RFQError::ConnectionError("Calldata not found!".to_string()));
+            return Err(RFQError::QuoteNotFound(
+                "Native Relay quote did not include calldata".to_string(),
+            ));
         }
         // Decode calldata (pre-built by Native Relay, ready to submit as-is)
         let calldata = hex::decode(
@@ -370,6 +464,28 @@ impl NativeClient {
         )
         .map_err(|e| RFQError::ParsingError(format!("Failed to decode calldata: {e}")))?;
 
+        if calldata.len() < MIN_TRADE_RFQT_CALLDATA_LEN {
+            return Err(RFQError::ParsingError(format!(
+                "Native tradeRFQT calldata too short: expected at least {} bytes, got {}",
+                MIN_TRADE_RFQT_CALLDATA_LEN,
+                calldata.len()
+            )));
+        }
+
+        let amount_in_offset = quote_response.amount_in_offset as usize;
+        if amount_in_offset < 4 ||
+            !(amount_in_offset - 4).is_multiple_of(32) ||
+            amount_in_offset
+                .checked_add(32)
+                .is_none_or(|end| end > calldata.len())
+        {
+            return Err(RFQError::ParsingError(format!(
+                "Invalid Native amountInOffset {} for calldata length {}",
+                quote_response.amount_in_offset,
+                calldata.len()
+            )));
+        }
+
         let target = Bytes::from_str(&quote_response.tx_request.target).map_err(|_| {
             RFQError::ParsingError(format!(
                 "Failed to parse router target address: {}",
@@ -378,19 +494,17 @@ impl NativeClient {
         })?;
 
         let mut quote_attributes: HashMap<String, Bytes> = HashMap::new();
-        // Native returns tx_request_value in string
+        quote_attributes.insert("target".to_string(), target);
+        quote_attributes.insert("calldata".to_string(), Bytes::from(calldata));
         quote_attributes.insert(
-            "value".to_string(),
+            "amount_in_offset".to_string(),
             Bytes::from(
                 quote_response
-                    .tx_request
-                    .value
-                    .as_bytes()
+                    .amount_in_offset
+                    .to_be_bytes()
                     .to_vec(),
             ),
         );
-        quote_attributes.insert("target".to_string(), target);
-        quote_attributes.insert("calldata".to_string(), Bytes::from(calldata));
         quote_attributes.insert(
             "deadline_timestamp".to_string(),
             Bytes::from(
@@ -400,18 +514,6 @@ impl NativeClient {
                     .to_vec(),
             ),
         );
-        quote_attributes
-            .insert("quote_id".to_string(), Bytes::from(order.quote_id.as_bytes().to_vec()));
-
-        // Signature may be empty for Relay-signed pool orders; store only if present.
-        if !order.signature.is_empty() {
-            quote_attributes.insert(
-                "signature".to_string(),
-                Bytes::from(hex::decode(order.signature.trim_start_matches("0x")).map_err(
-                    |e| RFQError::ParsingError(format!("Failed to decode signature: {e}")),
-                )?),
-            );
-        }
 
         Ok(SignedQuote {
             base_token: params.token_in.clone(),
@@ -426,6 +528,70 @@ impl NativeClient {
             quote_attributes,
         })
     }
+
+    async fn try_quote(
+        &self,
+        request_data: &FirmQuoteRequest,
+        params: &GetAmountOutParams,
+    ) -> Result<SignedQuote, QuoteAttemptError> {
+        let response = self
+            .http_client()
+            .get(format!("{}/firm-quote", self.endpoint))
+            .query(request_data)
+            .header("apikey", &self.api_key)
+            .send()
+            .await
+            .map_err(|e| QuoteAttemptError::Retry {
+                error: RFQError::ConnectionError(format!(
+                    "Failed to make Native quote request: {e}"
+                )),
+                delay: TRANSIENT_RETRY_DELAY,
+            })?;
+
+        let status = response.status();
+        let response_body = response
+            .bytes()
+            .await
+            .map_err(|e| QuoteAttemptError::Retry {
+                error: RFQError::ConnectionError(format!(
+                    "Failed to read Native quote response: {e}"
+                )),
+                delay: TRANSIENT_RETRY_DELAY,
+            })?;
+
+        // Native returns documented API error codes in the body, including with HTTP 200.
+        if let Ok(api_error) = serde_json::from_slice::<NativeApiErrorResponse>(&response_body) {
+            return Err(Self::classify_api_error(&api_error));
+        }
+
+        if !status.is_success() {
+            let response_text = String::from_utf8_lossy(&response_body);
+            if status.is_server_error() {
+                return Err(QuoteAttemptError::Retry {
+                    error: RFQError::ConnectionError(format!(
+                        "Native quote server error ({status}): {response_text}"
+                    )),
+                    delay: TRANSIENT_RETRY_DELAY,
+                });
+            }
+
+            return Err(QuoteAttemptError::Fatal(RFQError::ConnectionError(format!(
+                "Unexpected Native quote HTTP response ({status}): {response_text}"
+            ))));
+        }
+
+        let quote_response =
+            serde_json::from_slice::<FirmQuoteResponse>(&response_body).map_err(|e| {
+                QuoteAttemptError::Retry {
+                    error: RFQError::ParsingError(format!(
+                        "Failed to parse Native quote response: {e}"
+                    )),
+                    delay: TRANSIENT_RETRY_DELAY,
+                }
+            })?;
+
+        Self::process_quote_response(quote_response, params).map_err(QuoteAttemptError::Fatal)
+    }
 }
 
 #[async_trait]
@@ -434,7 +600,6 @@ impl RFQClient for NativeClient {
         &self,
     ) -> BoxStream<'static, Result<(String, StateSyncMessage<TimestampHeader>), RFQError>> {
         let client = self.clone();
-        let http_client = Client::new();
 
         Box::pin(async_stream::stream! {
             let mut current_components: HashMap<String, ComponentWithState> = HashMap::new();
@@ -446,7 +611,7 @@ impl RFQClient for NativeClient {
                 // Native Relay publishes a complete RFQ orderbook once per request. Polling the
                 // full book keeps component creation/removal deterministic and avoids per-pair REST
                 // fan-out.
-                let books = match client.fetch_orderbook(&http_client).await {
+                let books = match client.fetch_orderbook().await {
                     Ok(entries) => client.group_orderbook(entries),
                     Err(e) => {
                         error!("Failed to fetch Native Relay orderbook: {}", e);
@@ -542,7 +707,6 @@ impl RFQClient for NativeClient {
         let receiver = bytes_to_address(&params.receiver)?;
         let token_in = bytes_to_address(&params.token_in)?;
         let token_out = bytes_to_address(&params.token_out)?;
-        let http_client = Client::new();
 
         let chain = NativeSupportedChain::try_from(self.chain).map_err(RFQError::FatalError)?;
 
@@ -556,172 +720,49 @@ impl RFQClient for NativeClient {
             version: 4,
             allow_multihop: false, // Multihop not implemented yet
         };
-        const MAX_RETRIES: u32 = 3;
         let mut last_error = None;
-        let start_time = std::time::Instant::now();
 
-        for attempt in 0..MAX_RETRIES {
-            let elapse = start_time.elapsed();
-            if elapse >= self.quote_timeout {
-                return Err(last_error.unwrap_or_else(|| {
-                    RFQError::ConnectionError(format!(
-                        "Native quote request timed out after {:?} secs",
-                        self.quote_timeout.as_secs()
-                    ))
-                }));
-            }
-            let remaining_time = self.quote_timeout - elapse;
-
-            let req = http_client
-                .get(format!("{}/firm-quote", self.endpoint))
-                .query(&request_data)
-                .header("apikey", &self.api_key);
-
-            let response = match timeout(remaining_time, req.send()).await {
-                Ok(Ok(res)) => res,
-                Ok(Err(e)) => {
-                    warn!("Quote request failed: {}/{} : {}", attempt + 1, MAX_RETRIES - 1, e);
-
-                    last_error = Some(RFQError::ConnectionError(format!(
-                        "Failed to make RFQ quote request:{e}"
-                    )));
-                    if attempt < MAX_RETRIES - 1 &&
-                        Self::wait_before_retry(
-                            &start_time,
-                            self.quote_timeout,
-                            Duration::from_millis(100),
-                        )
-                        .await
-                    {
-                        continue;
-                    }
-                    return Err(last_error.unwrap());
-                }
-                Err(_) => {
-                    return Err(RFQError::ConnectionError(format!(
-                        "Native quote request timed out after {} seconds",
-                        self.quote_timeout.as_secs()
-                    )))
-                }
-            };
-
-            let status = response.status();
-            let elapsed = start_time.elapsed();
-            if elapsed >= self.quote_timeout {
-                return Err(RFQError::ConnectionError(format!(
-                    "Native quote request timed out after {} seconds",
-                    self.quote_timeout.as_secs()
-                )));
-            }
-            let response_body = match timeout(self.quote_timeout - elapsed, response.bytes()).await
-            {
-                Ok(Ok(body)) => body,
-                Ok(Err(e)) => {
-                    last_error = Some(RFQError::ConnectionError(format!(
-                        "Failed to read Native quote response: {e}"
-                    )));
-                    if attempt < MAX_RETRIES - 1 {
+        let attempts = async {
+            for attempt in 1..=MAX_QUOTE_ATTEMPTS {
+                match self
+                    .try_quote(&request_data, params)
+                    .await
+                {
+                    Ok(quote) => return Ok(quote),
+                    Err(QuoteAttemptError::Fatal(error)) => return Err(error),
+                    Err(QuoteAttemptError::Retry { error, delay }) => {
                         warn!(
-                            "Failed to read Native quote response (attempt {}/{}): {}",
-                            attempt + 1,
-                            MAX_RETRIES,
-                            e
+                            "Native quote attempt {}/{} failed: {}",
+                            attempt, MAX_QUOTE_ATTEMPTS, error
                         );
-                        if Self::wait_before_retry(
-                            &start_time,
-                            self.quote_timeout,
-                            Duration::from_millis(100),
-                        )
-                        .await
-                        {
-                            continue;
+                        last_error = Some(error);
+
+                        if attempt < MAX_QUOTE_ATTEMPTS {
+                            tokio::time::sleep(delay).await;
                         }
                     }
-                    return Err(last_error.unwrap());
                 }
-                Err(_) => {
-                    return Err(RFQError::ConnectionError(format!(
-                        "Native quote request timed out after {} seconds",
-                        self.quote_timeout.as_secs()
-                    )))
-                }
-            };
-            let response_text = String::from_utf8_lossy(&response_body);
-
-            // Native returns documented API error codes in the body, including with HTTP 200.
-            if let Ok(api_error) = serde_json::from_slice::<NativeApiErrorResponse>(&response_body)
-            {
-                let (should_retry, error) = Self::classify_api_error(&api_error);
-                if should_retry {
-                    last_error = Some(error);
-                    if attempt < MAX_RETRIES - 1 {
-                        warn!(
-                            "Native returned retryable API error {} (attempt {}/{}): {}",
-                            api_error.code,
-                            attempt + 1,
-                            MAX_RETRIES,
-                            api_error.message
-                        );
-                        if Self::wait_before_retry(
-                            &start_time,
-                            self.quote_timeout,
-                            Duration::from_secs(1),
-                        )
-                        .await
-                        {
-                            continue;
-                        }
-                    }
-                    return Err(last_error.unwrap());
-                }
-                return Err(error);
             }
 
-            if !status.is_success() {
-                return Err(RFQError::ConnectionError(format!(
-                    "Unexpected Native quote HTTP response ({status}): {response_text}"
-                )));
-            }
+            Err(last_error.take().unwrap_or_else(|| {
+                RFQError::ConnectionError(
+                    "Native quote request failed after all attempts".to_string(),
+                )
+            }))
+        };
 
-            let quote_response = match serde_json::from_slice::<FirmQuoteResponse>(&response_body) {
-                Ok(res) => res,
-                Err(e) => {
-                    last_error = Some(RFQError::ParsingError(format!(
-                        "Failed to parse Native quote response: {e}"
-                    )));
-                    if attempt < MAX_RETRIES - 1 {
-                        warn!(
-                            "Failed to parse Native quote response (attempt {}/{}): {}",
-                            attempt + 1,
-                            MAX_RETRIES,
-                            e
-                        );
-                        if Self::wait_before_retry(
-                            &start_time,
-                            self.quote_timeout,
-                            Duration::from_millis(100),
-                        )
-                        .await
-                        {
-                            continue;
-                        }
-                    }
-                    return Err(last_error.unwrap());
-                }
-            };
-            if quote_response.success {
-                return Self::process_quote_response(quote_response, params);
-            } else {
-                return Err(RFQError::FatalError(format!(
-                    "Native API returned success=false without a documented error code: {}",
-                    quote_response.error_message
-                )));
-            }
+        // Bind the timeout result before inspecting last_error so the attempts future—and its
+        // mutable borrow—has been dropped.
+        let result = timeout(self.quote_timeout, attempts).await;
+        match result {
+            Ok(result) => result,
+            Err(_) => Err(last_error.unwrap_or_else(|| {
+                RFQError::ConnectionError(format!(
+                    "Native quote request timed out after {:?}",
+                    self.quote_timeout
+                ))
+            })),
         }
-
-        Err(last_error.unwrap_or_else(|| {
-            RFQError::ConnectionError("Native quote request failed after retries".to_string())
-        }))
     }
 }
 
@@ -736,14 +777,18 @@ mod tests {
         },
     };
 
-    use tokio::{io::AsyncWriteExt, net::TcpListener};
+    use tokio::{
+        io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+        net::TcpListener,
+    };
     use tycho_common::models::Chain;
 
     use super::*;
     use crate::rfq::protocols::native::models::NativePriceLevel;
 
-    fn successful_quote_response(amount_in: &str) -> FirmQuoteResponse {
-        serde_json::from_value(serde_json::json!({
+    fn successful_quote_json(amount_in: &str) -> serde_json::Value {
+        let calldata = format!("0x0947c2d9{:064x}{:064x}{:064x}", 0x60u8, 0u8, 0u8);
+        serde_json::json!({
             "success": true,
             "orders": [{
                 "pool": "0x1111111111111111111111111111111111111111",
@@ -782,7 +827,7 @@ mod tests {
             "tokenTransferFeeOnPercent": 0.0,
             "txRequest": {
                 "target": "0x8a2ddc0461Fcf96F81a05529Bed540d4f1eb2a00",
-                "calldata": "0x0947c2d9",
+                "calldata": calldata,
                 "value": "0"
             },
             "source": [6],
@@ -790,10 +835,13 @@ mod tests {
             "router_version": "4",
             "toWrap": false,
             "toUnwrap": false,
-            "amountInOffset": 0,
-            "amountOutMinimumOffset": 0
-        }))
-        .unwrap()
+            "amountInOffset": 36,
+            "amountOutMinimumOffset": 68
+        })
+    }
+
+    fn successful_quote_response(amount_in: &str) -> FirmQuoteResponse {
+        serde_json::from_value(successful_quote_json(amount_in)).unwrap()
     }
 
     #[test]
@@ -824,6 +872,21 @@ mod tests {
     }
 
     #[test]
+    fn rejects_unsupported_chain_at_construction() {
+        let result = NativeClient::new(
+            Chain::Polygon,
+            "test-api-key".to_string(),
+            HashSet::new(),
+            0.0,
+            HashSet::new(),
+            Duration::from_secs(1),
+            Duration::from_secs(5),
+        );
+
+        assert!(matches!(result, Err(RFQError::InvalidInput(_))));
+    }
+
+    #[test]
     fn creates_indexer_compatible_component_from_relay_orderbook() {
         let weth = Bytes::from_str("0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2").unwrap();
         let usdt = Bytes::from_str("0xdac17f958d2ee523a2206206994597c13d831ec7").unwrap();
@@ -840,8 +903,6 @@ mod tests {
 
         let books = client.group_orderbook(vec![
             NativeOrderbookEntry {
-                base_symbol: "WETH".to_string(),
-                quote_symbol: "USDT".to_string(),
                 base_address: weth.clone(),
                 quote_address: usdt.clone(),
                 minimum_in_base: 0.0,
@@ -849,8 +910,6 @@ mod tests {
                 levels: vec![NativePriceLevel { quantity: 0.0001, price: 3213.12345 }],
             },
             NativeOrderbookEntry {
-                base_symbol: "WETH".to_string(),
-                quote_symbol: "USDT".to_string(),
                 base_address: weth.clone(),
                 quote_address: usdt.clone(),
                 minimum_in_base: 0.0,
@@ -858,8 +917,6 @@ mod tests {
                 levels: vec![NativePriceLevel { quantity: 2.0, price: 3214.0 }],
             },
             NativeOrderbookEntry {
-                base_symbol: "USDT".to_string(),
-                quote_symbol: "WETH".to_string(),
                 base_address: usdt.clone(),
                 quote_address: weth.clone(),
                 minimum_in_base: 100.0,
@@ -867,8 +924,6 @@ mod tests {
                 levels: vec![NativePriceLevel { quantity: 6428.0, price: 1.0 / 3214.0 }],
             },
             NativeOrderbookEntry {
-                base_symbol: "USDT".to_string(),
-                quote_symbol: "WETH".to_string(),
                 base_address: usdt.clone(),
                 quote_address: weth.clone(),
                 minimum_in_base: 100.0,
@@ -907,7 +962,7 @@ mod tests {
     }
 
     #[test]
-    fn merges_mirrored_bid_books_into_one_bid_ask_book() {
+    fn uses_stable_component_id_and_merges_mirrored_books() {
         let weth = Bytes::from_str("0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2").unwrap();
         let usdc = Bytes::from_str("0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48").unwrap();
         let client = NativeClient::new(
@@ -922,8 +977,6 @@ mod tests {
         .unwrap();
         let entries = vec![
             NativeOrderbookEntry {
-                base_symbol: "WETH".to_string(),
-                quote_symbol: "USDC".to_string(),
                 base_address: weth.clone(),
                 quote_address: usdc.clone(),
                 minimum_in_base: 100_000_000_000.0,
@@ -931,8 +984,6 @@ mod tests {
                 levels: vec![NativePriceLevel { quantity: 1.0, price: 2_000.0 }],
             },
             NativeOrderbookEntry {
-                base_symbol: "USDC".to_string(),
-                quote_symbol: "WETH".to_string(),
                 base_address: usdc.clone(),
                 quote_address: weth.clone(),
                 minimum_in_base: 100.0,
@@ -941,13 +992,18 @@ mod tests {
             },
         ];
 
+        let forward_only = client.group_orderbook(vec![entries[0].clone()]);
+        let reverse_only = client.group_orderbook(vec![entries[1].clone()]);
+        let pair = format!("native_{}/{}", hex::encode(&usdc), hex::encode(&weth));
+        let component_id = keccak256(pair.as_bytes()).to_string();
+        assert!(forward_only.contains_key(&component_id));
+        assert!(reverse_only.contains_key(&component_id));
+
         let books = client.group_orderbook(entries.clone());
         let reversed_books = client.group_orderbook(entries.into_iter().rev().collect());
 
         assert_eq!(books, reversed_books);
         assert_eq!(books.len(), 1);
-        let pair = format!("native_{}/{}", hex::encode(&weth), hex::encode(&usdc));
-        let component_id = keccak256(pair.as_bytes()).to_string();
         let book = books.get(&component_id).unwrap();
         assert_eq!(book.base_address, weth);
         assert_eq!(book.quote_address, usdc);
@@ -975,6 +1031,22 @@ mod tests {
         let quote = NativeClient::process_quote_response(response, &params).unwrap();
 
         assert_eq!(quote.amount_in, params.amount_in);
+        assert_eq!(
+            quote
+                .quote_attributes
+                .get("amount_in_offset")
+                .unwrap()
+                .as_ref(),
+            36u32.to_be_bytes()
+        );
+        assert_eq!(
+            quote
+                .quote_attributes
+                .get("deadline_timestamp")
+                .unwrap()
+                .as_ref(),
+            u64::MAX.to_be_bytes()
+        );
     }
 
     #[test]
@@ -991,11 +1063,109 @@ mod tests {
     }
 
     #[test]
-    fn accepts_native_eth_response_using_tycho_zero_address() {
+    fn rejects_quote_with_mismatched_signed_input_amount() {
+        let params = create_test_quote_params();
+        let mut response = successful_quote_response(&params.amount_in.to_string());
+        response.orders[0].seller_token_amount = "2".to_string();
+
+        let result = NativeClient::process_quote_response(response, &params);
+
+        assert!(matches!(
+            result,
+            Err(RFQError::ParsingError(message)) if message.contains("signed input amount mismatch")
+        ));
+    }
+
+    #[test]
+    fn rejects_quote_with_mismatched_effective_input_amount() {
+        let params = create_test_quote_params();
+        let mut response = successful_quote_response(&params.amount_in.to_string());
+        response.orders[0].effective_seller_token_amount = "2".to_string();
+
+        let result = NativeClient::process_quote_response(response, &params);
+
+        assert!(matches!(
+            result,
+            Err(RFQError::ParsingError(message)) if message.contains("effective input amount mismatch")
+        ));
+    }
+
+    #[test]
+    fn rejects_quote_with_mismatched_recipient() {
+        let params = create_test_quote_params();
+        let mut response = successful_quote_response(&params.amount_in.to_string());
+        response.orders[0].recipient = "0x5555555555555555555555555555555555555555".to_string();
+
+        let result = NativeClient::process_quote_response(response, &params);
+
+        assert!(matches!(
+            result,
+            Err(RFQError::ParsingError(message)) if message.contains("recipient mismatch")
+        ));
+    }
+
+    #[test]
+    fn rejects_quote_without_calldata() {
+        let params = create_test_quote_params();
+        let mut response = successful_quote_response(&params.amount_in.to_string());
+        response.tx_request.calldata.clear();
+
+        let result = NativeClient::process_quote_response(response, &params);
+
+        assert!(matches!(
+            result,
+            Err(RFQError::QuoteNotFound(message)) if message.contains("did not include calldata")
+        ));
+    }
+
+    #[test]
+    fn rejects_truncated_trade_calldata() {
+        let params = create_test_quote_params();
+        let mut response = successful_quote_response(&params.amount_in.to_string());
+        response.tx_request.calldata = format!("0x0947c2d9{}", "00".repeat(95));
+
+        let result = NativeClient::process_quote_response(response, &params);
+
+        assert!(matches!(
+            result,
+            Err(RFQError::ParsingError(message)) if message.contains("calldata too short")
+        ));
+    }
+
+    #[test]
+    fn rejects_quote_with_invalid_amount_in_offset() {
+        let params = create_test_quote_params();
+        let mut response = successful_quote_response(&params.amount_in.to_string());
+        response.amount_in_offset = 37;
+
+        let result = NativeClient::process_quote_response(response, &params);
+
+        assert!(matches!(
+            result,
+            Err(RFQError::ParsingError(message)) if message.contains("Invalid Native amountInOffset")
+        ));
+    }
+
+    #[test]
+    fn rejects_quote_with_out_of_bounds_amount_in_offset() {
+        let params = create_test_quote_params();
+        let mut response = successful_quote_response(&params.amount_in.to_string());
+        response.amount_in_offset = 100;
+
+        let result = NativeClient::process_quote_response(response, &params);
+
+        assert!(matches!(
+            result,
+            Err(RFQError::ParsingError(message)) if message.contains("Invalid Native amountInOffset")
+        ));
+    }
+
+    #[test]
+    fn accepts_native_eth_response_using_e_address_alias() {
         let mut params = create_test_quote_params();
         params.token_in = Bytes::zero(20);
         let mut response = successful_quote_response(&params.amount_in.to_string());
-        response.orders[0].seller_token = "0x0000000000000000000000000000000000000000".to_string();
+        response.orders[0].seller_token = "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE".to_string();
         response.tx_request.value = params.amount_in.to_string();
 
         let quote = NativeClient::process_quote_response(response, &params).unwrap();
@@ -1004,7 +1174,51 @@ mod tests {
     }
 
     #[test]
-    fn accepts_native_eth_orderbook_using_tycho_zero_address() {
+    fn rejects_native_quote_with_mismatched_payable_value() {
+        let mut params = create_test_quote_params();
+        params.token_in = Bytes::zero(20);
+        let mut response = successful_quote_response(&params.amount_in.to_string());
+        response.orders[0].seller_token = "0x0000000000000000000000000000000000000000".to_string();
+        response.tx_request.value = "2".to_string();
+
+        let result = NativeClient::process_quote_response(response, &params);
+
+        assert!(matches!(
+            result,
+            Err(RFQError::ParsingError(message)) if message.contains("payable value mismatch")
+        ));
+    }
+
+    #[test]
+    fn rejects_malformed_payable_value() {
+        let params = create_test_quote_params();
+        let mut response = successful_quote_response(&params.amount_in.to_string());
+        response.tx_request.value = "not-a-number".to_string();
+
+        let result = NativeClient::process_quote_response(response, &params);
+
+        assert!(matches!(
+            result,
+            Err(RFQError::ParsingError(message)) if message.contains("txRequest.value")
+        ));
+    }
+
+    #[test]
+    fn rejects_erc20_quote_with_nonzero_payable_value() {
+        let params = create_test_quote_params();
+        let mut response = successful_quote_response(&params.amount_in.to_string());
+        response.tx_request.value = "1".to_string();
+
+        let result = NativeClient::process_quote_response(response, &params);
+
+        assert!(matches!(
+            result,
+            Err(RFQError::ParsingError(message)) if message.contains("payable value mismatch")
+        ));
+    }
+
+    #[test]
+    fn accepts_native_eth_orderbook_using_e_address_alias() {
         let tycho_native_eth = Bytes::zero(20);
         let usdc = Bytes::from_str("0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48").unwrap();
         let client = NativeClient::new(
@@ -1018,15 +1232,15 @@ mod tests {
         )
         .unwrap();
 
-        let books = client.group_orderbook(vec![NativeOrderbookEntry {
-            base_symbol: "ETH".to_string(),
-            quote_symbol: "USDC".to_string(),
-            base_address: tycho_native_eth.clone(),
-            quote_address: usdc,
-            minimum_in_base: 1.0,
-            side: NativeOrderbookSide::Bid,
-            levels: vec![NativePriceLevel { quantity: 1.0, price: 3_000.0 }],
-        }]);
+        let entry: NativeOrderbookEntry = serde_json::from_value(serde_json::json!({
+            "base_address": "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE",
+            "quote_address": usdc.to_string(),
+            "minimum_in_base": 1.0,
+            "side": "bid",
+            "levels": [[1.0, 3_000.0]]
+        }))
+        .unwrap();
+        let books = client.group_orderbook(vec![entry]);
 
         let book = books.values().next().unwrap();
         assert_eq!(book.base_address, tycho_native_eth);
@@ -1047,10 +1261,45 @@ mod tests {
         client
     }
 
+    #[tokio::test]
+    async fn requests_native_token_orderbooks() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut reader = BufReader::new(stream);
+            let mut request_line = String::new();
+            reader
+                .read_line(&mut request_line)
+                .await
+                .unwrap();
+            let mut stream = reader.into_inner();
+            let response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n[]";
+            stream
+                .write_all(response.as_bytes())
+                .await
+                .unwrap();
+            request_line
+        });
+        let client = create_test_client(format!("http://{address}"));
+
+        let orderbook = client.fetch_orderbook().await.unwrap();
+        let request = server.await.unwrap();
+
+        assert!(orderbook.is_empty());
+        assert!(request.starts_with("GET /orderbook?"));
+        assert!(request.contains("chain=ethereum"));
+        assert!(request.contains("showNative=true"));
+    }
+
     async fn create_quote_server(
-        final_status: &'static str,
-        final_body: &'static str,
+        final_status: impl Into<String>,
+        final_body: impl Into<String>,
     ) -> (std::net::SocketAddr, Arc<AtomicUsize>) {
+        let final_status = final_status.into();
+        let final_body = final_body.into();
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .unwrap();
@@ -1073,6 +1322,38 @@ mod tests {
         });
 
         (address, request_count)
+    }
+
+    async fn create_hanging_quote_server() -> std::net::SocketAddr {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            let (_stream, _) = listener.accept().await.unwrap();
+            std::future::pending::<()>().await;
+        });
+
+        address
+    }
+
+    #[tokio::test]
+    async fn handles_orderbook_api_error_with_http_200() {
+        let (address, request_count) = create_quote_server(
+            "200 OK",
+            r#"{"code":171015,"message":"quoted token not available"}"#,
+        )
+        .await;
+        let client = create_test_client(format!("http://{address}"));
+
+        let result = client.fetch_orderbook().await;
+
+        assert!(matches!(
+            result,
+            Err(RFQError::QuoteNotFound(message)) if message.contains("171015")
+        ));
+        assert_eq!(request_count.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
@@ -1099,6 +1380,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn handles_success_false_as_quote_not_found_without_retrying() {
+        let mut response = successful_quote_json("1");
+        response["success"] = serde_json::Value::Bool(false);
+        response["errorMessage"] = serde_json::Value::String("quote unavailable".to_string());
+        let (address, request_count) = create_quote_server("200 OK", response.to_string()).await;
+        let client = create_test_client(format!("http://{address}"));
+
+        let result = client
+            .request_binding_quote(&create_test_quote_params())
+            .await;
+
+        assert!(matches!(
+            result,
+            Err(RFQError::QuoteNotFound(message)) if message.contains("quote unavailable")
+        ));
+        assert_eq!(request_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
     async fn retries_documented_temporary_api_error() {
         let (address, request_count) = create_quote_server(
             "200 OK",
@@ -1112,6 +1412,24 @@ mod tests {
             .await;
 
         assert!(matches!(result, Err(RFQError::QuoteNotFound(_))));
+        assert_eq!(request_count.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn retries_server_error_without_native_error_envelope() {
+        let (address, request_count) =
+            create_quote_server("503 Service Unavailable", "<html>upstream unavailable</html>")
+                .await;
+        let client = create_test_client(format!("http://{address}"));
+
+        let result = client
+            .request_binding_quote(&create_test_quote_params())
+            .await;
+
+        assert!(matches!(
+            result,
+            Err(RFQError::ConnectionError(message)) if message.contains("503 Service Unavailable")
+        ));
         assert_eq!(request_count.load(Ordering::SeqCst), 3);
     }
 
@@ -1130,6 +1448,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn applies_one_timeout_to_the_complete_quote_request() {
+        let address = create_hanging_quote_server().await;
+        let mut client = create_test_client(format!("http://{address}"));
+        client.quote_timeout = Duration::from_millis(50);
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(1),
+            client.request_binding_quote(&create_test_quote_params()),
+        )
+        .await
+        .expect("Native quote timeout did not terminate the request");
+
+        assert!(matches!(
+            result,
+            Err(RFQError::ConnectionError(message)) if message.contains("timed out after 50ms")
+        ));
+    }
+
+    #[tokio::test]
     async fn does_not_retry_documented_authentication_error() {
         let (address, request_count) = create_quote_server(
             "200 OK",
@@ -1144,49 +1481,5 @@ mod tests {
 
         assert!(matches!(result, Err(RFQError::FatalError(_))));
         assert_eq!(request_count.load(Ordering::SeqCst), 1);
-    }
-
-    #[test]
-    fn classifies_only_documented_native_api_codes() {
-        for code in [301016, 405030] {
-            let (retry, error) = NativeClient::classify_api_error(&NativeApiErrorResponse {
-                code,
-                message: "temporary risk failure".to_string(),
-            });
-            assert!(retry);
-            assert!(matches!(error, RFQError::QuoteNotFound(_)));
-        }
-
-        let (retry, error) = NativeClient::classify_api_error(&NativeApiErrorResponse {
-            code: 201005,
-            message: "rate reach limit".to_string(),
-        });
-        assert!(retry);
-        assert!(matches!(error, RFQError::ConnectionError(_)));
-
-        for code in [101010, 171037, 171011, 171015, 101007] {
-            let (retry, error) = NativeClient::classify_api_error(&NativeApiErrorResponse {
-                code,
-                message: "quote unavailable".to_string(),
-            });
-            assert!(!retry);
-            assert!(matches!(error, RFQError::QuoteNotFound(_)));
-        }
-
-        for code in [131003, 131004, 131011, 171018, 171053, 131005] {
-            let (retry, error) = NativeClient::classify_api_error(&NativeApiErrorResponse {
-                code,
-                message: "invalid request".to_string(),
-            });
-            assert!(!retry);
-            assert!(matches!(error, RFQError::InvalidInput(_)));
-        }
-
-        let (retry, error) = NativeClient::classify_api_error(&NativeApiErrorResponse {
-            code: 999999,
-            message: "unknown".to_string(),
-        });
-        assert!(!retry);
-        assert!(matches!(error, RFQError::FatalError(_)));
     }
 }

@@ -254,9 +254,19 @@ contract TychoRouterTestSetup is
         ringSwapV2Executor =
             new RingSwapV2Executor(RING_FEW_FACTORY, RING_SWAP_FACTORY);
 
-        nativeExecutor = new NativeExecutor(NATIVE_ROUTER_V4, DUMMY2, DUMMY3);
+        address nativeRouterV4 = getNativeRouterV4();
+        bool supportsNative = nativeRouterV4 != address(0);
+        if (supportsNative) {
+            // Some protocol tests use fork blocks from before Native V4 was
+            // deployed. The executor is not exercised in those tests, but its
+            // constructor still requires the configured Router to have code.
+            if (nativeRouterV4.code.length == 0) {
+                vm.etch(nativeRouterV4, bytes("1"));
+            }
+            nativeExecutor = new NativeExecutor(nativeRouterV4);
+        }
 
-        address[] memory executors = new address[](26);
+        address[] memory executors = new address[](supportsNative ? 26 : 25);
         executors[0] = address(usv2Executor);
         executors[1] = address(usv3Executor);
         executors[2] = address(pancakev3Executor);
@@ -282,8 +292,16 @@ contract TychoRouterTestSetup is
         executors[22] = address(metricExecutor);
         executors[23] = address(bopAMMExecutor);
         executors[24] = address(ringSwapV2Executor);
-        executors[25] = address(nativeExecutor);
+        if (supportsNative) executors[25] = address(nativeExecutor);
         return executors;
+    }
+
+    function getNativeRouterV4() internal view returns (address) {
+        if (block.chainid == 1) return NATIVE_ROUTER_V4;
+        if (block.chainid == 8453) return NATIVE_ROUTER_V4_BASE;
+        if (block.chainid == 42161) return NATIVE_ROUTER_V4_ARBITRUM;
+        if (block.chainid == 56) return NATIVE_ROUTER_V4_BSC;
+        return address(0);
     }
 
     function deployFeeCalculator() public {
