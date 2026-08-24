@@ -1283,7 +1283,7 @@ mod tests {
 
     use super::*;
     use crate::evm::{
-        engine_db::create_engine,
+        engine_db::{create_engine, SHARED_TYCHO_DB},
         protocol::vm::{
             constants::{BALANCER_V2, ERC20_PROXY_BYTECODE},
             state_builder::EVMPoolStateBuilder,
