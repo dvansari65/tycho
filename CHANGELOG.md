@@ -1,3 +1,11 @@
+## [0.361.0](https://github.com/propeller-heads/tycho/compare/0.360.0...0.361.0) (2026-08-24)
+
+
+### Features
+
+* **simulation:** quote balancer_v3 natively ([b2b4536](https://github.com/propeller-heads/tycho/commit/b2b453648dd4011b0706bcbf1a562f950643c683))
+* **simulation:** quote balancer_v3 natively ([#1326](https://github.com/propeller-heads/tycho/issues/1326)) ([6574281](https://github.com/propeller-heads/tycho/commit/6574281755d9dff06210308119137f5555b7c322))
+
 ## [0.360.0](https://github.com/propeller-heads/tycho/compare/0.359.0...0.360.0) (2026-08-20)
 
 
