@@ -137,6 +137,16 @@ pub const PRICE_LEVEL_STREAM_PREFIX: &str = "pricelevelstream:";
 /// so a single configured executor address covers every pAMM, including auto-detected ones.
 pub const PRICE_LEVEL_STREAM_KEY: &str = "pricelevelstream";
 
+/// Protocol system prefix for pAMM components executed through the PropAMMRouter, so a stale maker
+/// quote retries on Uniswap V3 instead of reverting the route. Venue suffixes follow
+/// `PRICE_LEVEL_STREAM_PREFIX`; only whitelisted venues may use it. Calldata matches the direct
+/// path, so both prefixes share `PropAMMSwapEncoder` and differ only in the executor.
+pub const PROPAMM_FALLBACK_PREFIX: &str = "propammfallback:";
+
+/// The executor-config key serving the whole PropAMMRouter protocol family, mirroring
+/// `PRICE_LEVEL_STREAM_KEY`.
+pub const PROPAMM_FALLBACK_KEY: &str = "propammfallback";
+
 #[cfg(test)]
 mod tests {
     use super::*;
