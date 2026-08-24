@@ -1,3 +1,20 @@
+## [0.362.0](https://github.com/propeller-heads/tycho/compare/0.361.0...0.362.0) (2026-08-24)
+
+
+### Features
+
+* **execution:** add the deployed PropAMMFallbackExecutor address ([9f002be](https://github.com/propeller-heads/tycho/commit/9f002be873c69f22c90991e6c1e0595161fdfc98))
+* **execution:** execute pAMMs via Titan's PropAMMRouter ([37bc5a1](https://github.com/propeller-heads/tycho/commit/37bc5a173363117ab5f3d739d23fc4bec51db13d)), closes [#1212](https://github.com/propeller-heads/tycho/issues/1212) [propeller-heads/fynd#402](https://github.com/propeller-heads/fynd/issues/402)
+* **execution:** fall back to Uniswap V3 when a pAMM reverts ([#1278](https://github.com/propeller-heads/tycho/issues/1278)) ([80f5921](https://github.com/propeller-heads/tycho/commit/80f592179edcc266e07c381796d85557afd9f308))
+* **execution:** model the PropAMMFallback executor ([cf41763](https://github.com/propeller-heads/tycho/commit/cf41763223cd43edad4e9bfdad6d4c48a455f748))
+
+
+### Bug Fixes
+
+* **execution:** correct the PropAMMFallback test executor address ([27c7acf](https://github.com/propeller-heads/tycho/commit/27c7acfcce7582a7a4b3561e145de0e4c800b0ae))
+* **execution:** count the PropAMMRouter's transferFrom once ([d75e1f1](https://github.com/propeller-heads/tycho/commit/d75e1f18ab662d336a0c6c5730f521c698ae366a))
+* **execution:** pass expectedAmountOut in the PropAMMFallback tests ([466c47e](https://github.com/propeller-heads/tycho/commit/466c47e5be577e06835d1db433fae3f9bb43bbcd))
+
 ## [0.361.0](https://github.com/propeller-heads/tycho/compare/0.360.0...0.361.0) (2026-08-24)
 
 
