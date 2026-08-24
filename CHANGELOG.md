@@ -1,3 +1,21 @@
+## [0.363.0](https://github.com/propeller-heads/tycho/compare/0.362.0...0.363.0) (2026-08-24)
+
+
+### Features
+
+* **execution:** execute pAMMs via Titan's PropAMMRouter ([b162696](https://github.com/propeller-heads/tycho/commit/b162696d5c0cbb8cc7db35d67dfa2b0ce1303bcc)), closes [#1212](https://github.com/propeller-heads/tycho/issues/1212) [propeller-heads/fynd#402](https://github.com/propeller-heads/fynd/issues/402)
+* **execution:** model the PropAMMFallback executor ([28be11f](https://github.com/propeller-heads/tycho/commit/28be11f2122ef8229216422b5e697cae5bff8369))
+* **simulation:** route pAMM swaps via the PropAMMRouter by default ([329d5ab](https://github.com/propeller-heads/tycho/commit/329d5ab155e1731d42cbd28357eabdcdfe416e84))
+* **simulation:** select venues that execute via the fallback router ([6a7d46b](https://github.com/propeller-heads/tycho/commit/6a7d46b12877e7da3ec5929a0bdfde34ef7af48f))
+* **simulation:** select venues that execute via the PropAMMRouter ([#1335](https://github.com/propeller-heads/tycho/issues/1335)) ([c69e3a1](https://github.com/propeller-heads/tycho/commit/c69e3a1486cd7218a98233f8e19cb96ae3f18061))
+
+
+### Bug Fixes
+
+* **execution:** correct the PropAMMFallback test executor address ([0a60729](https://github.com/propeller-heads/tycho/commit/0a60729dcf1cff2d83072eba53a3aaeb19de23bd))
+* **execution:** count the PropAMMRouter's transferFrom once ([8be6bb0](https://github.com/propeller-heads/tycho/commit/8be6bb088d8636c02bffbfa5d8760ed7a5bd2b2e))
+* **execution:** pass expectedAmountOut in the PropAMMFallback tests ([412ca0a](https://github.com/propeller-heads/tycho/commit/412ca0a7098279d2ab59abd8065009eb1d0cdaf2))
+
 ## [0.362.0](https://github.com/propeller-heads/tycho/compare/0.361.0...0.362.0) (2026-08-24)
 
 
