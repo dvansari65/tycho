@@ -1,3 +1,12 @@
+## [0.366.1](https://github.com/propeller-heads/tycho/compare/0.366.0...0.366.1) (2026-08-25)
+
+
+### Bug Fixes
+
+* increase 'days since last traded' base token default ([5977217](https://github.com/propeller-heads/tycho/commit/5977217ecc04cee7c0c2ad1dadaa621f89e58ad9))
+* support polygon and robinhood in simulation examples ([75de120](https://github.com/propeller-heads/tycho/commit/75de120e21659461c82f87ded54d6e602501c318))
+* update Base tokens filter default and simulation exampled ([#1356](https://github.com/propeller-heads/tycho/issues/1356)) ([4e4c5d3](https://github.com/propeller-heads/tycho/commit/4e4c5d3d6b7d497f3cdb42d1f24c245262b8f7ca))
+
 ## [0.366.0](https://github.com/propeller-heads/tycho/compare/0.365.0...0.366.0) (2026-08-25)
 
 
