@@ -1,3 +1,66 @@
+## [0.364.0](https://github.com/propeller-heads/tycho/compare/0.363.0...0.364.0) (2026-08-24)
+
+
+### Features
+
+* **sim:** cache get_amount_limits per (sell, buy) pair (bypassed under live overrides) ([1d4b417](https://github.com/propeller-heads/tycho/commit/1d4b417f53cc8cbd85c7acc95b00d62ad458b5ea))
+* **sim:** compute spot price lazily on cache miss (bypassed under live overrides) ([07393cb](https://github.com/propeller-heads/tycho/commit/07393cb34b52c41d7e7a64d91f9a705f82c7bf13))
+* **sim:** invalidate and re-warm caches in update_pool_state ([19a4894](https://github.com/propeller-heads/tycho/commit/19a4894b9471044515e6734b14148b567b418591))
+* **sim:** lazy spot prices + limit caching for VM get_amount_out ([#1219](https://github.com/propeller-heads/tycho/issues/1219)) ([1c12861](https://github.com/propeller-heads/tycho/commit/1c12861de961bc9547c75d1b58b2cd394f5cde03))
+* **sim:** stop eager spot-price recompute in get_amount_out; invalidate caches (override pools stay eager) ([1da181e](https://github.com/propeller-heads/tycho/commit/1da181e04f075b9d1582372903d85e0b8705ac73))
+
+
+### Bug Fixes
+
+* **sim:** clear limit_cache on block-env change in delta_transition ([43c592d](https://github.com/propeller-heads/tycho/commit/43c592d6013ef40221a6178abe0e4031a9324768))
+* **sim:** clone spot_price_caller in manual Clone impl ([4cb410a](https://github.com/propeller-heads/tycho/commit/4cb410addfe3dad41aa2d01b3a6b6c4711ba4e69))
+* **simulation:** exclude bench fixtures and test assets from cargo package ([a155dca](https://github.com/propeller-heads/tycho/commit/a155dcafd1fff484526a4f2b5527dc578fd09cf3))
+* **simulation:** import SHARED_TYCHO_DB in state tests ([5d4bd44](https://github.com/propeller-heads/tycho/commit/5d4bd448e30a3e7f43e059e13ef53a01bc45ee13))
+* **simulation:** stamp cached VM limits with block context; collapse caches ([94c400f](https://github.com/propeller-heads/tycho/commit/94c400f2a6448ab91381397db638160f915f0b3b)), closes [#1219](https://github.com/propeller-heads/tycho/issues/1219)
+
+## [0.363.0](https://github.com/propeller-heads/tycho/compare/0.362.0...0.363.0) (2026-08-24)
+
+
+### Features
+
+* **execution:** execute pAMMs via Titan's PropAMMRouter ([b162696](https://github.com/propeller-heads/tycho/commit/b162696d5c0cbb8cc7db35d67dfa2b0ce1303bcc)), closes [#1212](https://github.com/propeller-heads/tycho/issues/1212) [propeller-heads/fynd#402](https://github.com/propeller-heads/fynd/issues/402)
+* **execution:** model the PropAMMFallback executor ([28be11f](https://github.com/propeller-heads/tycho/commit/28be11f2122ef8229216422b5e697cae5bff8369))
+* **simulation:** route pAMM swaps via the PropAMMRouter by default ([329d5ab](https://github.com/propeller-heads/tycho/commit/329d5ab155e1731d42cbd28357eabdcdfe416e84))
+* **simulation:** select venues that execute via the fallback router ([6a7d46b](https://github.com/propeller-heads/tycho/commit/6a7d46b12877e7da3ec5929a0bdfde34ef7af48f))
+* **simulation:** select venues that execute via the PropAMMRouter ([#1335](https://github.com/propeller-heads/tycho/issues/1335)) ([c69e3a1](https://github.com/propeller-heads/tycho/commit/c69e3a1486cd7218a98233f8e19cb96ae3f18061))
+
+
+### Bug Fixes
+
+* **execution:** correct the PropAMMFallback test executor address ([0a60729](https://github.com/propeller-heads/tycho/commit/0a60729dcf1cff2d83072eba53a3aaeb19de23bd))
+* **execution:** count the PropAMMRouter's transferFrom once ([8be6bb0](https://github.com/propeller-heads/tycho/commit/8be6bb088d8636c02bffbfa5d8760ed7a5bd2b2e))
+* **execution:** pass expectedAmountOut in the PropAMMFallback tests ([412ca0a](https://github.com/propeller-heads/tycho/commit/412ca0a7098279d2ab59abd8065009eb1d0cdaf2))
+
+## [0.362.0](https://github.com/propeller-heads/tycho/compare/0.361.0...0.362.0) (2026-08-24)
+
+
+### Features
+
+* **execution:** add the deployed PropAMMFallbackExecutor address ([9f002be](https://github.com/propeller-heads/tycho/commit/9f002be873c69f22c90991e6c1e0595161fdfc98))
+* **execution:** execute pAMMs via Titan's PropAMMRouter ([37bc5a1](https://github.com/propeller-heads/tycho/commit/37bc5a173363117ab5f3d739d23fc4bec51db13d)), closes [#1212](https://github.com/propeller-heads/tycho/issues/1212) [propeller-heads/fynd#402](https://github.com/propeller-heads/fynd/issues/402)
+* **execution:** fall back to Uniswap V3 when a pAMM reverts ([#1278](https://github.com/propeller-heads/tycho/issues/1278)) ([80f5921](https://github.com/propeller-heads/tycho/commit/80f592179edcc266e07c381796d85557afd9f308))
+* **execution:** model the PropAMMFallback executor ([cf41763](https://github.com/propeller-heads/tycho/commit/cf41763223cd43edad4e9bfdad6d4c48a455f748))
+
+
+### Bug Fixes
+
+* **execution:** correct the PropAMMFallback test executor address ([27c7acf](https://github.com/propeller-heads/tycho/commit/27c7acfcce7582a7a4b3561e145de0e4c800b0ae))
+* **execution:** count the PropAMMRouter's transferFrom once ([d75e1f1](https://github.com/propeller-heads/tycho/commit/d75e1f18ab662d336a0c6c5730f521c698ae366a))
+* **execution:** pass expectedAmountOut in the PropAMMFallback tests ([466c47e](https://github.com/propeller-heads/tycho/commit/466c47e5be577e06835d1db433fae3f9bb43bbcd))
+
+## [0.361.0](https://github.com/propeller-heads/tycho/compare/0.360.0...0.361.0) (2026-08-24)
+
+
+### Features
+
+* **simulation:** quote balancer_v3 natively ([b2b4536](https://github.com/propeller-heads/tycho/commit/b2b453648dd4011b0706bcbf1a562f950643c683))
+* **simulation:** quote balancer_v3 natively ([#1326](https://github.com/propeller-heads/tycho/issues/1326)) ([6574281](https://github.com/propeller-heads/tycho/commit/6574281755d9dff06210308119137f5555b7c322))
+
 ## [0.360.0](https://github.com/propeller-heads/tycho/compare/0.359.0...0.360.0) (2026-08-20)
 
 
