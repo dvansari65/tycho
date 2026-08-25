@@ -24,7 +24,7 @@ tests:
           tick_spacing: "0x0a"
         creation_tx: "0x107e8160b39e8a24feec22ea937f191413b31a8c16250775473992767edf0218"
         skip_simulation: false
-        skip_execution: true
+        skip_execution: false
 
   # The new fee module first sets dfc_baseFee at block 44,221,840, then updates
   # dfc_feeCap and dfc_scalingFactor independently at block 44,227,070.
