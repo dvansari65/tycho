@@ -1,3 +1,12 @@
+## [0.365.0](https://github.com/propeller-heads/tycho/compare/0.364.0...0.365.0) (2026-08-25)
+
+
+### Features
+
+* **sushiswap-v2:** enable Base in the live integration test ([c050eec](https://github.com/propeller-heads/tycho/commit/c050eec95c50bbb77ed3a8f2f87388c81b4f29ea))
+* **sushiswap-v2:** register Base support in execution and examples ([075bd25](https://github.com/propeller-heads/tycho/commit/075bd2553df5d53581e5c23427a9488ba64b3155))
+* **sushiswap-v2:** register Base support in execution and examples ([#1305](https://github.com/propeller-heads/tycho/issues/1305)) ([4218e30](https://github.com/propeller-heads/tycho/commit/4218e3095681dd580128abb46b8d252f2d1050f8))
+
 ## [0.364.0](https://github.com/propeller-heads/tycho/compare/0.363.0...0.364.0) (2026-08-24)
 
 
