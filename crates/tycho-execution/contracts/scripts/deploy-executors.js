@@ -29,6 +29,7 @@ const deploy_protocols = {
         "native_wrapper",
         "rfq:liquorice",
         "vm:fermiswap",
+        "vm:liquidityparty",
         "vm:bopamm",
         "rfq:metric",
         "pricelevelstream",
