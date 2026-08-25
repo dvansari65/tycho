@@ -59,15 +59,14 @@ impl PriceLevelStreamProcessor {
         // The default venues are served under their names, auto-detection additionally serves
         // any newly streamed pAMM under its address.
         //
-        // The PropAMMRouter path is off here: this test measures how well a venue's own quote
-        // matches its own fill. Through the router a stale quote silently executes on the
-        // Uniswap V3 fallback instead of reverting, which reads as a quote mismatch and hides
-        // the staleness the revert classification below records.
+        // Whitelisted venues go through the PropAMMRouter, as they do for consumers. The venue
+        // itself fills, because execution overrides its registry slot (see `oracle_overrides`).
+        // The Uniswap V3 fallback is reached only for a block with no collected overrides,
+        // counted by `tycho_integration_price_level_oracle_override_misses_total`.
         let stream = PriceLevelStreamBuilder::new()
             .with_known_pamms()
             .auto_detect(true)
             .with_tokens(all_tokens.clone())
-            .without_fallback_router()
             .build();
 
         let mut emitter = SampledEmitter::new(self.sample_size, self.block_interval);

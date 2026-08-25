@@ -47,12 +47,16 @@ Key optional flags: `--no-tls`, `--disable-onchain`, `--disable-rfq`,
     chosen block's latest snapshot back until the stream moves to the next block (least drift to
     the finalized block), samples pair states, validates `get_limits` / `get_amount_out`. Marks
     the served venues stale in metrics when no Titan message arrives within
-    `--price-level-stream-stale-threshold-secs`. Execution is simulated at exactly the quoted block with no oracle overrides, so it succeeds
-    only when Titan built that block and the pAMM's oracle update landed on-chain (i.e. the
-    block contains a taker fill); `StaleUpdate` reverts are recorded as expected
-    (`tycho_integration_execution_stale_quotes_total`). Encoding resolves every
-    `pricelevelstream:*` protocol through the single `pricelevelstream` entry in
-    `executor_addresses.json` (the generic PropAMMExecutor)
+    `--price-level-stream-stale-threshold-secs`. Execution is simulated at the quoted block with
+    the overrides `oracle_overrides.rs` collected for it. Venues on the PropAMMRouter whitelist
+    are served under `propammfallback:*` and execute through the router; the others stay on
+    `pricelevelstream:*`. Both families resolve through their single `pricelevelstream` /
+    `propammfallback` entry in `executor_addresses.json` (the generic PropAMMExecutor and the
+    PropAMMFallbackExecutor). A block with no collected overrides falls to the router's Uniswap V3
+    fallback (`tycho_integration_price_level_oracle_override_misses_total`); a venue called
+    directly reverts `StaleUpdate` (`tycho_integration_execution_stale_quotes_total`)
+- **`oracle_overrides.rs`**: `OracleOverrides` — keeps the storage overrides Titan's
+  `pamm_quote_stream` publishes, per quoted block. FermiSwap only
 - **`statistics.rs`**: `TestStatistics` + `ProtocolStatistics` — per-protocol counters for
   simulation success/failure, execution reverts, slippage, `get_limits` / `get_amount_out` calls
 - **`metrics.rs`**: Prometheus metrics (served on `--metrics-port`, default 9898)

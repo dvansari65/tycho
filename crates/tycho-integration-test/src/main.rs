@@ -1,5 +1,6 @@
 mod fee_fetcher;
 mod metrics;
+mod oracle_overrides;
 mod statistics;
 mod stream_processor;
 
@@ -29,7 +30,9 @@ use tracing::{debug, error, info, warn};
 use tracing_subscriber::EnvFilter;
 use tycho_client::feed::SynchronizerState;
 use tycho_common::{simulation::protocol_sim::ProtocolSim, Bytes};
-use tycho_execution::encoding::evm::{get_router_address, PRICE_LEVEL_STREAM_PREFIX};
+use tycho_execution::encoding::evm::{
+    get_router_address, PRICE_LEVEL_STREAM_PREFIX, PROPAMM_FALLBACK_PREFIX,
+};
 use tycho_simulation::{
     evm::protocol::cowamm::constants::PROTOCOL_SYSTEM as COWAMM_PROTOCOL_SYSTEM,
     protocol::models::ProtocolComponent,
@@ -53,6 +56,7 @@ use tycho_test::{
 
 use crate::{
     fee_fetcher::{fetch_router_fee_on_output, RouterFeeOnOutput},
+    oracle_overrides::OracleOverrides,
     statistics::TestStatistics,
     stream_processor::{
         price_level_stream_processor::PriceLevelStreamProcessor,
@@ -420,6 +424,13 @@ async fn run(cli: Cli) -> miette::Result<()> {
         }
     }
 
+    // Without the overrides the venue reverts `StaleUpdate()`.
+    let oracle_overrides = if price_level_handle.is_some() && !cli.disable_execution {
+        OracleOverrides::spawn().map(Arc::new)
+    } else {
+        None
+    };
+
     let tycho_state = Arc::new(RwLock::new(TychoState::default()));
     // Only collect statistics when max_blocks is set; avoids unbounded growth for indefinite runs
     let statistics: Option<Arc<RwLock<TestStatistics>>> = if cli.max_blocks > 0 {
@@ -558,6 +569,7 @@ async fn run(cli: Cli) -> miette::Result<()> {
                         let tycho_state = tycho_state.clone();
                         let statistics = statistics.clone();
                         let token_prices = token_prices.clone();
+                        let oracle_overrides = oracle_overrides.clone();
                         let permit = protocol_semaphore
                             .clone()
                             .acquire_owned()
@@ -565,7 +577,7 @@ async fn run(cli: Cli) -> miette::Result<()> {
                             .into_diagnostic()
                             .wrap_err("Failed to acquire protocol permit")?;
                         tokio::spawn(async move {
-                            if let Err(e) = process_update(cli, chain, rpc_tools, tycho_state, statistics, token_prices, router_fee, &update).await {
+                            if let Err(e) = process_update(cli, chain, rpc_tools, tycho_state, statistics, token_prices, router_fee, oracle_overrides, &update).await {
                                 warn!("{}", format_error_chain(&e));
                             }
                             drop(permit);
@@ -595,6 +607,7 @@ async fn run(cli: Cli) -> miette::Result<()> {
                         let tycho_state = tycho_state.clone();
                         let statistics = statistics.clone();
                         let token_prices = token_prices.clone();
+                        let oracle_overrides = oracle_overrides.clone();
                         let permit = rfq_semaphore
                             .clone()
                             .acquire_owned()
@@ -602,7 +615,7 @@ async fn run(cli: Cli) -> miette::Result<()> {
                             .into_diagnostic()
                             .wrap_err("Failed to acquire RFQ permit")?;
                         tokio::spawn(async move {
-                            if let Err(e) = process_update(cli, chain, rpc_tools, tycho_state, statistics, token_prices, router_fee, &update).await {
+                            if let Err(e) = process_update(cli, chain, rpc_tools, tycho_state, statistics, token_prices, router_fee, oracle_overrides, &update).await {
                                 warn!("{}", format_error_chain(&e));
                             }
                             drop(permit);
@@ -637,6 +650,7 @@ async fn run(cli: Cli) -> miette::Result<()> {
                         let tycho_state = tycho_state.clone();
                         let statistics = statistics.clone();
                         let token_prices = token_prices.clone();
+                        let oracle_overrides = oracle_overrides.clone();
                         let permit = price_level_semaphore
                             .clone()
                             .acquire_owned()
@@ -644,7 +658,7 @@ async fn run(cli: Cli) -> miette::Result<()> {
                             .into_diagnostic()
                             .wrap_err("Failed to acquire price level stream permit")?;
                         tokio::spawn(async move {
-                            if let Err(e) = process_update(cli, chain, rpc_tools, tycho_state, statistics, token_prices, router_fee, &update).await {
+                            if let Err(e) = process_update(cli, chain, rpc_tools, tycho_state, statistics, token_prices, router_fee, oracle_overrides, &update).await {
                                 warn!("{}", format_error_chain(&e));
                             }
                             drop(permit);
@@ -873,6 +887,7 @@ async fn process_update(
     statistics: Option<Arc<RwLock<TestStatistics>>>,
     token_prices: SharedTokenPrices,
     router_fee: RouterFeeOnOutput,
+    oracle_overrides: Option<Arc<OracleOverrides>>,
     update: &StreamUpdate,
 ) -> miette::Result<()> {
     info!(
@@ -1050,11 +1065,8 @@ async fn process_update(
             }
         }
         UpdateType::PriceLevelStream => {
-            // Price level quotes target the block Titan was building when it streamed them, so
-            // execution must be simulated at exactly that block: only when Titan actually won it
-            // and the maker's oracle update landed on-chain does the swap execute against the
-            // state the quotes were derived from. The processor emits an update only once Titan
-            // streams the next block, so the target block is already finalizing by now.
+            // The quotes target the block Titan was building, so execution is simulated at
+            // exactly that block: the overrides carry its timestamp.
             let target_block = update.update.block_number_or_timestamp;
             let poll_interval = Duration::from_millis(cli.rpc_poll_interval_ms);
             // RPC failures propagate instead of counting as a miss: the miss metric means "the
@@ -1234,13 +1246,37 @@ async fn process_update(
         return Ok(());
     }
 
-    let results =
-        match simulate_swap_transaction(&rpc_tools, block_execution_info.clone(), &block, None)
-            .await
-        {
-            Ok(results) => results,
-            Err((e, _, _)) => return Err(e),
-        };
+    // Titan publishes overrides per block, so only price level stream updates take them.
+    let oracle_overwrites = match update.update_type {
+        UpdateType::PriceLevelStream => {
+            let overwrites = oracle_overrides
+                .as_ref()
+                .and_then(|overrides| overrides.for_block(block.header.number));
+            if overwrites.is_none() {
+                metrics::record_price_level_oracle_override_miss();
+                debug!(
+                    block = block.number(),
+                    "Titan published no pAMM state overrides for the quoted block; simulating on \
+                     the indexed state"
+                );
+            }
+            overwrites
+        }
+        UpdateType::Protocol | UpdateType::Rfq => None,
+    };
+
+    let results = match simulate_swap_transaction(
+        &rpc_tools,
+        block_execution_info.clone(),
+        &block,
+        None,
+        oracle_overwrites,
+    )
+    .await
+    {
+        Ok(results) => results,
+        Err((e, _, _)) => return Err(e),
+    };
 
     let mut n_reverts = 0;
     let mut n_failures = 0;
@@ -1255,14 +1291,9 @@ async fn process_update(
         }
         .clone();
 
-        // Price level stream executions run without oracle-lane overrides, so they only succeed
-        // when the target block was built by Titan AND the maker's oracle update landed on-chain.
-        // A staleness revert is that designed outcome, not an integration failure — record it
-        // separately and keep the revert metrics meaningful.
-        if let Some(pamm) = execution_info
-            .protocol_system
-            .strip_prefix(PRICE_LEVEL_STREAM_PREFIX)
-        {
+        // A `StaleUpdate()` revert is an expected outcome, not an integration failure, so it
+        // is recorded separately from the revert metrics.
+        if let Some(pamm) = pamm_venue(&execution_info.protocol_system) {
             if let TychoExecutionResult::Revert { reason, .. } = result {
                 if is_oracle_stale_revert(pamm, reason) {
                     debug!(
@@ -1940,13 +1971,18 @@ const STALE_UPDATE_SELECTOR: &str = "666a2814";
 /// feed.
 const FEED_STALLED_SELECTOR: &str = "9a0423af";
 
-/// Returns whether a revert reason is the freshness guard of the given pAMM (the bare venue
-/// name, without the `pricelevelstream:` prefix): `StaleUpdate()` from the priority-update
-/// registry for every pAMM, plus `FeedStalled()` from Metric's own price feed.
+/// The bare venue name of a pAMM component, or `None` for any other protocol system.
+fn pamm_venue(protocol_system: &str) -> Option<&str> {
+    protocol_system
+        .strip_prefix(PRICE_LEVEL_STREAM_PREFIX)
+        .or_else(|| protocol_system.strip_prefix(PROPAMM_FALLBACK_PREFIX))
+}
+
+/// Returns whether a revert reason is the freshness guard of `pamm`: `StaleUpdate()` for every
+/// pAMM, plus `FeedStalled()` for Metric.
 ///
-/// Selectors are matched without a `0x` prefix: the guard error can reach the router wrapped in
-/// an outer error (e.g. `WrappedError(feed, 0x…, …)`) whose decoded reason carries the inner
-/// selector only as ABI-encoded bytes — a bare hex substring with no `0x`.
+/// Selectors are matched without a `0x` prefix, because a wrapped error carries the inner
+/// selector as ABI-encoded bytes.
 fn is_oracle_stale_revert(pamm: &str, reason: &str) -> bool {
     if reason.contains("StaleUpdate") || reason.contains(STALE_UPDATE_SELECTOR) {
         return true;
@@ -2012,7 +2048,23 @@ mod tests {
     use clap::Parser;
     use rstest::rstest;
 
-    use super::{is_oracle_stale_revert, is_sampled_block, Cli};
+    use super::{is_oracle_stale_revert, is_sampled_block, pamm_venue, Cli};
+
+    #[rstest]
+    #[case::direct("pricelevelstream:fermiswap", Some("fermiswap"))]
+    #[case::through_the_router("propammfallback:fermiswap", Some("fermiswap"))]
+    #[case::auto_detected(
+        "pricelevelstream:0x5979458912f80b96d30d4220af8e2e4925a33320",
+        Some("0x5979458912f80b96d30d4220af8e2e4925a33320")
+    )]
+    #[case::indexed_pamm("vm:fermiswap", None)]
+    #[case::other_protocol("uniswap_v3", None)]
+    fn the_venue_is_read_from_either_pamm_family(
+        #[case] protocol_system: &str,
+        #[case] expected: Option<&str>,
+    ) {
+        assert_eq!(pamm_venue(protocol_system), expected);
+    }
 
     #[rstest]
     #[case::stale_update_name("fermiswap", "execution reverted: StaleUpdate()")]
