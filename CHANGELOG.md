@@ -1,3 +1,11 @@
+## [0.366.0](https://github.com/propeller-heads/tycho/compare/0.365.0...0.366.0) (2026-08-25)
+
+
+### Features
+
+* add liquidityparty executor ([988e554](https://github.com/propeller-heads/tycho/commit/988e5543c7304ef57b0977b136159e07d71bcbc2))
+* add liquidityparty executor ([#1314](https://github.com/propeller-heads/tycho/issues/1314)) ([45abef7](https://github.com/propeller-heads/tycho/commit/45abef76e0c98ccd398c6db664bfef2e93c05ac5))
+
 ## [0.365.0](https://github.com/propeller-heads/tycho/compare/0.364.0...0.365.0) (2026-08-25)
 
 
