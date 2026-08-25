@@ -29,10 +29,11 @@ const deploy_protocols = {
         "native_wrapper",
         "rfq:liquorice",
         "vm:fermiswap",
+        "vm:liquidityparty",
         "vm:bopamm",
         "rfq:metric",
         "pricelevelstream",
-        "vm:liquidityparty",
+        "propammfallback",
     ],
     "base": [
         "uniswap_v2",
