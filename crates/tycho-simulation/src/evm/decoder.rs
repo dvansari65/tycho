@@ -13,7 +13,7 @@ use tycho_client::feed::{synchronizer::ComponentWithState, BlockHeader, FeedMess
 use tycho_common::{
     dto::{ChangeType, ProtocolStateDelta},
     models::{blockchain::BlockAggregatedChanges, token::Token, Chain},
-    simulation::protocol_sim::{Balances, ProtocolSim},
+    simulation::protocol_sim::{Balances, BlockContext, ProtocolSim},
     Bytes,
 };
 #[cfg(test)]
@@ -104,6 +104,9 @@ where
     /// Live override providers keyed by `protocol_system`. A pool of that protocol subscribes to
     /// its provider at creation time and reads fresh overrides on every simulation.
     override_providers: HashMap<String, Arc<dyn StateOverrideProvider>>,
+    /// Used to project a confirmed block header onto the next block when deriving the execution
+    /// block for block-sensitive states.
+    chain: Chain,
 }
 
 impl<H> Default for TychoStreamDecoder<H>
@@ -136,6 +139,47 @@ where
             registry: HashMap::new(),
             inclusion_filters: HashMap::new(),
             override_providers: HashMap::new(),
+            chain: Chain::Ethereum,
+        }
+    }
+
+    /// Sets the chain whose block time is used to project a confirmed header onto the block a
+    /// quote will execute in. Defaults to [`Chain::Ethereum`].
+    pub fn set_chain(&mut self, chain: Chain) {
+        self.chain = chain;
+    }
+
+    /// The block a quote produced from `header` is expected to execute in.
+    ///
+    /// A partial (flashblock) header describes a block that is still open, so a quote can still
+    /// land in it. A confirmed header describes a closed block, so the quote targets the next one.
+    fn execution_block(&self, header: &BlockHeader) -> BlockContext {
+        if header.partial_block_index.is_some() {
+            BlockContext::new(header.number, header.timestamp)
+        } else {
+            BlockContext::new(header.number + 1, header.timestamp + self.chain.block_time_secs())
+        }
+    }
+
+    /// Advances every state to `execution_block` via [`ProtocolSim::apply_block`].
+    ///
+    /// States already being emitted are advanced in place. Stored states absent from this
+    /// message are advanced in place under the write guard and cloned into `updated_states`
+    /// only when their quoting behavior changed — so an idle block-sensitive pool costs one
+    /// virtual call per message and zero clones, and consumers are only told about pools whose
+    /// quotes actually moved.
+    fn refresh_execution_block(
+        updated_states: &mut HashMap<String, Box<dyn ProtocolSim>>,
+        stored_states: &mut HashMap<String, Box<dyn ProtocolSim>>,
+        execution_block: &BlockContext,
+    ) {
+        for state in updated_states.values_mut() {
+            state.apply_block(execution_block);
+        }
+        for (id, state) in stored_states.iter_mut() {
+            if !updated_states.contains_key(id) && state.apply_block(execution_block) {
+                updated_states.insert(id.clone(), state.clone_box());
+            }
         }
     }
 
@@ -953,6 +997,15 @@ where
                 .contains(id)
         });
 
+        if let Some(header) = current_block.as_ref() {
+            let execution_block = self.execution_block(header);
+            Self::refresh_execution_block(
+                &mut updated_states,
+                &mut state_guard.states,
+                &execution_block,
+            );
+        }
+
         state_guard
             .states
             .extend(updated_states.clone());
@@ -1047,6 +1100,17 @@ where
                 ) {
                     warn!(pool = id, error = %e, "EphemeralDeltaTransitionError");
                 }
+            }
+        }
+
+        // `header` is the block being built, so it already *is* the execution block — unlike
+        // `decode`, there is nothing to project forward here. Only the delta-applied clones need
+        // advancing: this path is read-only, and the stored states were already advanced to this
+        // block by `decode()` on the confirmed stream.
+        if let Some(header) = current_block.as_ref() {
+            let execution_block = BlockContext::new(header.number, header.timestamp);
+            for state in updated_states.values_mut() {
+                state.apply_block(&execution_block);
             }
         }
 
@@ -1263,6 +1327,123 @@ mod tests {
     use tycho_common::{models::Chain, Bytes};
 
     use super::*;
+
+    fn header_at(number: u64, timestamp: u64, partial: Option<u32>) -> BlockHeader {
+        BlockHeader {
+            hash: Bytes::from([0u8; 32]),
+            number,
+            parent_hash: Bytes::from([0u8; 32]),
+            revert: false,
+            timestamp,
+            partial_block_index: partial,
+        }
+    }
+
+    /// A block-sensitive state whose execution timestamp we can read back.
+    fn block_sensitive_state() -> Box<dyn ProtocolSim> {
+        use crate::evm::protocol::{
+            aerodrome_slipstreams::state::AerodromeSlipstreamsState,
+            utils::{
+                slipstreams::{dynamic_fee_module::DynamicFeeConfig, observations::Observation},
+                uniswap::{tick_list::TickInfo, tick_math::get_sqrt_ratio_at_tick},
+            },
+        };
+
+        Box::new(
+            AerodromeSlipstreamsState::new(
+                "block-sensitive".to_string(),
+                0,
+                1_000_000_000_000_000_000,
+                get_sqrt_ratio_at_tick(0).unwrap(),
+                0,
+                1,
+                3000,
+                1,
+                0,
+                vec![TickInfo::new(-120, 0).unwrap(), TickInfo::new(120, 0).unwrap()],
+                vec![Observation { block_timestamp: 500, initialized: true, ..Default::default() }],
+                DynamicFeeConfig::new(2700, 30_000, 0, true, 750),
+            )
+            .expect("state should build"),
+        )
+    }
+
+    #[test]
+    fn confirmed_header_targets_the_next_block() {
+        let mut decoder = TychoStreamDecoder::<BlockHeader>::new();
+        decoder.set_chain(Chain::Base);
+
+        let execution_block = decoder.execution_block(&header_at(100, 1_000, None));
+
+        assert_eq!(execution_block.number(), 101);
+        assert_eq!(execution_block.timestamp(), 1_000 + Chain::Base.block_time_secs());
+    }
+
+    #[test]
+    fn partial_header_targets_the_block_that_is_still_open() {
+        let mut decoder = TychoStreamDecoder::<BlockHeader>::new();
+        decoder.set_chain(Chain::Base);
+
+        let execution_block = decoder.execution_block(&header_at(100, 1_000, Some(3)));
+
+        assert_eq!(execution_block.number(), 100);
+        assert_eq!(execution_block.timestamp(), 1_000);
+    }
+
+    #[test]
+    fn refresh_re_emits_a_state_whose_fee_flipped_without_a_delta() {
+        // The pool traded in block 100 and has no delta afterwards. Crossing into block 101
+        // flips its fee branch (dynamic -> initial), so the refresh must advance the stored
+        // state in place and emit a copy to consumers.
+        let mut stored = HashMap::from([("block-sensitive".to_string(), {
+            let mut state = block_sensitive_state();
+            state.apply_block(&BlockContext::new(100, 500));
+            state
+        })]);
+        let mut updated: HashMap<String, Box<dyn ProtocolSim>> = HashMap::new();
+
+        TychoStreamDecoder::<BlockHeader>::refresh_execution_block(
+            &mut updated,
+            &mut stored,
+            &BlockContext::new(101, 502),
+        );
+
+        let emitted = updated
+            .get("block-sensitive")
+            .expect("a fee flip must be emitted even without a delta");
+        assert_eq!(emitted.fee(), 750.0 / 1_000_000.0);
+        // The stored copy was advanced in place as well.
+        assert_eq!(stored["block-sensitive"].fee(), 750.0 / 1_000_000.0);
+    }
+
+    #[test]
+    fn refresh_stays_quiet_when_no_fee_changed() {
+        // An idle block-sensitive pool (fee branch unchanged) and a block-insensitive pool:
+        // neither must be re-emitted.
+        let mut stored: HashMap<String, Box<dyn ProtocolSim>> = HashMap::from([
+            ("idle-sensitive".to_string(), {
+                let mut state = block_sensitive_state();
+                state.apply_block(&BlockContext::new(101, 502));
+                state
+            }),
+            (
+                "univ2".to_string(),
+                Box::new(crate::evm::protocol::uniswap_v2::state::UniswapV2State::new(
+                    U256::from(1_000_000u64),
+                    U256::from(1_000_000u64),
+                )) as Box<dyn ProtocolSim>,
+            ),
+        ]);
+        let mut updated: HashMap<String, Box<dyn ProtocolSim>> = HashMap::new();
+
+        TychoStreamDecoder::<BlockHeader>::refresh_execution_block(
+            &mut updated,
+            &mut stored,
+            &BlockContext::new(102, 504),
+        );
+
+        assert!(updated.is_empty());
+    }
     use crate::evm::protocol::{curve::CurveState, uniswap_v2::state::UniswapV2State};
 
     #[test]

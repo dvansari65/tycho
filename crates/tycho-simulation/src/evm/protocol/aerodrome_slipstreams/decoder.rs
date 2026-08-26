@@ -200,6 +200,8 @@ impl TryFromWithBlock<ComponentWithState, BlockHeader> for AerodromeSlipstreamsS
 
         AerodromeSlipstreamsState::new(
             snapshot.component.id.clone(),
+            // Seed value only: the stream decoder points every block-sensitive state at the
+            // execution block before the snapshot reaches a consumer.
             block.timestamp,
             liquidity,
             sqrt_price,

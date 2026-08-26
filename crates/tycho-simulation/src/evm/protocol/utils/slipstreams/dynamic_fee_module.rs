@@ -128,6 +128,27 @@ impl DynamicFeeConfig {
     }
 }
 
+/// A resolved swap fee, in pips, plus whether resolving it required a TWAP `observe`.
+///
+/// The module short-circuits to the initial fee before touching the oracle, so a swap that pays
+/// the initial fee does not pay for the observation reads either.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ResolvedFee {
+    pub(crate) fee: u32,
+    pub(crate) observed_twap: bool,
+}
+
+impl ResolvedFee {
+    fn flat(fee: u32) -> Self {
+        Self { fee, observed_twap: false }
+    }
+}
+
+/// Resolves the fee a swap executing at `execution_timestamp` would pay.
+///
+/// `execution_timestamp` is the timestamp of the block the swap lands in, not the block the state
+/// was decoded from. The initial-vs-dynamic branch is exactly the module's on-chain test: the
+/// initial fee applies until an observation has been written at that timestamp.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn get_dynamic_fee(
     dfc: &DynamicFeeConfig,
@@ -137,20 +158,21 @@ pub(crate) fn get_dynamic_fee(
     observation_index: u16,
     observation_cardinality: u16,
     observations: &Observations,
-    blocktime: u32,
-) -> Result<u32, SimulationError> {
+    execution_timestamp: u32,
+) -> Result<ResolvedFee, SimulationError> {
     if dfc.base_fee == ZERO_FEE_INDICATOR {
-        return Ok(0);
+        return Ok(ResolvedFee::flat(0));
     }
     let base_fee = if dfc.base_fee != 0 { dfc.base_fee } else { default_base_fee };
 
     if dfc.initial_fee_enabled &&
-        observations.timestamp_at(observation_index, observation_cardinality)? != blocktime
+        observations.timestamp_at(observation_index, observation_cardinality)? !=
+            execution_timestamp
     {
         return match dfc.initial_fee {
-            0 => Ok(base_fee),
-            ZERO_FEE_INDICATOR => Ok(0),
-            initial_fee => Ok(initial_fee),
+            0 => Ok(ResolvedFee::flat(base_fee)),
+            ZERO_FEE_INDICATOR => Ok(ResolvedFee::flat(0)),
+            initial_fee => Ok(ResolvedFee::flat(initial_fee)),
         };
     }
 
@@ -159,6 +181,9 @@ pub(crate) fn get_dynamic_fee(
     } else {
         (DEFAULT_SCALING_FACTOR, DEFAULT_FEE_CAP)
     };
+    if scaling_factor == 0 {
+        return Ok(ResolvedFee::flat(base_fee.min(fee_cap)));
+    }
     let total_fee = base_fee +
         calculate_dynamic_fee(
             current_tick,
@@ -166,10 +191,10 @@ pub(crate) fn get_dynamic_fee(
             observation_index,
             observation_cardinality,
             observations,
-            blocktime,
+            execution_timestamp,
             scaling_factor,
         )?;
-    Ok(total_fee.min(fee_cap))
+    Ok(ResolvedFee { fee: total_fee.min(fee_cap), observed_twap: true })
 }
 
 fn calculate_dynamic_fee(
@@ -232,7 +257,7 @@ mod tests {
         let fee = get_dynamic_fee(&dfc, 500, 0, 1, 0, 1, &observations, 100)
             .expect("Failed to calculate dynamic fee");
 
-        assert_eq!(fee, 30);
+        assert_eq!(fee, ResolvedFee::flat(30));
     }
 
     #[test]
@@ -248,7 +273,7 @@ mod tests {
         let fee = get_dynamic_fee(&dfc, 500, 0, 1, 0, 1, &observations, 100)
             .expect("Failed to calculate dynamic fee");
 
-        assert_eq!(fee, 150);
+        assert_eq!(fee, ResolvedFee::flat(150));
     }
 
     #[rstest]
@@ -266,7 +291,7 @@ mod tests {
         let fee = get_dynamic_fee(&dfc, 500, 0, 1, 0, 1, &observations, 100)
             .expect("Failed to calculate dynamic fee");
 
-        assert_eq!(fee, expected_fee);
+        assert_eq!(fee.fee, expected_fee);
     }
 
     #[test]
@@ -308,7 +333,7 @@ mod tests {
             get_dynamic_fee(&dfc, 362, -195239, 1102101691356476042, 534, 3010, &obs, 1762330021)
                 .expect("Failed to calculate dynamic fee");
 
-        assert_eq!(dynamic_fee, 380);
+        assert_eq!(dynamic_fee, ResolvedFee { fee: 380, observed_twap: true });
     }
 
     #[test]
@@ -356,7 +381,7 @@ mod tests {
         let fee = get_dynamic_fee(&dfc, 3000, 0, 1, 0, 1, &observations, 100)
             .expect("Failed to calculate dynamic fee");
 
-        assert_eq!(fee, 3000);
+        assert_eq!(fee, ResolvedFee::flat(3000));
     }
 
     #[test]
@@ -383,6 +408,6 @@ mod tests {
         let fee = get_dynamic_fee(&dfc, 3000, 0, 1, 1, 300, &observations, 1_000_000)
             .expect("observe failure should fall back to the base fee, not error");
 
-        assert_eq!(fee, 3000);
+        assert_eq!(fee, ResolvedFee::flat(3000));
     }
 }

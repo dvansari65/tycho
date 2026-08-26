@@ -271,7 +271,11 @@ impl ProtocolStreamBuilder {
     /// See the [module-level docs](self) for full details on stream behavior and configuration.
     pub fn new(tycho_url: &str, chain: Chain) -> Self {
         Self {
-            decoder: TychoStreamDecoder::new(),
+            decoder: {
+                let mut decoder = TychoStreamDecoder::new();
+                decoder.set_chain(chain);
+                decoder
+            },
             stream_builder: TychoStreamBuilder::new(tycho_url, chain)
                 .blocklisted_ids(default_blocklist()),
             stream_end_policy: StreamEndPolicy::default(),
