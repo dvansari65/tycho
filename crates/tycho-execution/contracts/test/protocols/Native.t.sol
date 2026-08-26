@@ -233,18 +233,25 @@ contract NativeExecutorUnitTest is Test, Constants {
         assertEq(mockV4.lastValue(), actualAmountIn);
     }
 
-    function test_Swap_Reverts_WhenAmountExceedsSignedAmount() public {
+    function test_Swap_ERC20_OverridesAmountOnOverDelivery() public {
+        uint256 signedAmountIn = 1_000_000;
+        uint256 actualAmountIn = signedAmountIn + 1;
         bytes memory data = _encodeExecutorData(
             USDC_ADDR,
             ETH_ADDR,
             address(mockV4),
-            1_000_000,
+            signedAmountIn,
             AMOUNT_IN_OFFSET,
             _tradePayload()
         );
 
-        vm.expectRevert(NativeExecutor__InvalidAmountIn.selector);
-        executor.swap(1_000_001, data, address(0));
+        executor.swap(actualAmountIn, data, address(0));
+
+        assertTrue(mockV4.called());
+        assertEq(
+            _wordAt(mockV4.lastCalldata(), AMOUNT_IN_OFFSET), actualAmountIn
+        );
+        assertEq(mockV4.lastValue(), 0);
     }
 
     function test_Swap_Reverts_MisalignedAmountInOffset() public {

@@ -69,21 +69,20 @@ contract NativeExecutor is IExecutor {
         }
 
         // Native treats a zero actualSellerAmount as "use the signed amount".
-        // Therefore zero cannot represent an under-delivery, and an amount above
-        // the signed maximum must not be sent to the Router.
-        if (amountIn == 0 || signedAmountIn == 0 || amountIn > signedAmountIn) {
+        // Therefore zero cannot represent an actual zero input.
+        if (amountIn == 0 || signedAmountIn == 0) {
             revert NativeExecutor__InvalidAmountIn();
         }
 
         _validateAmountInOffset(payload, amountInOffset);
 
-        if (amountIn < signedAmountIn) {
+        if (amountIn != signedAmountIn) {
             _setActualSellerAmount(payload, amountInOffset, amountIn);
         }
 
         // amountIn is authoritative at execution time. It equals Native's quoted
-        // payable value for exact fills and reflects Tycho's smaller delivered
-        // amount for under-filled native-token swaps.
+        // payable value for exact fills and reflects the amount delivered by the
+        // preceding hop for composed swaps.
         uint256 executionValue = tokenIn == ETH_ADDRESS ? amountIn : 0;
 
         // slither-disable-next-line unused-return
