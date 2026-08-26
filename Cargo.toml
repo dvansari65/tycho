@@ -15,7 +15,9 @@ members = [
     "crates/tycho-execution/model",
     "protocols/testing",
 ]
-# protocols/substreams/ is intentionally excluded — separate WASM workspace, different toolchain
+# protocols/substreams/ and crates/tycho-execution/substreams/ are intentionally excluded —
+# separate WASM workspaces, different toolchain
+exclude = ["crates/tycho-execution/substreams"]
 
 [workspace.package]
 version = "0.376.0"
