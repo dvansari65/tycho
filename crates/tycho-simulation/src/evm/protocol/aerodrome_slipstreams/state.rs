@@ -672,6 +672,8 @@ impl ProtocolSim for AerodromeSlipstreamsState {
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
+
     use alloy::primitives::{Sign, I256, U256};
     use tycho_common::{models::Chain, simulation::errors::SimulationError};
 
@@ -734,6 +736,102 @@ mod tests {
             ..Default::default()
         }]);
         pool
+    }
+
+    /// Replays Base block 50166683 on pool 0xdFe5F275020def30993f042174Fc2D335678b626
+    /// (AERO/cbBTC), the pair of swaps from the original report:
+    ///
+    /// - tx 0x3b0a96e9bb376d74b4b99d651336c790b2b2b65a660491c28cae3df1a5d69def (index 67), the
+    ///   block's first tick-moving swap, paid the 750 pip initial fee;
+    /// - tx 0xe934500efe7f9ef56370daf4859c21c3a439d998a80b5bd2e5a117e3045021e1 (index 154) paid the
+    ///   2700 pip dynamic fee.
+    ///
+    /// Pool state is reconstructed from archive RPC at the parent block 50166682 (slot0,
+    /// liquidity, observations[213], DynamicSwapFeeModule config); swap amounts come from the
+    /// on-chain Swap events. Both outputs must match wei-exact, and the end-of-block oracle
+    /// index must match the chain (213 -> 214: exactly one observation written).
+    #[test]
+    fn replays_base_block_50166683_swap_pair_wei_exact() {
+        let mut observations: Vec<Observation> = (0..213)
+            .map(|index| Observation { index, ..Default::default() })
+            .collect();
+        observations.push(Observation {
+            block_timestamp: 1_787_122_711, // == parent block ts: the pool traded in that block
+            tick_cumulative: -18_995_710_863_218,
+            seconds_per_liquidity_cumulative_x128: U256::from_str(
+                "42501948193164408449462610706599523891176959",
+            )
+            .unwrap(),
+            initialized: true,
+            index: 213,
+        });
+
+        let mut pool = AerodromeSlipstreamsState::new(
+            "0xdFe5F275020def30993f042174Fc2D335678b626".to_string(),
+            1_787_122_711, // seed: decoded at the parent block
+            1_128_781_556_759_264_064u128,
+            U256::from_str("1979649713595747421731").unwrap(),
+            213,
+            360,
+            2700, // tickSpacingToFee(200)
+            200,
+            -350_116,
+            // No initialized tick is crossed (liquidity is unchanged across both swaps);
+            // zero-net bounds outside the traversed range stand in for the full tick map.
+            vec![TickInfo::new(-351_000, 0).unwrap(), TickInfo::new(-349_000, 0).unwrap()],
+            observations,
+            DynamicFeeConfig::new(2700, 0, 0, true, 750),
+        )
+        .expect("state should build");
+
+        // The quotes execute in block 50166683 (ts 1_787_122_713).
+        assert!(pool.apply_block(&BlockContext::new(50_166_683, 1_787_122_713)));
+
+        let aero = Token::new(
+            &Bytes::from_str("0x940181a94A35A4569E4529A3CDfB74e38FD98631").unwrap(),
+            "AERO",
+            18,
+            0,
+            &[Some(10_000)],
+            Chain::Base,
+            100,
+        );
+        let cbbtc = Token::new(
+            &Bytes::from_str("0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf").unwrap(),
+            "cbBTC",
+            8,
+            0,
+            &[Some(10_000)],
+            Chain::Base,
+            100,
+        );
+
+        assert_eq!(pool.fee(), 750.0 / 1_000_000.0);
+        let first = pool
+            .get_amount_out(BigUint::from(1_688_626u32), &cbbtc, &aero)
+            .expect("first swap should succeed");
+        assert_eq!(first.amount, BigUint::from(2_702_489_253_591_513_843_346u128));
+
+        assert_eq!(first.new_state.fee(), 2700.0 / 1_000_000.0);
+        let second = first
+            .new_state
+            .get_amount_out(BigUint::from(450_733u32), &cbbtc, &aero)
+            .expect("second swap should succeed");
+        assert_eq!(second.amount, BigUint::from(719_894_300_964_297_656_776u128));
+
+        let replayed = first
+            .new_state
+            .as_any()
+            .downcast_ref::<AerodromeSlipstreamsState>()
+            .expect("state type");
+        assert_eq!(replayed.observation_index, 214, "chain slot0 shows 214 after the block");
+        assert_eq!(
+            replayed
+                .observations
+                .timestamp_at(214, 360)
+                .unwrap(),
+            1_787_122_713
+        );
     }
 
     #[test]
