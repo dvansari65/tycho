@@ -1,3 +1,25 @@
+## [0.368.0](https://github.com/propeller-heads/tycho/compare/0.367.0...0.368.0) (2026-08-27)
+
+
+### Features
+
+* **slipstreams:** index the third Slipstream factory ([5cfb1f0](https://github.com/propeller-heads/tycho/commit/5cfb1f05b8722e1ac459c2d93597ea6ea985a872))
+* **slipstreams:** index the third Slipstream factory ([#1351](https://github.com/propeller-heads/tycho/issues/1351)) ([468355b](https://github.com/propeller-heads/tycho/commit/468355bfcf78340dbe95d155d4a69d7808a33ed5))
+
+
+### Bug Fixes
+
+* **testing:** decode aerodrome_slipstreams with its native state ([7b2cc89](https://github.com/propeller-heads/tycho/commit/7b2cc8905cca90da2f003604d29e8d7f5c3926ca))
+
+## [0.367.0](https://github.com/propeller-heads/tycho/compare/0.366.1...0.367.0) (2026-08-26)
+
+
+### Features
+
+* add --test-every-n-blocks flag and sampling predicate ([9b5e3ea](https://github.com/propeller-heads/tycho/commit/9b5e3ea885be99d394cfd32fd9aa6269db6d57e2))
+* fetch sampled test blocks by number in sampled mode ([6e03226](https://github.com/propeller-heads/tycho/commit/6e032267bbcf1f6a07855579390e5f349f9220cd))
+* sample protocol-stream tests every N blocks ([a005eca](https://github.com/propeller-heads/tycho/commit/a005eca62261f9c7f11d093d1376d2f09d97fc4a))
+
 ## [0.366.1](https://github.com/propeller-heads/tycho/compare/0.366.0...0.366.1) (2026-08-25)
 
 
