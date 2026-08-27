@@ -70,6 +70,9 @@ pub struct AerodromeSlipstreamsState {
     /// the pool: the fee module's initial-vs-dynamic branch keys on the *execution* block, which
     /// is the next block for a confirmed update and the still-open block for a flashblock
     /// update.
+    ///
+    /// The serde alias keeps states serialized before the rename deserializable.
+    #[serde(alias = "block_timestamp")]
     execution_block_timestamp: u64,
     liquidity: u128,
     sqrt_price: U256,
@@ -217,6 +220,12 @@ impl AerodromeSlipstreamsState {
                 Err(tick_err) => match tick_err.kind {
                     TickListErrorKind::TicksExeeded => {
                         let mut new_state = self.clone();
+                        // Best effort in an error path: a failed write only degrades the fee of
+                        // a chained simulation on this partial result, and must not mask the
+                        // more informative TicksExceeded error below.
+                        if let Err(record_err) = new_state.record_observation(state.tick) {
+                            trace!(%record_err, "skipping observation write on partial result");
+                        }
                         new_state.liquidity = state.liquidity;
                         new_state.tick = state.tick;
                         new_state.sqrt_price = state.sqrt_price;
@@ -832,6 +841,55 @@ mod tests {
                 .unwrap(),
             1_787_122_713
         );
+    }
+
+    #[test]
+    fn deserializes_states_serialized_before_the_field_rename() {
+        // Downstream consumers may have persisted states from before
+        // `block_timestamp` -> `execution_block_timestamp`; the serde alias must keep them
+        // loadable.
+        let mut pool = initial_fee_pool(1_000);
+        // serde_json's default Number cannot hold a u128 beyond u64::MAX.
+        pool.liquidity = 1_000_000;
+        let mut value = serde_json::to_value(&pool).expect("serialize");
+        let ts = value
+            .as_object_mut()
+            .expect("object")
+            .remove("execution_block_timestamp")
+            .expect("field present");
+        value
+            .as_object_mut()
+            .expect("object")
+            .insert("block_timestamp".to_string(), ts);
+
+        let restored: AerodromeSlipstreamsState =
+            serde_json::from_value(value).expect("legacy field name must deserialize");
+        assert_eq!(restored, pool);
+    }
+
+    #[test]
+    fn ticks_exceeded_partial_result_still_records_the_observation() {
+        // The partial result carried inside the TicksExceeded error must price a chained swap
+        // with the dynamic fee, exactly like a successful swap's new_state.
+        let mut pool = initial_fee_pool(1_000);
+        pool.apply_block(&BlockContext::new(101, 1_002));
+        let token_a =
+            Token::new(&Bytes::from([0x11; 20]), "A", 18, 0, &[Some(10_000)], Chain::Base, 100);
+        let token_b =
+            Token::new(&Bytes::from([0x22; 20]), "B", 18, 0, &[Some(10_000)], Chain::Base, 100);
+
+        let err = pool
+            .get_amount_out(
+                BigUint::from(1_000_000_000_000_000_000_000_000u128),
+                &token_a,
+                &token_b,
+            )
+            .expect_err("swap must exhaust the tick list");
+        let SimulationError::InvalidInput(_, Some(partial)) = err else {
+            panic!("expected a partial result, got {err:?}");
+        };
+
+        assert_eq!(partial.new_state.fee(), 2700.0 / 1_000_000.0);
     }
 
     #[test]

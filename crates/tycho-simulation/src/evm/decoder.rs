@@ -104,9 +104,10 @@ where
     /// Live override providers keyed by `protocol_system`. A pool of that protocol subscribes to
     /// its provider at creation time and reads fresh overrides on every simulation.
     override_providers: HashMap<String, Arc<dyn StateOverrideProvider>>,
-    /// Used to project a confirmed block header onto the next block when deriving the execution
-    /// block for block-sensitive states.
-    chain: Chain,
+    /// Seconds between blocks, used to project a confirmed block header onto the next block when
+    /// deriving the execution block for block-sensitive states. Resolved once in
+    /// [`Self::set_chain`] so an unregistered custom chain fails at construction, not mid-stream.
+    block_time_secs: u64,
 }
 
 impl<H> Default for TychoStreamDecoder<H>
@@ -139,14 +140,19 @@ where
             registry: HashMap::new(),
             inclusion_filters: HashMap::new(),
             override_providers: HashMap::new(),
-            chain: Chain::Ethereum,
+            block_time_secs: Chain::Ethereum.block_time_secs(),
         }
     }
 
     /// Sets the chain whose block time is used to project a confirmed header onto the block a
-    /// quote will execute in. Defaults to [`Chain::Ethereum`].
+    /// quote will execute in. Defaults to [`Chain::Ethereum`]'s block time.
+    ///
+    /// # Panics
+    ///
+    /// Panics for a custom chain with no registered config — deliberately at construction time,
+    /// so a misconfigured consumer fails on startup instead of on the first decoded block.
     pub fn set_chain(&mut self, chain: Chain) {
-        self.chain = chain;
+        self.block_time_secs = chain.block_time_secs();
     }
 
     /// The block a quote produced from `header` is expected to execute in.
@@ -157,7 +163,7 @@ where
         if header.partial_block_index.is_some() {
             BlockContext::new(header.number, header.timestamp)
         } else {
-            BlockContext::new(header.number + 1, header.timestamp + self.chain.block_time_secs())
+            BlockContext::new(header.number + 1, header.timestamp + self.block_time_secs)
         }
     }
 
@@ -171,13 +177,17 @@ where
     fn refresh_execution_block(
         updated_states: &mut HashMap<String, Box<dyn ProtocolSim>>,
         stored_states: &mut HashMap<String, Box<dyn ProtocolSim>>,
+        failed_components: &HashSet<String>,
         execution_block: &BlockContext,
     ) {
         for state in updated_states.values_mut() {
             state.apply_block(execution_block);
         }
         for (id, state) in stored_states.iter_mut() {
-            if !updated_states.contains_key(id) && state.apply_block(execution_block) {
+            if failed_components.contains(id) || updated_states.contains_key(id) {
+                continue;
+            }
+            if state.apply_block(execution_block) {
                 updated_states.insert(id.clone(), state.clone_box());
             }
         }
@@ -999,9 +1009,11 @@ where
 
         if let Some(header) = current_block.as_ref() {
             let execution_block = self.execution_block(header);
+            let decoder_state = &mut *state_guard;
             Self::refresh_execution_block(
                 &mut updated_states,
-                &mut state_guard.states,
+                &mut decoder_state.states,
+                &decoder_state.failed_components,
                 &execution_block,
             );
         }
@@ -1022,6 +1034,7 @@ where
         // Remove components from persistent state
         for id in removed_pairs.keys() {
             state_guard.components.remove(id);
+            state_guard.states.remove(id);
         }
 
         for (key, values) in contracts_map {
@@ -1405,6 +1418,7 @@ mod tests {
         TychoStreamDecoder::<BlockHeader>::refresh_execution_block(
             &mut updated,
             &mut stored,
+            &HashSet::new(),
             &BlockContext::new(101, 502),
         );
 
@@ -1414,6 +1428,28 @@ mod tests {
         assert_eq!(emitted.fee(), 750.0 / 1_000_000.0);
         // The stored copy was advanced in place as well.
         assert_eq!(stored["block-sensitive"].fee(), 750.0 / 1_000_000.0);
+    }
+
+    #[test]
+    fn refresh_never_re_emits_failed_components() {
+        // A failed component's stored state may linger; the sweep must not resurrect it for
+        // consumers that were told the component was removed — even when its fee flipped.
+        let mut stored = HashMap::from([("zombie".to_string(), {
+            let mut state = block_sensitive_state();
+            state.apply_block(&BlockContext::new(100, 500));
+            state
+        })]);
+        let failed = HashSet::from(["zombie".to_string()]);
+        let mut updated: HashMap<String, Box<dyn ProtocolSim>> = HashMap::new();
+
+        TychoStreamDecoder::<BlockHeader>::refresh_execution_block(
+            &mut updated,
+            &mut stored,
+            &failed,
+            &BlockContext::new(101, 502),
+        );
+
+        assert!(updated.is_empty());
     }
 
     #[test]
@@ -1439,6 +1475,7 @@ mod tests {
         TychoStreamDecoder::<BlockHeader>::refresh_execution_block(
             &mut updated,
             &mut stored,
+            &HashSet::new(),
             &BlockContext::new(102, 504),
         );
 
