@@ -133,7 +133,9 @@ simple: they just call the protocol. All balance tracking, output verification, 
 Dispatcher/TransferManager.
 
 Supported: UniswapV2, UniswapV3, UniswapV4, BalancerV2, BalancerV3, Curve, Ekubo, EkuboV3, Slipstreams, MaverickV2,
-AerodromeV1, LiquidityParty, Bebop (RFQ), Hashflow (RFQ), Liquorice (RFQ), FluidV1, Rocketpool, ERC4626, Etherfi, WETH.
+AerodromeV1, LiquidityParty, Bebop (RFQ), Hashflow (RFQ), Liquorice (RFQ), FluidV1, Rocketpool, ERC4626, Etherfi, WETH,
+PropAMM (a single generic executor shared by all pAMMs implementing the standard `IPropAMM` interface; the pAMM
+address travels in the swap data).
 
 ### Executor Flow, Callbacks & Output Verification
 
@@ -240,7 +242,18 @@ flags) into packed bytes. Each encoder holds its executor address.
 **SwapEncoderRegistry** (`swap_encoder_registry.rs`): Creates encoders by protocol system name. Reads executor addresses
 from `config/executor_addresses.json`. Protocol name prefixes: `vm:` (simulation-backed,
 e.g. `vm:balancer_v2`, `vm:curve`), `rfq:` (request-for-quote, e.g. `rfq:bebop`), bare (on-chain,
-e.g. `uniswap_v2`, `fluid_v1`).
+e.g. `uniswap_v2`, `fluid_v1`), and `pricelevelstream:` (Titan pAMM price level stream, suffixed
+with the venue name or, for auto-detected pAMMs, the venue address). Price-level-stream protocols
+resolve generically: a single `pricelevelstream` config entry serves the whole family via a
+`get_encoder` fallback (shared generic `PropAMMSwapEncoder`/`PropAMMExecutor`), with exact
+`pricelevelstream:{venue}` entries overriding per venue.
+
+`propammfallback:{venue}` is the same liquidity executed through Titan's PropAMMRouter
+(`0x4DdF368080CD7946db5b459aD591c350158175e1`, hardcoded in the executor) instead of the venue
+directly, so a stale maker quote falls back to a single-hop Uniswap V3 pool rather than reverting
+the route. It resolves the same
+way (family key `propammfallback`, shared `PropAMMSwapEncoder`, `PropAMMFallbackExecutor`). Only venues
+whitelisted on the PropAMMRouter may use the prefix.
 
 ### Angstrom attestations (`evm/swap_encoder/angstrom.rs`)
 
