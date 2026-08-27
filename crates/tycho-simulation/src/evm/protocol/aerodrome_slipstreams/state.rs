@@ -70,9 +70,6 @@ pub struct AerodromeSlipstreamsState {
     /// the pool: the fee module's initial-vs-dynamic branch keys on the *execution* block, which
     /// is the next block for a confirmed update and the still-open block for a flashblock
     /// update.
-    ///
-    /// The serde alias keeps states serialized before the rename deserializable.
-    #[serde(alias = "block_timestamp")]
     execution_block_timestamp: u64,
     liquidity: u128,
     sqrt_price: U256,
@@ -841,30 +838,6 @@ mod tests {
                 .unwrap(),
             1_787_122_713
         );
-    }
-
-    #[test]
-    fn deserializes_states_serialized_before_the_field_rename() {
-        // Downstream consumers may have persisted states from before
-        // `block_timestamp` -> `execution_block_timestamp`; the serde alias must keep them
-        // loadable.
-        let mut pool = initial_fee_pool(1_000);
-        // serde_json's default Number cannot hold a u128 beyond u64::MAX.
-        pool.liquidity = 1_000_000;
-        let mut value = serde_json::to_value(&pool).expect("serialize");
-        let ts = value
-            .as_object_mut()
-            .expect("object")
-            .remove("execution_block_timestamp")
-            .expect("field present");
-        value
-            .as_object_mut()
-            .expect("object")
-            .insert("block_timestamp".to_string(), ts);
-
-        let restored: AerodromeSlipstreamsState =
-            serde_json::from_value(value).expect("legacy field name must deserialize");
-        assert_eq!(restored, pool);
     }
 
     #[test]
