@@ -11,7 +11,7 @@ use crate::encoding::{
             SequentialSwapStrategyEncoder, SingleSwapStrategyEncoder, SplitSwapStrategyEncoder,
         },
         swap_encoder::swap_encoder_registry::SwapEncoderRegistry,
-        utils::ple_encode,
+        utils::{map_on_threads, ple_encode},
     },
     models::{EncodedSolution, EncodingContext, Solution},
     strategy_encoder::StrategyEncoder,
@@ -78,16 +78,13 @@ impl TychoRouterEncoder {
 }
 
 impl TychoEncoder for TychoRouterEncoder {
+    /// Encodes the solutions on one thread each, so RFQ quote requests in different solutions
+    /// run at the same time. The result keeps the input order.
     fn encode_solutions(
         &self,
         solutions: Vec<Solution>,
     ) -> Result<Vec<EncodedSolution>, EncodingError> {
-        let mut result: Vec<EncodedSolution> = Vec::new();
-        for solution in solutions.iter() {
-            let encoded_solution = self.encode_solution(solution)?;
-            result.push(encoded_solution);
-        }
-        Ok(result)
+        map_on_threads(&solutions, |solution| self.encode_solution(solution))
     }
 
     /// Raises an `EncodingError` if the solution is not considered valid.
@@ -343,7 +340,47 @@ mod tests {
     }
 
     mod router_encoder {
+        use std::time::{Duration, Instant};
+
+        use alloy::hex::encode;
+
         use super::*;
+        use crate::encoding::evm::testing_utils::delayed_bebop_swap;
+
+        /// Two solutions each hold one RFQ swap that waits 300ms for its quote. Encoded together
+        /// they finish well before the 600ms a one-after-the-other encoding needs, and stay in
+        /// input order.
+        #[test]
+        fn test_encode_solutions_encodes_rfq_solutions_at_the_same_time() {
+            let encoder = get_tycho_router_encoder();
+            let delay = Duration::from_millis(300);
+            let single_bebop_solution = |token_in: Bytes, token_out: Bytes| {
+                Solution::new(
+                    Bytes::from_str("0xcd09f75E2BF2A4d11F3AB23f1389FcC1621c0cc2").unwrap(),
+                    Bytes::default(),
+                    token_in.clone(),
+                    token_out.clone(),
+                    BigUint::from(1_000u64),
+                    BigUint::from(1_000u64),
+                    BigUint::from(900u64),
+                    vec![delayed_bebop_swap(token_in, token_out, delay)],
+                )
+            };
+            let solutions =
+                vec![single_bebop_solution(usdc(), weth()), single_bebop_solution(dai(), wbtc())];
+
+            let start = Instant::now();
+            let encoded_solutions = encoder
+                .encode_solutions(solutions)
+                .unwrap();
+            let elapsed = start.elapsed();
+
+            assert!(elapsed < Duration::from_millis(500), "encoding took {elapsed:?}");
+            assert_eq!(encoded_solutions.len(), 2);
+            assert!(encode(encoded_solutions[0].swaps()).contains(&encode(usdc())[..]));
+            assert!(encode(encoded_solutions[1].swaps()).contains(&encode(dai())[..]));
+        }
+
         #[test]
         fn test_encode_router_calldata_split_swap_group() {
             let encoder = get_tycho_router_encoder();

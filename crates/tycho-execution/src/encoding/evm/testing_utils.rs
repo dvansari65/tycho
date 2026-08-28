@@ -1,11 +1,14 @@
 // This module is used in integration tests as well
-use std::{any::Any, collections::HashMap};
+use std::{any::Any, collections::HashMap, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use num_bigint::BigUint;
 use tycho_common::{
     dto::ProtocolStateDelta,
-    models::{protocol::GetAmountOutParams, token::Token},
+    models::{
+        protocol::{GetAmountOutParams, ProtocolComponent},
+        token::Token,
+    },
     simulation::{
         errors::{SimulationError, TransitionError},
         indicatively_priced::{IndicativelyPriced, SignedQuote},
@@ -13,6 +16,8 @@ use tycho_common::{
     },
     Bytes,
 };
+
+use crate::encoding::models::{default_token, Swap};
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct MockRFQState {
@@ -95,4 +100,112 @@ impl IndicativelyPriced for MockRFQState {
             quote_attributes: self.quote_data.clone(),
         })
     }
+}
+
+/// A [`MockRFQState`] whose signed quote arrives after a fixed delay, like a network round trip.
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct DelayedRFQState {
+    pub quote: MockRFQState,
+    pub delay: Duration,
+}
+
+#[typetag::serde]
+impl ProtocolSim for DelayedRFQState {
+    fn fee(&self) -> f64 {
+        self.quote.fee()
+    }
+
+    fn spot_price(&self, base: &Token, quote: &Token) -> Result<f64, SimulationError> {
+        self.quote.spot_price(base, quote)
+    }
+
+    fn get_amount_out(
+        &self,
+        amount_in: BigUint,
+        token_in: &Token,
+        token_out: &Token,
+    ) -> Result<GetAmountOutResult, SimulationError> {
+        self.quote
+            .get_amount_out(amount_in, token_in, token_out)
+    }
+
+    fn get_limits(
+        &self,
+        sell_token: Bytes,
+        buy_token: Bytes,
+    ) -> Result<(BigUint, BigUint), SimulationError> {
+        self.quote
+            .get_limits(sell_token, buy_token)
+    }
+
+    fn delta_transition(
+        &mut self,
+        delta: ProtocolStateDelta,
+        tokens: &HashMap<Bytes, Token>,
+        balances: &Balances,
+    ) -> Result<(), TransitionError> {
+        self.quote
+            .delta_transition(delta, tokens, balances)
+    }
+
+    fn clone_box(&self) -> Box<dyn ProtocolSim> {
+        self.quote.clone_box()
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self.quote.as_any()
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self.quote.as_any_mut()
+    }
+
+    fn eq(&self, other: &dyn ProtocolSim) -> bool {
+        self.quote.eq(other)
+    }
+
+    fn as_indicatively_priced(&self) -> Result<&dyn IndicativelyPriced, SimulationError> {
+        Ok(self)
+    }
+}
+
+#[async_trait]
+impl IndicativelyPriced for DelayedRFQState {
+    async fn request_signed_quote(
+        &self,
+        params: GetAmountOutParams,
+    ) -> Result<SignedQuote, SimulationError> {
+        tokio::time::sleep(self.delay).await;
+        self.quote
+            .request_signed_quote(params)
+            .await
+    }
+}
+
+/// Builds a Bebop swap whose signed quote arrives after `delay`.
+pub fn delayed_bebop_swap(token_in: Bytes, token_out: Bytes, delay: Duration) -> Swap {
+    let state = DelayedRFQState {
+        quote: MockRFQState {
+            quote_amount_in: None,
+            quote_amount_out: BigUint::from(1_000u64),
+            quote_data: HashMap::from([
+                ("calldata".to_string(), Bytes::from(vec![0x12, 0x34])),
+                ("partial_fill_offset".to_string(), Bytes::from(12u64.to_be_bytes().to_vec())),
+                ("tx_to".to_string(), Bytes::from("0xbbbbbBB520d69a9775E85b458C58c648259FAD5F")),
+            ]),
+        },
+        delay,
+    };
+    Swap::new(
+        ProtocolComponent {
+            id: "bebop-rfq".to_string(),
+            protocol_system: "rfq:bebop".to_string(),
+            ..Default::default()
+        },
+        default_token(token_in),
+        default_token(token_out),
+        BigUint::ZERO,
+    )
+    .with_estimated_amount_in(BigUint::from(1_000u64))
+    .with_protocol_state(Arc::new(state))
 }

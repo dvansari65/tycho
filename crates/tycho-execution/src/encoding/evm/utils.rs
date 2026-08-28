@@ -162,6 +162,34 @@ where
     })
 }
 
+/// Runs `f` on every item, each on its own OS thread, and returns the results in input order.
+///
+/// A single item runs on the calling thread. Any item's error is returned; earlier items win.
+pub(crate) fn map_on_threads<T, R, F>(items: &[T], f: F) -> Result<Vec<R>, EncodingError>
+where
+    T: Sync,
+    R: Send,
+    F: Fn(&T) -> Result<R, EncodingError> + Sync,
+{
+    if let [item] = items {
+        return Ok(vec![f(item)?]);
+    }
+    std::thread::scope(|scope| {
+        let mut handles = Vec::with_capacity(items.len());
+        for item in items {
+            handles.push(scope.spawn(|| f(item)));
+        }
+        let mut results = Vec::with_capacity(handles.len());
+        for handle in handles {
+            let result = handle
+                .join()
+                .map_err(|_| EncodingError::FatalError("encoding thread panicked".to_string()))??;
+            results.push(result);
+        }
+        Ok(results)
+    })
+}
+
 pub(crate) type EVMProvider = Arc<
     FillProvider<
         JoinFill<
