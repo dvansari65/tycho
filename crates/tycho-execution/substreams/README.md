@@ -87,10 +87,10 @@ then loops `price_trades.sql` every `INTERVAL` seconds (default 60, `MAX_AGE` de
 
 `main-workflow.yaml` builds the image as `tycho-router-trades:<release version>` on every
 monorepo release and promotes the tag to `helmwave/dev/versions.yml` in `helm-configuration`. The
-`router-trades` release there (namespace `dev-tycho`) runs a single pod: a Postgres 16 container
-with a PVC, one `sink` container per chain and one `price` container, all talking to
-`localhost:5432`. Grafana reaches the database through the `router-trades` service with the
-read-only `grafana` role.
+release `router-trades-db` there (namespace `dev-tycho`) is a Postgres 16 StatefulSet; release
+`router-trades` is one pod with a `sink` container per chain and one `price` container, all
+writing to `router-trades-db:5432`. Grafana reaches the database through the same service with
+the read-only `grafana` role.
 
 ## Module graph
 
