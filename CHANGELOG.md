@@ -1,3 +1,11 @@
+## [0.370.0](https://github.com/propeller-heads/tycho/compare/0.369.0...0.370.0) (2026-08-28)
+
+
+### Features
+
+* **execution:** fetch 10 blocks of Angstrom attestations ([06a0b35](https://github.com/propeller-heads/tycho/commit/06a0b3579699e549c1d1ba2fbb72fd95df803c07))
+* **execution:** fetch 10 blocks of Angstrom attestations ([#1363](https://github.com/propeller-heads/tycho/issues/1363)) ([858f8cb](https://github.com/propeller-heads/tycho/commit/858f8cb159479ddbd8836817d8a1ad1d61948ef7))
+
 ## [0.369.0](https://github.com/propeller-heads/tycho/compare/0.368.1...0.369.0) (2026-08-28)
 
 
