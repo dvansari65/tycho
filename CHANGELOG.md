@@ -1,3 +1,12 @@
+## [0.368.1](https://github.com/propeller-heads/tycho/compare/0.368.0...0.368.1) (2026-08-27)
+
+
+### Bug Fixes
+
+* encode Bebop original taker amount ([8bfa6db](https://github.com/propeller-heads/tycho/commit/8bfa6dbaa24fbd1df4ed7c15e86103c645c16e5d))
+* encode Bebop original taker amount ([#1329](https://github.com/propeller-heads/tycho/issues/1329)) ([479f665](https://github.com/propeller-heads/tycho/commit/479f665287683fbdc38053cc13e5fc8ff51aaae0))
+* resolve Bebop PR conflicts ([1f81bc0](https://github.com/propeller-heads/tycho/commit/1f81bc01bf20621798366bb8c673aa436ea27ec4))
+
 ## [0.368.0](https://github.com/propeller-heads/tycho/compare/0.367.0...0.368.0) (2026-08-27)
 
 
