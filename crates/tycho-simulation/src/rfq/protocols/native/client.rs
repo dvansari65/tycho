@@ -43,7 +43,10 @@ const MAX_QUOTE_ATTEMPTS: u32 = 3;
 const TRANSIENT_RETRY_DELAY: Duration = Duration::from_millis(100);
 const NATIVE_API_RETRY_DELAY: Duration = Duration::from_secs(1);
 // tradeRFQT(RFQTQuote,uint256,uint256): 4-byte selector plus three ABI head words.
+const TRADE_RFQT_SELECTOR: [u8; 4] = [0x09, 0x47, 0xc2, 0xd9];
 const MIN_TRADE_RFQT_CALLDATA_LEN: usize = 4 + 3 * 32;
+const ACTUAL_SELLER_AMOUNT_OFFSET: usize = 4 + 32;
+const ACTUAL_MIN_OUTPUT_AMOUNT_OFFSET: usize = 4 + 2 * 32;
 
 enum QuoteAttemptError {
     Retry { error: RFQError, delay: Duration },
@@ -171,7 +174,7 @@ impl NativeClient {
         let response = self
             .http_client()
             .get(format!("{}/orderbook", self.endpoint))
-            .query(&[("chain", chain.as_str()), ("showNative", "true")])
+            .query(&[("chain", chain.as_str()), ("showNative", "0x0")])
             .header("accept", "application/json")
             .header("apikey", &self.api_key)
             .send()
@@ -233,37 +236,17 @@ impl NativeClient {
 
         let mut books = HashMap::new();
         for ((token0, token1), entries) in entries_by_pair {
-            let Some(first) = entries.first() else {
-                continue;
+            // Keep the book direction stable even when Native publishes only one direction of a
+            // pair.
+            // Prefer exactly one configured quote token; if both or neither are configured, use
+            // the sorted pair order established by the grouping key above.
+            let token0_is_quote = self.quote_tokens.contains(&token0);
+            let token1_is_quote = self.quote_tokens.contains(&token1);
+            let (base_address, quote_address) = match (token0_is_quote, token1_is_quote) {
+                (true, false) => (token1.clone(), token0.clone()),
+                (false, true) => (token0.clone(), token1.clone()),
+                (true, true) | (false, false) => (token0.clone(), token1.clone()),
             };
-            let has_reverse = entries.iter().any(|entry| {
-                entry.base_address == first.quote_address &&
-                    entry.quote_address == first.base_address
-            });
-            let canonical = if has_reverse {
-                entries
-                    .iter()
-                    .find(|entry: &&NativeOrderbookEntry| {
-                        self.quote_tokens
-                            .contains(&entry.quote_address) &&
-                            !self
-                                .quote_tokens
-                                .contains(&entry.base_address)
-                    })
-                    .or_else(|| {
-                        entries.iter().min_by(|a, b| {
-                            a.base_address
-                                .as_ref()
-                                .cmp(b.base_address.as_ref())
-                        })
-                    })
-                    .unwrap_or(first)
-            } else {
-                first
-            };
-
-            let base_address = canonical.base_address.clone();
-            let quote_address = canonical.quote_address.clone();
             let mut direct_bids = Vec::new();
             let mut direct_asks = Vec::new();
             let mut mirrored_bids = Vec::new();
@@ -290,6 +273,7 @@ impl NativeClient {
                 }
             }
 
+            // Use mirrored levels only when direct ones are absent to avoid double-counting.
             let bids = if direct_bids.is_empty() { mirrored_bids } else { direct_bids };
             let asks = if direct_asks.is_empty() { mirrored_asks } else { direct_asks };
             // Use the sorted pair key so the component ID remains stable if Native returns the
@@ -414,20 +398,9 @@ impl NativeClient {
             )));
         }
 
-        let effective_amount_in =
-            BigUint::from_str(&order.effective_seller_token_amount).map_err(|_| {
-                RFQError::ParsingError(format!(
-                    "Failed to parse effective seller token amount: {}",
-                    order.effective_seller_token_amount
-                ))
-            })?;
-        if effective_amount_in != params.amount_in {
-            return Err(RFQError::ParsingError(format!(
-                "Native Relay effective input amount mismatch: expected {}, got {}",
-                params.amount_in, effective_amount_in
-            )));
-        }
-
+        // effectiveSellerTokenAmount may differ from the requested gross input for
+        // fee-on-transfer tokens, so it is not an equality invariant here. amountIn and
+        // sellerTokenAmount still bind the quote to Tycho's requested input.
         // Native requires txRequest.value for native-token quotes. Validate the
         // quoted value here, while it still describes the original signed amount.
         // During execution, Tycho's actual amountIn may be smaller due to under-delivery.
@@ -472,18 +445,45 @@ impl NativeClient {
             )));
         }
 
-        let amount_in_offset = quote_response.amount_in_offset as usize;
-        if amount_in_offset < 4 ||
-            !(amount_in_offset - 4).is_multiple_of(32) ||
-            amount_in_offset
-                .checked_add(32)
-                .is_none_or(|end| end > calldata.len())
+        if calldata[..TRADE_RFQT_SELECTOR.len()] != TRADE_RFQT_SELECTOR {
+            return Err(RFQError::ParsingError(format!(
+                "Unexpected Native V4 selector: expected 0x{}, got 0x{}",
+                hex::encode(TRADE_RFQT_SELECTOR),
+                hex::encode(&calldata[..TRADE_RFQT_SELECTOR.len()]),
+            )));
+        }
+
+        // These offsets are fixed by the V4 tradeRFQT(RFQTQuote,uint256,uint256)
+        // ABI. Rejecting any other value catches an incompatible or malformed
+        // API response before it reaches the encoder; the executor independently
+        // hardcodes the same positions rather than trusting route data.
+        if quote_response.amount_in_offset as usize != ACTUAL_SELLER_AMOUNT_OFFSET ||
+            quote_response.amount_out_minimum_offset as usize != ACTUAL_MIN_OUTPUT_AMOUNT_OFFSET
         {
             return Err(RFQError::ParsingError(format!(
-                "Invalid Native amountInOffset {} for calldata length {}",
+                "Unexpected Native V4 override offsets: expected {}/{} but got {}/{}",
+                ACTUAL_SELLER_AMOUNT_OFFSET,
+                ACTUAL_MIN_OUTPUT_AMOUNT_OFFSET,
                 quote_response.amount_in_offset,
-                calldata.len()
+                quote_response.amount_out_minimum_offset,
             )));
+        }
+
+        if calldata[ACTUAL_SELLER_AMOUNT_OFFSET..ACTUAL_MIN_OUTPUT_AMOUNT_OFFSET]
+            .iter()
+            .any(|byte| *byte != 0)
+        {
+            return Err(RFQError::ParsingError(
+                "Native actualSellerAmount override must be zero".to_string(),
+            ));
+        }
+        if calldata[ACTUAL_MIN_OUTPUT_AMOUNT_OFFSET..MIN_TRADE_RFQT_CALLDATA_LEN]
+            .iter()
+            .any(|byte| *byte != 0)
+        {
+            return Err(RFQError::ParsingError(
+                "Native actualMinOutputAmount override must be zero".to_string(),
+            ));
         }
 
         let target = Bytes::from_str(&quote_response.tx_request.target).map_err(|_| {
@@ -496,15 +496,6 @@ impl NativeClient {
         let mut quote_attributes: HashMap<String, Bytes> = HashMap::new();
         quote_attributes.insert("target".to_string(), target);
         quote_attributes.insert("calldata".to_string(), Bytes::from(calldata));
-        quote_attributes.insert(
-            "amount_in_offset".to_string(),
-            Bytes::from(
-                quote_response
-                    .amount_in_offset
-                    .to_be_bytes()
-                    .to_vec(),
-            ),
-        );
         quote_attributes.insert(
             "deadline_timestamp".to_string(),
             Bytes::from(
@@ -777,6 +768,7 @@ mod tests {
         },
     };
 
+    use rstest::rstest;
     use tokio::{
         io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
         net::TcpListener,
@@ -962,7 +954,7 @@ mod tests {
     }
 
     #[test]
-    fn uses_stable_component_id_and_merges_mirrored_books() {
+    fn uses_stable_component_id_and_direction_when_merging_mirrored_books() {
         let weth = Bytes::from_str("0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2").unwrap();
         let usdc = Bytes::from_str("0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48").unwrap();
         let client = NativeClient::new(
@@ -990,14 +982,35 @@ mod tests {
                 side: NativeOrderbookSide::Bid,
                 levels: vec![NativePriceLevel { quantity: 2_000.0, price: 0.0005 }],
             },
+            NativeOrderbookEntry {
+                base_address: usdc.clone(),
+                quote_address: weth.clone(),
+                minimum_in_base: 250.0,
+                side: NativeOrderbookSide::Ask,
+                levels: vec![NativePriceLevel { quantity: 2.0, price: 0.5 }],
+            },
         ];
 
         let forward_only = client.group_orderbook(vec![entries[0].clone()]);
-        let reverse_only = client.group_orderbook(vec![entries[1].clone()]);
+        let reverse_only = client.group_orderbook(entries[1..].to_vec());
         let pair = format!("native_{}/{}", hex::encode(&usdc), hex::encode(&weth));
         let component_id = keccak256(pair.as_bytes()).to_string();
-        assert!(forward_only.contains_key(&component_id));
-        assert!(reverse_only.contains_key(&component_id));
+
+        let forward_book = forward_only
+            .get(&component_id)
+            .expect("forward-only book uses the stable component ID");
+        assert_eq!(forward_book.base_address, weth);
+        assert_eq!(forward_book.quote_address, usdc);
+
+        let reverse_book = reverse_only
+            .get(&component_id)
+            .expect("reverse-only book uses the stable component ID");
+        assert_eq!(reverse_book.base_address, weth);
+        assert_eq!(reverse_book.quote_address, usdc);
+        assert_eq!(reverse_book.minimum_in_base, 0.0);
+        assert_eq!(reverse_book.minimum_in_quote, 250.0);
+        assert_eq!(reverse_book.bids, vec![NativePriceLevel { quantity: 1.0, price: 2.0 }]);
+        assert_eq!(reverse_book.asks, vec![NativePriceLevel { quantity: 1.0, price: 2_000.0 }]);
 
         let books = client.group_orderbook(entries.clone());
         let reversed_books = client.group_orderbook(entries.into_iter().rev().collect());
@@ -1008,9 +1021,60 @@ mod tests {
         assert_eq!(book.base_address, weth);
         assert_eq!(book.quote_address, usdc);
         assert_eq!(book.minimum_in_base, 100_000_000_000.0);
-        assert_eq!(book.minimum_in_quote, 100.0);
+        assert_eq!(book.minimum_in_quote, 250.0);
         assert_eq!(book.bids, vec![NativePriceLevel { quantity: 1.0, price: 2_000.0 }]);
         assert_eq!(book.asks, vec![NativePriceLevel { quantity: 1.0, price: 2_000.0 }]);
+    }
+
+    #[rstest]
+    #[case::token0_only(true, false, true)]
+    #[case::token1_only(false, true, false)]
+    #[case::both_tokens(true, true, false)]
+    #[case::neither_token(false, false, false)]
+    fn selects_stable_direction_for_quote_token_preferences(
+        #[case] token0_is_quote: bool,
+        #[case] token1_is_quote: bool,
+        #[case] expected_quote_is_token0: bool,
+    ) {
+        let token0 = Bytes::from_str("0x1111111111111111111111111111111111111111").unwrap();
+        let token1 = Bytes::from_str("0x2222222222222222222222222222222222222222").unwrap();
+        assert!(token0.as_ref() < token1.as_ref());
+
+        let mut quote_tokens = HashSet::new();
+        if token0_is_quote {
+            quote_tokens.insert(token0.clone());
+        }
+        if token1_is_quote {
+            quote_tokens.insert(token1.clone());
+        }
+        let client = NativeClient::new(
+            Chain::Ethereum,
+            "test-api-key".to_string(),
+            HashSet::from([token0.clone(), token1.clone()]),
+            0.0,
+            quote_tokens,
+            Duration::from_secs(1),
+            Duration::from_secs(5),
+        )
+        .unwrap();
+
+        // Native returned only the direction opposite to the sorted fallback.
+        let books = client.group_orderbook(vec![NativeOrderbookEntry {
+            base_address: token1.clone(),
+            quote_address: token0.clone(),
+            minimum_in_base: 0.0,
+            side: NativeOrderbookSide::Bid,
+            levels: vec![NativePriceLevel { quantity: 1.0, price: 1.0 }],
+        }]);
+
+        let book = books
+            .values()
+            .next()
+            .expect("one grouped book");
+        let (expected_base, expected_quote) =
+            if expected_quote_is_token0 { (token1, token0) } else { (token0, token1) };
+        assert_eq!(book.base_address, expected_base);
+        assert_eq!(book.quote_address, expected_quote);
     }
 
     fn create_test_quote_params() -> GetAmountOutParams {
@@ -1031,14 +1095,6 @@ mod tests {
         let quote = NativeClient::process_quote_response(response, &params).unwrap();
 
         assert_eq!(quote.amount_in, params.amount_in);
-        assert_eq!(
-            quote
-                .quote_attributes
-                .get("amount_in_offset")
-                .unwrap()
-                .as_ref(),
-            36u32.to_be_bytes()
-        );
         assert_eq!(
             quote
                 .quote_attributes
@@ -1077,16 +1133,35 @@ mod tests {
     }
 
     #[test]
-    fn rejects_quote_with_mismatched_effective_input_amount() {
+    fn accepts_quote_with_different_effective_input_amount() {
+        let mut params = create_test_quote_params();
+        params.amount_in = BigUint::from(100u64);
+        let mut response = successful_quote_response(&params.amount_in.to_string());
+        response.orders[0].effective_seller_token_amount = "99".to_string();
+
+        let quote = NativeClient::process_quote_response(response, &params).unwrap();
+
+        assert_eq!(quote.amount_in, params.amount_in);
+    }
+
+    #[rstest]
+    #[case::seller_token(true)]
+    #[case::buyer_token(false)]
+    fn rejects_quote_with_mismatched_token(#[case] mutate_seller_token: bool) {
         let params = create_test_quote_params();
         let mut response = successful_quote_response(&params.amount_in.to_string());
-        response.orders[0].effective_seller_token_amount = "2".to_string();
+        let mismatched_token = "0x5555555555555555555555555555555555555555".to_string();
+        if mutate_seller_token {
+            response.orders[0].seller_token = mismatched_token;
+        } else {
+            response.orders[0].buyer_token = mismatched_token;
+        }
 
         let result = NativeClient::process_quote_response(response, &params);
 
         assert!(matches!(
             result,
-            Err(RFQError::ParsingError(message)) if message.contains("effective input amount mismatch")
+            Err(RFQError::ParsingError(message)) if message.contains("quote token mismatch")
         ));
     }
 
@@ -1133,30 +1208,73 @@ mod tests {
     }
 
     #[test]
-    fn rejects_quote_with_invalid_amount_in_offset() {
+    fn rejects_quote_with_wrong_trade_rfqt_selector() {
         let params = create_test_quote_params();
         let mut response = successful_quote_response(&params.amount_in.to_string());
-        response.amount_in_offset = 37;
+        let mut calldata = hex::decode(
+            response
+                .tx_request
+                .calldata
+                .trim_start_matches("0x"),
+        )
+        .unwrap();
+        calldata[0] ^= 0xff;
+        response.tx_request.calldata = format!("0x{}", hex::encode(calldata));
 
         let result = NativeClient::process_quote_response(response, &params);
 
         assert!(matches!(
             result,
-            Err(RFQError::ParsingError(message)) if message.contains("Invalid Native amountInOffset")
+            Err(RFQError::ParsingError(message)) if message.contains("selector")
         ));
     }
 
-    #[test]
-    fn rejects_quote_with_out_of_bounds_amount_in_offset() {
+    #[rstest]
+    #[case::seller_offset(68, 68)]
+    #[case::minimum_offset(36, 36)]
+    fn rejects_quote_with_noncanonical_override_offsets(
+        #[case] amount_in_offset: u32,
+        #[case] amount_out_minimum_offset: u32,
+    ) {
         let params = create_test_quote_params();
         let mut response = successful_quote_response(&params.amount_in.to_string());
-        response.amount_in_offset = 100;
+        response.amount_in_offset = amount_in_offset;
+        response.amount_out_minimum_offset = amount_out_minimum_offset;
 
         let result = NativeClient::process_quote_response(response, &params);
 
         assert!(matches!(
             result,
-            Err(RFQError::ParsingError(message)) if message.contains("Invalid Native amountInOffset")
+            Err(RFQError::ParsingError(message)) if message.contains(
+                "Unexpected Native V4 override offsets"
+            )
+        ));
+    }
+
+    #[rstest]
+    #[case::seller(ACTUAL_SELLER_AMOUNT_OFFSET, "actualSellerAmount")]
+    #[case::minimum(ACTUAL_MIN_OUTPUT_AMOUNT_OFFSET, "actualMinOutputAmount")]
+    fn rejects_quote_with_preset_override(
+        #[case] override_offset: usize,
+        #[case] field_name: &str,
+    ) {
+        let params = create_test_quote_params();
+        let mut response = successful_quote_response(&params.amount_in.to_string());
+        let mut calldata = hex::decode(
+            response
+                .tx_request
+                .calldata
+                .trim_start_matches("0x"),
+        )
+        .unwrap();
+        calldata[override_offset + 31] = 1;
+        response.tx_request.calldata = format!("0x{}", hex::encode(calldata));
+
+        let result = NativeClient::process_quote_response(response, &params);
+
+        assert!(matches!(
+            result,
+            Err(RFQError::ParsingError(message)) if message.contains(field_name)
         ));
     }
 
@@ -1291,7 +1409,7 @@ mod tests {
         assert!(orderbook.is_empty());
         assert!(request.starts_with("GET /orderbook?"));
         assert!(request.contains("chain=ethereum"));
-        assert!(request.contains("showNative=true"));
+        assert!(request.contains("showNative=0x0"));
     }
 
     async fn create_quote_server(

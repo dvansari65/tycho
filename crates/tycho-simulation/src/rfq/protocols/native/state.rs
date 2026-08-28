@@ -20,6 +20,9 @@ use crate::rfq::{
     protocols::native::{client::NativeClient, models::NativePriceData},
 };
 
+// `Deserialize` bypasses `new`, so it does not validate the book or remove zero-quantity levels.
+// This is harmless while `delta_transition` cannot update the book; use `TryFrom`-based
+// deserialization before supporting state deltas.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct NativeState {
     pub base_token: Token,
@@ -344,7 +347,7 @@ mod tests {
             base_address: base_token.address.clone(),
             quote_address: quote_token.address.clone(),
             minimum_in_base: 100_000_000_000.0,
-            minimum_in_quote: 100_000.0,
+            minimum_in_quote: 100.0,
             bids: vec![NativePriceLevel { quantity: 1.0, price: 2_000.0 }],
             asks: vec![NativePriceLevel { quantity: 1.0, price: 2_000.0 }],
         };
@@ -363,11 +366,11 @@ mod tests {
     }
 
     #[test]
-    fn compares_base_sell_minimum_in_atomic_units() {
+    fn accepts_base_sell_at_atomic_minimum() {
         let state = state();
 
         let result = state.get_amount_out(
-            BigUint::from(200_000_000_000u64),
+            BigUint::from(100_000_000_000u64),
             &state.base_token,
             &state.quote_token,
         );
@@ -380,7 +383,7 @@ mod tests {
         let state = state();
 
         let result = state.get_amount_out(
-            BigUint::from(50_000_000_000u64),
+            BigUint::from(99_999_999_999u64),
             &state.base_token,
             &state.quote_token,
         );
@@ -389,11 +392,11 @@ mod tests {
     }
 
     #[test]
-    fn compares_quote_sell_minimum_in_quote_atomic_units() {
+    fn accepts_quote_sell_at_atomic_minimum() {
         let state = state();
 
         let result =
-            state.get_amount_out(BigUint::from(200_000u64), &state.quote_token, &state.base_token);
+            state.get_amount_out(BigUint::from(100u64), &state.quote_token, &state.base_token);
 
         assert!(result.is_ok());
     }
@@ -403,7 +406,7 @@ mod tests {
         let state = state();
 
         let result =
-            state.get_amount_out(BigUint::from(50_000u64), &state.quote_token, &state.base_token);
+            state.get_amount_out(BigUint::from(99u64), &state.quote_token, &state.base_token);
 
         assert!(matches!(result, Err(SimulationError::RecoverableError(_))));
     }

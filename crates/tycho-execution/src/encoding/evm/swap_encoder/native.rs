@@ -4,9 +4,11 @@ use std::{
 };
 
 use alloy::{primitives::Address, sol_types::SolValue};
+use num_bigint::BigUint;
 use tokio::runtime::Handle;
 use tycho_common::{
     models::{protocol::GetAmountOutParams, Chain},
+    simulation::indicatively_priced::SignedQuote,
     Bytes,
 };
 
@@ -24,6 +26,20 @@ pub struct NativeSwapEncoder {
     runtime_handle: Handle,
     #[allow(dead_code)]
     runtime: SafeRuntime,
+}
+
+fn validate_quote_amount(
+    signed_quote: &SignedQuote,
+    requested_amount: &BigUint,
+) -> Result<(), EncodingError> {
+    if &signed_quote.amount_in != requested_amount {
+        return Err(EncodingError::InvalidInput(format!(
+            "Native quote amount {} does not match requested amount {}",
+            signed_quote.amount_in, requested_amount
+        )));
+    }
+
+    Ok(())
 }
 
 impl SwapEncoder for NativeSwapEncoder {
@@ -94,12 +110,7 @@ impl SwapEncoder for NativeSwapEncoder {
                     .await
             })
         })??;
-        if signed_quote.amount_in != amount_in {
-            return Err(EncodingError::InvalidInput(format!(
-                "Native quote amount {} does not match requested amount {}",
-                signed_quote.amount_in, amount_in
-            )));
-        }
+        validate_quote_amount(&signed_quote, &amount_in)?;
         let target_bytes = signed_quote
             .quote_attributes
             .get("target")
@@ -120,19 +131,6 @@ impl SwapEncoder for NativeSwapEncoder {
             .ok_or(EncodingError::FatalError(
                 "Native quote must have a calldata attribute".to_string(),
             ))?;
-
-        let amount_in_offset = signed_quote
-            .quote_attributes
-            .get("amount_in_offset")
-            .ok_or(EncodingError::FatalError(
-                "Native quote must have an amount_in_offset attribute".to_string(),
-            ))?;
-        if amount_in_offset.len() != 4 {
-            return Err(EncodingError::InvalidInput(format!(
-                "Native amount_in_offset must be 4 bytes, got {}",
-                amount_in_offset.len()
-            )));
-        }
 
         let deadline_timestamp = signed_quote
             .quote_attributes
@@ -182,15 +180,15 @@ impl SwapEncoder for NativeSwapEncoder {
         )?);
 
         // Encode packed data for the executor
-        // Format: tokenIn | tokenOut | target | amountInOffset |
-        //         signedAmountIn | native_calldata[..]
-        // 20 + 20 + 20 + 4 + 32 bytes + dynamic length
+        // Format: tokenIn | tokenOut | target | signedAmountIn | native_calldata[..]
+        // 20 + 20 + 20 + 32 bytes + dynamic length. Native V4's mutable ABI
+        // argument positions are fixed by tradeRFQT's selector and are therefore
+        // not accepted from quote metadata.
         // We pack tokenIn and tokenOut at the very beginning so the Solidity NativeExecutor
         // can easily slice them out in `getTransferData` without parsing the opaque
         // `native_calldata`.
         let args = (token_in, token_out, target);
         let mut encoded = args.abi_encode_packed();
-        encoded.extend_from_slice(amount_in_offset);
         encoded.extend_from_slice(&encoded_requested_amount);
         encoded.extend_from_slice(calldata);
         Ok(encoded)
@@ -210,7 +208,6 @@ mod test {
     use std::{str::FromStr, sync::Arc};
 
     use alloy::hex::encode;
-    use num_bigint::BigUint;
     use tycho_common::models::protocol::ProtocolComponent;
 
     use super::*;
@@ -270,6 +267,27 @@ mod test {
     }
 
     #[test]
+    fn test_native_quote_amount_binding_rejects_mismatch() {
+        let requested_amount = BigUint::from(1_000_000u64);
+        let signed_quote = SignedQuote {
+            base_token: Bytes::default(),
+            quote_token: Bytes::default(),
+            amount_in: BigUint::from(999_999u64),
+            amount_out: BigUint::ZERO,
+            quote_attributes: HashMap::new(),
+        };
+
+        let error = validate_quote_amount(&signed_quote, &requested_amount).unwrap_err();
+
+        assert!(matches!(
+            error,
+            EncodingError::InvalidInput(message) if message.contains(
+                "Native quote amount 999999 does not match requested amount 1000000"
+            )
+        ));
+    }
+
+    #[test]
     fn test_encode_native_single_with_protocol_state() {
         let quote_amount_out = BigUint::from_str("1000000000000000000").unwrap();
 
@@ -286,12 +304,13 @@ mod test {
         let native_quote_data = vec![
             ("target".to_string(), target_bytes.clone()),
             ("calldata".to_string(), calldata_bytes.clone()),
-            ("amount_in_offset".to_string(), Bytes::from(36u32.to_be_bytes().to_vec())),
             ("deadline_timestamp".to_string(), Bytes::from(u64::MAX.to_be_bytes().to_vec())),
         ];
 
-        let native_state =
-            MockRFQState { quote_amount_out, quote_data: native_quote_data.into_iter().collect() };
+        let native_state = MockRFQState {
+            quote_amount_out,
+            quote_data: native_quote_data.into_iter().collect(),
+        };
 
         let token_in = Bytes::from("0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48");
         let token_out = Bytes::from("0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2");
@@ -324,13 +343,12 @@ mod test {
         let hex_swap = encode(&encoded_swap);
 
         let expected_swap = format!(
-            "{}{}{}{}{}{}",
+            "{}{}{}{}{}",
             "a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", // token_in (20 bytes, lowercase, no 0x)
             "c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2", // token_out (20 bytes)
             target_address
                 .to_lowercase()
                 .trim_start_matches("0x"), // target (20 bytes)
-            "00000024",                                 // amountInOffset (4 bytes)
             "00000000000000000000000000000000000000000000000000000000b2d05e00", /* signedAmountIn
                                                          * (32 bytes) */
             calldata_hex
@@ -349,7 +367,6 @@ mod test {
             quote_data: HashMap::from([
                 ("target".to_string(), target),
                 ("calldata".to_string(), calldata),
-                ("amount_in_offset".to_string(), Bytes::from(36u32.to_be_bytes().to_vec())),
                 ("deadline_timestamp".to_string(), Bytes::from(0u64.to_be_bytes().to_vec())),
             ]),
         };

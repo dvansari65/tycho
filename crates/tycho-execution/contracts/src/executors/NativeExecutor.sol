@@ -10,7 +10,7 @@ error NativeExecutor__InvalidDataLength();
 error NativeExecutor__InvalidTarget();
 error NativeExecutor__InvalidPayload();
 error NativeExecutor__InvalidAmountIn();
-error NativeExecutor__InvalidAmountInOffset();
+error NativeExecutor__UnexpectedOverride();
 error NativeExecutor__ZeroAddress();
 error NativeExecutor__NotAContract();
 
@@ -22,8 +22,12 @@ contract NativeExecutor is IExecutor {
     // Native Router entrypoint:
     // tradeRFQT(RFQTQuote quote, uint256 actualSellerAmount, uint256 actualMinOutputAmount)
     bytes4 public constant TRADE_RFQT_SELECTOR = 0x0947c2d9;
-    uint256 private constant _FIXED_HEADER_LENGTH = 96;
+    uint256 private constant _FIXED_HEADER_LENGTH = 92;
     uint256 private constant _MIN_TRADE_RFQT_CALLDATA_LENGTH = 4 + 3 * 32;
+    // These positions are fixed by the pinned tradeRFQT selector: the selector
+    // occupies 4 bytes, followed by three 32-byte ABI head words.
+    uint256 private constant _ACTUAL_SELLER_AMOUNT_OFFSET = 4 + 32;
+    uint256 private constant _ACTUAL_MIN_OUTPUT_AMOUNT_OFFSET = 4 + 2 * 32;
 
     constructor(address _nativeRouterV4) {
         if (_nativeRouterV4 == address(0)) {
@@ -53,7 +57,6 @@ contract NativeExecutor is IExecutor {
             address tokenIn,
             /* address tokenOut */,
             address target,
-            uint32 amountInOffset,
             uint256 signedAmountIn,
             bytes memory payload
         ) = _decodeData(data);
@@ -62,7 +65,9 @@ contract NativeExecutor is IExecutor {
             revert NativeExecutor__InvalidTarget();
         }
 
-        // check payload against function selector
+        // _decodeData guarantees at least four payload bytes, and truncating here
+        // intentionally reads only the function selector.
+        // forge-lint: disable-next-line(unsafe-typecast)
         bytes4 selector = bytes4(payload);
         if (selector != TRADE_RFQT_SELECTOR) {
             revert NativeExecutor__InvalidPayload();
@@ -74,10 +79,13 @@ contract NativeExecutor is IExecutor {
             revert NativeExecutor__InvalidAmountIn();
         }
 
-        _validateAmountInOffset(payload, amountInOffset);
+        _validateOverrideArguments(payload);
 
+        // Native scales the signed minimum output when actualSellerAmount is overridden
+        // and actualMinOutputAmount remains zero. Its router also enforces the flexible-input bounds:
+        // https://docs.native.org/native-dev/build-with-native/swap-aggregators/firmquote-swap-apis/miscellaneous/compose-with-amm
         if (amountIn != signedAmountIn) {
-            _setActualSellerAmount(payload, amountInOffset, amountIn);
+            _setActualSellerAmount(payload, amountIn);
         }
 
         // amountIn is authoritative at execution time. It equals Native's quoted
@@ -96,14 +104,12 @@ contract NativeExecutor is IExecutor {
             address tokenIn,
             address tokenOut,
             address target,
-            uint32 amountInOffset,
             uint256 signedAmountIn,
             bytes memory payload
         )
     {
-        // Decode the 96-byte fixed header injected by NativeSwapEncoder.
-        // 20 tokenIn + 20 tokenOut + 20 target + 4 amountInOffset
-        // + 32 signedAmountIn = 96 bytes.
+        // Decode the 92-byte fixed header injected by NativeSwapEncoder.
+        // 20 tokenIn + 20 tokenOut + 20 target + 32 signedAmountIn = 92 bytes.
         // The tradeRFQT payload must contain its 4-byte selector and three
         // 32-byte ABI head words. Its dynamic quote data remains opaque and is
         // validated by the Native Router.
@@ -116,35 +122,42 @@ contract NativeExecutor is IExecutor {
         tokenIn = address(bytes20(data[0:20]));
         tokenOut = address(bytes20(data[20:40]));
         target = address(bytes20(data[40:60]));
-        amountInOffset = uint32(bytes4(data[60:64]));
-        signedAmountIn = uint256(bytes32(data[64:96]));
+        signedAmountIn = uint256(bytes32(data[60:92]));
 
         // The remaining bytes are the opaque Native Router calldata
         payload = data[_FIXED_HEADER_LENGTH:];
     }
 
-    function _validateAmountInOffset(
-        bytes memory payload,
-        uint32 amountInOffset
-    ) private pure {
-        // Native's offset is relative to the complete Router calldata. The first
-        // ABI word begins after the 4-byte selector, and every argument word is
-        // 32-byte aligned from there.
-        if (
-            amountInOffset < 4 || (amountInOffset - 4) % 32 != 0
-                || payload.length < 32 || amountInOffset > payload.length - 32
-        ) {
-            revert NativeExecutor__InvalidAmountInOffset();
+    function _validateOverrideArguments(bytes memory payload) private pure {
+        uint256 actualSellerAmount;
+        uint256 actualMinOutputAmount;
+        assembly ("memory-safe") {
+            actualSellerAmount := mload(
+                add(add(payload, 0x20), _ACTUAL_SELLER_AMOUNT_OFFSET)
+            )
+            actualMinOutputAmount := mload(
+                add(add(payload, 0x20), _ACTUAL_MIN_OUTPUT_AMOUNT_OFFSET)
+            )
+        }
+
+        // Native's firm-quote calldata leaves both unsigned override arguments
+        // at zero. Tycho owns these fields during execution: accepting a pre-set
+        // seller amount could bypass amountIn, while a pre-set minimum would
+        // disable Native's automatic proportional slippage adjustment.
+        if (actualSellerAmount != 0 || actualMinOutputAmount != 0) {
+            revert NativeExecutor__UnexpectedOverride();
         }
     }
 
-    function _setActualSellerAmount(
-        bytes memory payload,
-        uint32 amountInOffset,
-        uint256 amountIn
-    ) private pure {
+    function _setActualSellerAmount(bytes memory payload, uint256 amountIn)
+        private
+        pure
+    {
         assembly ("memory-safe") {
-            mstore(add(add(payload, 0x20), amountInOffset), amountIn)
+            mstore(
+                add(add(payload, 0x20), _ACTUAL_SELLER_AMOUNT_OFFSET),
+                amountIn
+            )
         }
     }
 
@@ -164,7 +177,7 @@ contract NativeExecutor is IExecutor {
         )
     {
         address target;
-        (tokenIn, tokenOut, target,,,) = _decodeData(data);
+        (tokenIn, tokenOut, target,,) = _decodeData(data);
 
         if (!_isValidTarget(target)) {
             revert NativeExecutor__InvalidTarget();

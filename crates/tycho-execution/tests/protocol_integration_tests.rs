@@ -3308,7 +3308,6 @@ fn test_single_encoding_strategy_native() {
     let native_quote_data = vec![
         ("target".to_string(), target_bytes),
         ("calldata".to_string(), calldata_bytes),
-        ("amount_in_offset".to_string(), Bytes::from(36u32.to_be_bytes().to_vec())),
         ("deadline_timestamp".to_string(), Bytes::from(u64::MAX.to_be_bytes().to_vec())),
     ];
 
@@ -3379,7 +3378,6 @@ fn test_single_encoding_strategy_native_eth_input() {
     let native_quote_data = vec![
         ("target".to_string(), target_bytes),
         ("calldata".to_string(), calldata_bytes),
-        ("amount_in_offset".to_string(), Bytes::from(36u32.to_be_bytes().to_vec())),
         ("deadline_timestamp".to_string(), Bytes::from(u64::MAX.to_be_bytes().to_vec())),
     ];
     let native_state = MockRFQState {

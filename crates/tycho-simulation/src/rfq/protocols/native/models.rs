@@ -65,6 +65,8 @@ pub struct NativeOrderbookEntry {
     pub base_address: Bytes,
     #[serde(deserialize_with = "deserialize_address")]
     pub quote_address: Bytes,
+    /// Minimum input in atomic base-token units. Unlike level quantities, this is not a
+    /// human-readable token amount in Native's aggregator orderbook response.
     pub minimum_in_base: f64,
     pub side: NativeOrderbookSide,
     #[serde(deserialize_with = "deserialize_levels")]
@@ -75,7 +77,9 @@ pub struct NativeOrderbookEntry {
 pub struct NativePriceData {
     pub base_address: Bytes,
     pub quote_address: Bytes,
+    /// Minimum input in atomic base-token units.
     pub minimum_in_base: f64,
+    /// Minimum input in atomic quote-token units.
     pub minimum_in_quote: f64,
     pub bids: Vec<NativePriceLevel>,
     pub asks: Vec<NativePriceLevel>,
@@ -198,11 +202,10 @@ pub struct FirmQuoteRequest {
 // --- Response ---
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WidgetFee {
     pub signer: String,
-    #[serde(rename = "feeRecipient")]
     pub fee_recipient: String,
-    #[serde(rename = "feeRate")]
     pub fee_rate: f64,
 }
 
