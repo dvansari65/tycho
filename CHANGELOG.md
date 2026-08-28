@@ -1,3 +1,13 @@
+## [0.369.0](https://github.com/propeller-heads/tycho/compare/0.368.1...0.369.0) (2026-08-28)
+
+
+### Features
+
+* **fluid:** decode resolver state from pending attributes ([18bc17d](https://github.com/propeller-heads/tycho/commit/18bc17dd7f341fc5bf78584055cfe53298c81d2c))
+* **pending:** pass target block state to delta indexers ([f28e67e](https://github.com/propeller-heads/tycho/commit/f28e67e62d899336830e37b77b3707774f821f3c))
+* **simulation:** apply native balance overrides per call ([84c73a6](https://github.com/propeller-heads/tycho/commit/84c73a63eefe9c633f515c33d24fb401f65449a7))
+* **simulation:** Groundwork for VM protocols as native mid-block processors ([#1347](https://github.com/propeller-heads/tycho/issues/1347)) ([0a4e1f6](https://github.com/propeller-heads/tycho/commit/0a4e1f62d01ab2c28f07f091fe54c138f3be7297))
+
 ## [0.368.1](https://github.com/propeller-heads/tycho/compare/0.368.0...0.368.1) (2026-08-27)
 
 
