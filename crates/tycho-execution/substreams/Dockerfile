@@ -34,8 +34,8 @@ WORKDIR /opt/router-trades
 COPY --from=build /spkg ./spkg
 COPY crates/tycho-execution/substreams/schema.sql ./
 COPY crates/tycho-execution/substreams/pricing ./pricing
-COPY crates/tycho-execution/substreams/scripts/price_trades.sh ./scripts/price_trades.sh
+COPY crates/tycho-execution/substreams/scripts/price_trades.sh crates/tycho-execution/substreams/scripts/fdw_setup.sh ./scripts/
 COPY crates/tycho-execution/substreams/docker/entrypoint.sh /usr/local/bin/entrypoint
-RUN chmod +x /usr/local/bin/entrypoint ./scripts/price_trades.sh
+RUN chmod +x /usr/local/bin/entrypoint ./scripts/*.sh
 ENTRYPOINT ["/usr/local/bin/entrypoint"]
 CMD ["sink"]

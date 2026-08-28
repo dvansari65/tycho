@@ -74,10 +74,23 @@ docker run -e CHAIN=ethereum -e DSN='psql://...' -e SUBSTREAMS_API_TOKEN=... tyc
 docker run -e DSN='postgres://...' tycho-router-trades price
 ```
 
-`sink` runs `substreams-sink-sql setup` (idempotent) and then `run` with
-`--batch-block-flush-interval 100`; optional `SUBSTREAMS_ENDPOINT`, `START_BLOCK`, `STOP_BLOCK`,
-`FLUSH_INTERVAL`, `METRICS_ADDR` (Prometheus, default `:9102`). `docker-compose.yaml` wires the
-database, the eight sinks and the pricer for a local run (`docker compose --profile sinks up`).
+Both modes wait until the database accepts connections. `sink` runs `substreams-sink-sql setup`
+(idempotent) and then `run` with `--batch-block-flush-interval 100`; optional
+`SUBSTREAMS_ENDPOINT`, `START_BLOCK`, `STOP_BLOCK`, `FLUSH_INTERVAL`, `METRICS_ADDR` (Prometheus,
+default `:9102`). `price` registers one `postgres_fdw` server per `TYCHO_<CHAIN>_DATABASE_URL`
+variable (`scripts/fdw_setup.sh`, re-run on every start), rebuilds `current_token_prices` and
+then loops `price_trades.sql` every `INTERVAL` seconds (default 60, `MAX_AGE` default `1 hour`).
+`docker-compose.yaml` wires the database, the eight sinks and the pricer for a local run
+(`docker compose --profile sinks up`).
+
+### Kubernetes
+
+`main-workflow.yaml` builds the image as `tycho-router-trades:<release version>` on every
+monorepo release and promotes the tag to `helmwave/dev/versions.yml` in `helm-configuration`. The
+`router-trades` release there (namespace `dev-tycho`) runs a single pod: a Postgres 16 container
+with a PVC, one `sink` container per chain and one `price` container, all talking to
+`localhost:5432`. Grafana reaches the database through the `router-trades` service with the
+read-only `grafana` role.
 
 ## Module graph
 
