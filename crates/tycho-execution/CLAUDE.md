@@ -248,11 +248,18 @@ resolve generically: a single `pricelevelstream` config entry serves the whole f
 `get_encoder` fallback (shared generic `PropAMMSwapEncoder`/`PropAMMExecutor`), with exact
 `pricelevelstream:{venue}` entries overriding per venue.
 
+`propammfallback:{venue}` is the same liquidity executed through Titan's PropAMMRouter
+(`0x4DdF368080CD7946db5b459aD591c350158175e1`, hardcoded in the executor) instead of the venue
+directly, so a stale maker quote falls back to a single-hop Uniswap V3 pool rather than reverting
+the route. It resolves the same
+way (family key `propammfallback`, shared `PropAMMSwapEncoder`, `PropAMMFallbackExecutor`). Only venues
+whitelisted on the PropAMMRouter may use the prefix.
+
 ### Angstrom attestations (`evm/swap_encoder/angstrom.rs`)
 
 Angstrom's Uniswap V4 pools start every block locked. A swap against one carries a pool unlock attestation, signed by
 the current Angstrom leader, as its `hookData`. The attestation is scoped to a block number and says nothing about the
-swap, so one fetched window (covering `ANGSTROM_BLOCKS_IN_FUTURE` blocks, default 5) serves every swap, pool and route.
+swap, so one fetched window (covering `ANGSTROM_BLOCKS_IN_FUTURE` blocks, default 10) serves every swap, pool and route.
 
 `AttestationCache` therefore keeps the window in a process-wide cache instead of fetching it during encoding:
 

@@ -308,6 +308,7 @@ mod test {
         ];
 
         let native_state = MockRFQState {
+            quote_amount_in: None,
             quote_amount_out,
             quote_data: native_quote_data.into_iter().collect(),
         };
@@ -363,6 +364,7 @@ mod test {
             hex::decode(format!("0947c2d9{:064x}{:064x}{:064x}", 0x60u8, 0u8, 0u8)).unwrap(),
         );
         let native_state = MockRFQState {
+            quote_amount_in: None,
             quote_amount_out: BigUint::from(1_000_000u64),
             quote_data: HashMap::from([
                 ("target".to_string(), target),
@@ -406,6 +408,7 @@ mod test {
     fn test_encode_native_rejects_unconfigured_quote_target() {
         let target_bytes = Bytes::from_str("0xb2d1F342D2049684Fb2f8c4eF320633415598333").unwrap();
         let native_state = MockRFQState {
+            quote_amount_in: None,
             quote_amount_out: BigUint::from(1_000_000u64),
             quote_data: HashMap::from([
                 ("target".to_string(), target_bytes),
