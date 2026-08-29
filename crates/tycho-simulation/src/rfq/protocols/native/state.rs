@@ -65,10 +65,15 @@ impl NativeState {
                 "Native book token addresses do not match state tokens".to_string(),
             ));
         }
-        if !self.book.minimum_in_base.is_finite() ||
-            self.book.minimum_in_base < 0.0 ||
-            !self.book.minimum_in_quote.is_finite() ||
-            self.book.minimum_in_quote < 0.0
+        let minimums = [
+            self.book.minimum_in_base,
+            self.book.minimum_in_quote,
+            self.book.minimum_out_base,
+            self.book.minimum_out_quote,
+        ];
+        if minimums
+            .iter()
+            .any(|minimum| !minimum.is_finite() || *minimum < 0.0)
         {
             return Err(SimulationError::FatalError(
                 "Native book contains an invalid minimum amount".to_string(),
@@ -89,6 +94,29 @@ impl NativeState {
             return Err(SimulationError::FatalError(
                 "Native book contains an invalid price level".to_string(),
             ));
+        }
+
+        Ok(())
+    }
+
+    fn enforce_minimum(
+        amount: &BigUint,
+        minimum: f64,
+        amount_kind: &str,
+    ) -> Result<(), SimulationError> {
+        if minimum == 0.0 {
+            return Ok(())
+        }
+
+        let minimum = BigUint::from_f64(minimum.ceil()).ok_or_else(|| {
+            SimulationError::FatalError(format!(
+                "Can't convert Native minimum {amount_kind} amount to BigUint"
+            ))
+        })?;
+        if amount < &minimum {
+            return Err(SimulationError::RecoverableError(format!(
+                "Amount below minimum {amount_kind}. Amount: {amount}, min amount: {minimum}"
+            )))
         }
 
         Ok(())
@@ -164,20 +192,12 @@ impl ProtocolSim for NativeState {
             ));
         }
 
-        let minimum_in =
-            if is_sell_base { self.book.minimum_in_base } else { self.book.minimum_in_quote };
-        if minimum_in > 0.0 {
-            let minimum_in = BigUint::from_f64(minimum_in.ceil()).ok_or_else(|| {
-                SimulationError::FatalError(
-                    "Can't convert Native minimum input amount to BigUInt".into(),
-                )
-            })?;
-            if amount_in < minimum_in {
-                return Err(SimulationError::RecoverableError(format!(
-                    "Amount below minimum. Input amount: {amount_in}, min amount: {minimum_in}"
-                )));
-            }
-        }
+        let (minimum_in, minimum_out) = if is_sell_base {
+            (self.book.minimum_in_base, self.book.minimum_out_quote)
+        } else {
+            (self.book.minimum_in_quote, self.book.minimum_out_base)
+        };
+        Self::enforce_minimum(&amount_in, minimum_in, "input")?;
 
         let amount_in_f64 = amount_in.to_f64().ok_or_else(|| {
             SimulationError::RecoverableError("Can't convert amount in to f64".into())
@@ -199,7 +219,7 @@ impl ProtocolSim for NativeState {
         let res = GetAmountOutResult {
             amount: BigUint::from_f64(amount_out_f64 * 10f64.powi(token_out.decimals as i32))
                 .ok_or_else(|| {
-                    SimulationError::RecoverableError("Can't convert amount out to BigUInt".into())
+                    SimulationError::RecoverableError("Can't convert amount out to BigUint".into())
                 })?,
             gas: BigUint::from(134_000u64), // Approximate standard gas for Native swap
             new_state: self.clone_box(),
@@ -211,6 +231,8 @@ impl ProtocolSim for NativeState {
                 Some(res),
             ));
         }
+
+        Self::enforce_minimum(&res.amount, minimum_out, "output")?;
 
         Ok(res)
     }
@@ -348,6 +370,8 @@ mod tests {
             quote_address: quote_token.address.clone(),
             minimum_in_base: 100_000_000_000.0,
             minimum_in_quote: 100.0,
+            minimum_out_base: 0.0,
+            minimum_out_quote: 0.0,
             bids: vec![NativePriceLevel { quantity: 1.0, price: 2_000.0 }],
             asks: vec![NativePriceLevel { quantity: 1.0, price: 2_000.0 }],
         };
@@ -366,7 +390,7 @@ mod tests {
     }
 
     #[test]
-    fn accepts_base_sell_at_atomic_minimum() {
+    fn accepts_base_sell_at_atomic_input_minimum() {
         let state = state();
 
         let result = state.get_amount_out(
@@ -379,7 +403,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_base_sell_below_atomic_minimum() {
+    fn rejects_base_sell_below_atomic_input_minimum() {
         let state = state();
 
         let result = state.get_amount_out(
@@ -392,7 +416,7 @@ mod tests {
     }
 
     #[test]
-    fn accepts_quote_sell_at_atomic_minimum() {
+    fn accepts_quote_sell_at_atomic_input_minimum() {
         let state = state();
 
         let result =
@@ -402,7 +426,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_quote_sell_below_atomic_minimum() {
+    fn rejects_quote_sell_below_atomic_input_minimum() {
         let state = state();
 
         let result =
@@ -464,6 +488,40 @@ mod tests {
             .unwrap();
 
         assert_eq!(result.amount, BigUint::from(500_000_000_000_000_000u64));
+    }
+
+    #[test]
+    fn enforces_base_sell_atomic_output_minimum() {
+        let mut state = state();
+        state.book.minimum_out_quote = 1_000_000_000.0;
+        let amount_in = BigUint::from(500_000_000_000_000_000u64);
+
+        assert!(state
+            .get_amount_out(amount_in.clone(), &state.base_token, &state.quote_token)
+            .is_ok());
+
+        state.book.minimum_out_quote = 1_000_000_001.0;
+        assert!(matches!(
+            state.get_amount_out(amount_in, &state.base_token, &state.quote_token),
+            Err(SimulationError::RecoverableError(message)) if message.contains("minimum output")
+        ));
+    }
+
+    #[test]
+    fn enforces_quote_sell_atomic_output_minimum() {
+        let mut state = state();
+        state.book.minimum_out_base = 500_000_000_000_000.0;
+        let amount_in = BigUint::from(1_000_000u64);
+
+        assert!(state
+            .get_amount_out(amount_in.clone(), &state.quote_token, &state.base_token)
+            .is_ok());
+
+        state.book.minimum_out_base = 500_000_000_000_001.0;
+        assert!(matches!(
+            state.get_amount_out(amount_in, &state.quote_token, &state.base_token),
+            Err(SimulationError::RecoverableError(message)) if message.contains("minimum output")
+        ));
     }
 
     #[test]
@@ -548,6 +606,17 @@ mod tests {
     fn rejects_invalid_book_state() {
         let mut state = state();
         state.book.bids[0].price = 0.0;
+
+        assert!(matches!(
+            NativeState::new(state.base_token, state.quote_token, state.book, state.client),
+            Err(SimulationError::FatalError(_))
+        ));
+    }
+
+    #[test]
+    fn rejects_invalid_output_minimum() {
+        let mut state = state();
+        state.book.minimum_out_base = -1.0;
 
         assert!(matches!(
             NativeState::new(state.base_token, state.quote_token, state.book, state.client),

@@ -21,6 +21,7 @@ use tycho_common::{
 
 use super::models::{
     normalize_native_address, NativeOrderbookEntry, NativeOrderbookSide, NativePriceData,
+    NativePriceLevel,
 };
 use crate::{
     rfq::{
@@ -58,6 +59,20 @@ impl QuoteAttemptError {
         match self {
             Self::Retry { error, .. } | Self::Fatal(error) => error,
         }
+    }
+}
+
+#[derive(Default)]
+struct AggregatedLevels {
+    levels: Vec<NativePriceLevel>,
+    // Maximum minimum_in_base among the Native entries contributing these levels.
+    minimum: f64,
+}
+
+impl AggregatedLevels {
+    fn extend(&mut self, levels: Vec<NativePriceLevel>, minimum: f64) {
+        self.levels.extend(levels);
+        self.minimum = self.minimum.max(minimum);
     }
 }
 
@@ -247,35 +262,61 @@ impl NativeClient {
                 (false, true) => (token0.clone(), token1.clone()),
                 (true, true) | (false, false) => (token0.clone(), token1.clone()),
             };
-            let mut direct_bids = Vec::new();
-            let mut direct_asks = Vec::new();
-            let mut mirrored_bids = Vec::new();
-            let mut mirrored_asks = Vec::new();
-            let mut minimum_in_base: f64 = 0.0;
-            let mut minimum_in_quote: f64 = 0.0;
+            let mut direct_bids = AggregatedLevels::default();
+            let mut direct_asks = AggregatedLevels::default();
+            let mut mirrored_bids = AggregatedLevels::default();
+            let mut mirrored_asks = AggregatedLevels::default();
 
             for entry in entries {
+                // A zero-only direct entry must not suppress usable mirrored liquidity for the
+                // same side. NativeState also filters zero quantities as a defensive measure for
+                // deserialized states that do not pass through this grouping path.
+                let levels: Vec<_> = entry
+                    .levels
+                    .into_iter()
+                    .filter(|level| level.quantity != 0.0)
+                    .collect();
+                if levels.is_empty() {
+                    continue
+                }
+
                 let is_direct =
                     entry.base_address == base_address && entry.quote_address == quote_address;
                 if is_direct {
-                    minimum_in_base = minimum_in_base.max(entry.minimum_in_base);
                     match entry.side {
-                        NativeOrderbookSide::Bid => direct_bids.extend(entry.levels),
-                        NativeOrderbookSide::Ask => direct_asks.extend(entry.levels),
+                        NativeOrderbookSide::Bid => {
+                            direct_bids.extend(levels, entry.minimum_in_base)
+                        }
+                        NativeOrderbookSide::Ask => {
+                            direct_asks.extend(levels, entry.minimum_in_base)
+                        }
                     }
                 } else {
-                    minimum_in_quote = minimum_in_quote.max(entry.minimum_in_base);
-                    let levels = NativePriceData::invert_price_levels(&entry.levels);
+                    let levels = NativePriceData::invert_price_levels(&levels);
                     match entry.side {
-                        NativeOrderbookSide::Bid => mirrored_asks.extend(levels),
-                        NativeOrderbookSide::Ask => mirrored_bids.extend(levels),
+                        NativeOrderbookSide::Bid => {
+                            mirrored_asks.extend(levels, entry.minimum_in_base)
+                        }
+                        NativeOrderbookSide::Ask => {
+                            mirrored_bids.extend(levels, entry.minimum_in_base)
+                        }
                     }
                 }
             }
 
-            // Use mirrored levels only when direct ones are absent to avoid double-counting.
-            let bids = if direct_bids.is_empty() { mirrored_bids } else { direct_bids };
-            let asks = if direct_asks.is_empty() { mirrored_asks } else { direct_asks };
+            // Use mirrored levels only when direct ones are absent to avoid double-counting. Keep
+            // the minimum from the selected representation so discarded levels cannot constrain
+            // the surviving side.
+            let (bids, minimum_in_base, minimum_out_quote) = if direct_bids.levels.is_empty() {
+                (mirrored_bids.levels, 0.0, mirrored_bids.minimum)
+            } else {
+                (direct_bids.levels, direct_bids.minimum, 0.0)
+            };
+            let (asks, minimum_in_quote, minimum_out_base) = if direct_asks.levels.is_empty() {
+                (mirrored_asks.levels, mirrored_asks.minimum, 0.0)
+            } else {
+                (direct_asks.levels, 0.0, direct_asks.minimum)
+            };
             // Use the sorted pair key so the component ID remains stable if Native returns the
             // opposite book direction in a later poll.
             let pair = format!("native_{}/{}", hex::encode(&token0), hex::encode(&token1));
@@ -287,6 +328,8 @@ impl NativeClient {
                     quote_address,
                     minimum_in_base,
                     minimum_in_quote,
+                    minimum_out_base,
+                    minimum_out_quote,
                     bids,
                     asks,
                 },
@@ -295,6 +338,7 @@ impl NativeClient {
 
         books
     }
+
     fn process_quote_response(
         quote_response: FirmQuoteResponse,
         params: &GetAmountOutParams,
@@ -776,7 +820,6 @@ mod tests {
     use tycho_common::models::Chain;
 
     use super::*;
-    use crate::rfq::protocols::native::models::NativePriceLevel;
 
     fn successful_quote_json(amount_in: &str) -> serde_json::Value {
         let calldata = format!("0x0947c2d9{:064x}{:064x}{:064x}", 0x60u8, 0u8, 0u8);
@@ -976,6 +1019,13 @@ mod tests {
                 levels: vec![NativePriceLevel { quantity: 1.0, price: 2_000.0 }],
             },
             NativeOrderbookEntry {
+                base_address: weth.clone(),
+                quote_address: usdc.clone(),
+                minimum_in_base: 300_000_000_000.0,
+                side: NativeOrderbookSide::Ask,
+                levels: vec![NativePriceLevel { quantity: 1.0, price: 2_100.0 }],
+            },
+            NativeOrderbookEntry {
                 base_address: usdc.clone(),
                 quote_address: weth.clone(),
                 minimum_in_base: 100.0,
@@ -986,13 +1036,28 @@ mod tests {
                 base_address: usdc.clone(),
                 quote_address: weth.clone(),
                 minimum_in_base: 250.0,
+                side: NativeOrderbookSide::Bid,
+                levels: vec![NativePriceLevel { quantity: 2_000.0, price: 0.0005 }],
+            },
+            NativeOrderbookEntry {
+                base_address: usdc.clone(),
+                quote_address: weth.clone(),
+                minimum_in_base: 400.0,
                 side: NativeOrderbookSide::Ask,
                 levels: vec![NativePriceLevel { quantity: 2.0, price: 0.5 }],
             },
         ];
 
-        let forward_only = client.group_orderbook(vec![entries[0].clone()]);
-        let reverse_only = client.group_orderbook(entries[1..].to_vec());
+        let forward_only = client.group_orderbook(entries[..2].to_vec());
+        let reverse_entries = entries[2..].to_vec();
+        let reverse_only = client.group_orderbook(reverse_entries.clone());
+        let reversed_reverse_only = client.group_orderbook(
+            reverse_entries
+                .into_iter()
+                .rev()
+                .collect(),
+        );
+        assert_eq!(reverse_only, reversed_reverse_only);
         let pair = format!("native_{}/{}", hex::encode(&usdc), hex::encode(&weth));
         let component_id = keccak256(pair.as_bytes()).to_string();
 
@@ -1001,6 +1066,10 @@ mod tests {
             .expect("forward-only book uses the stable component ID");
         assert_eq!(forward_book.base_address, weth);
         assert_eq!(forward_book.quote_address, usdc);
+        assert_eq!(forward_book.minimum_in_base, 100_000_000_000.0);
+        assert_eq!(forward_book.minimum_in_quote, 0.0);
+        assert_eq!(forward_book.minimum_out_base, 300_000_000_000.0);
+        assert_eq!(forward_book.minimum_out_quote, 0.0);
 
         let reverse_book = reverse_only
             .get(&component_id)
@@ -1009,8 +1078,25 @@ mod tests {
         assert_eq!(reverse_book.quote_address, usdc);
         assert_eq!(reverse_book.minimum_in_base, 0.0);
         assert_eq!(reverse_book.minimum_in_quote, 250.0);
+        assert_eq!(reverse_book.minimum_out_base, 0.0);
+        assert_eq!(reverse_book.minimum_out_quote, 400.0);
         assert_eq!(reverse_book.bids, vec![NativePriceLevel { quantity: 1.0, price: 2.0 }]);
-        assert_eq!(reverse_book.asks, vec![NativePriceLevel { quantity: 1.0, price: 2_000.0 }]);
+        assert_eq!(
+            reverse_book.asks,
+            vec![
+                NativePriceLevel { quantity: 1.0, price: 2_000.0 },
+                NativePriceLevel { quantity: 1.0, price: 2_000.0 },
+            ]
+        );
+
+        let mixed = client.group_orderbook(vec![entries[0].clone(), entries[2].clone()]);
+        let mixed_book = mixed.get(&component_id).unwrap();
+        assert_eq!(mixed_book.minimum_in_base, 100_000_000_000.0);
+        assert_eq!(mixed_book.minimum_in_quote, 100.0);
+        assert_eq!(mixed_book.minimum_out_base, 0.0);
+        assert_eq!(mixed_book.minimum_out_quote, 0.0);
+        assert_eq!(mixed_book.bids, vec![NativePriceLevel { quantity: 1.0, price: 2_000.0 }]);
+        assert_eq!(mixed_book.asks, vec![NativePriceLevel { quantity: 1.0, price: 2_000.0 }]);
 
         let books = client.group_orderbook(entries.clone());
         let reversed_books = client.group_orderbook(entries.into_iter().rev().collect());
@@ -1021,9 +1107,52 @@ mod tests {
         assert_eq!(book.base_address, weth);
         assert_eq!(book.quote_address, usdc);
         assert_eq!(book.minimum_in_base, 100_000_000_000.0);
-        assert_eq!(book.minimum_in_quote, 250.0);
+        assert_eq!(book.minimum_in_quote, 0.0);
+        assert_eq!(book.minimum_out_base, 300_000_000_000.0);
+        assert_eq!(book.minimum_out_quote, 0.0);
         assert_eq!(book.bids, vec![NativePriceLevel { quantity: 1.0, price: 2_000.0 }]);
-        assert_eq!(book.asks, vec![NativePriceLevel { quantity: 1.0, price: 2_000.0 }]);
+        assert_eq!(book.asks, vec![NativePriceLevel { quantity: 1.0, price: 2_100.0 }]);
+    }
+
+    #[test]
+    fn zero_only_direct_side_does_not_suppress_mirrored_liquidity() {
+        let weth = Bytes::from_str("0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2").unwrap();
+        let usdc = Bytes::from_str("0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48").unwrap();
+        let client = NativeClient::new(
+            Chain::Ethereum,
+            "test-api-key".to_string(),
+            HashSet::from([weth.clone(), usdc.clone()]),
+            0.0,
+            HashSet::from([usdc.clone()]),
+            Duration::from_secs(1),
+            Duration::from_secs(5),
+        )
+        .unwrap();
+
+        let books = client.group_orderbook(vec![
+            NativeOrderbookEntry {
+                base_address: weth.clone(),
+                quote_address: usdc.clone(),
+                minimum_in_base: 999.0,
+                side: NativeOrderbookSide::Bid,
+                levels: vec![NativePriceLevel { quantity: 0.0, price: 2_000.0 }],
+            },
+            NativeOrderbookEntry {
+                base_address: usdc,
+                quote_address: weth,
+                minimum_in_base: 250.0,
+                side: NativeOrderbookSide::Ask,
+                levels: vec![NativePriceLevel { quantity: 2.0, price: 0.5 }],
+            },
+        ]);
+
+        let book = books
+            .values()
+            .next()
+            .expect("one grouped book");
+        assert_eq!(book.bids, vec![NativePriceLevel { quantity: 1.0, price: 2.0 }]);
+        assert_eq!(book.minimum_in_base, 0.0);
+        assert_eq!(book.minimum_out_quote, 250.0);
     }
 
     #[rstest]

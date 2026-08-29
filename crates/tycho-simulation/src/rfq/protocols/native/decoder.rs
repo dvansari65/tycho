@@ -124,6 +124,8 @@ mod tests {
             quote_address: usdc().address,
             minimum_in_base: 0.0,
             minimum_in_quote: 0.0,
+            minimum_out_base: 0.0,
+            minimum_out_quote: 0.0,
             bids: vec![NativePriceLevel { price: 3000.0, quantity: 1.5 }],
             asks: vec![NativePriceLevel { price: 3001.0, quantity: 2.0 }],
         }

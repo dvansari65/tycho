@@ -7,7 +7,9 @@ use tycho_common::{models::Chain, Bytes};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum NativeOrderbookSide {
+    /// The market maker buys base; the taker sells base and receives quote.
     Bid,
+    /// The market maker sells base; the taker sells quote and receives base.
     Ask,
 }
 
@@ -59,14 +61,26 @@ where
     Ok(Bytes::from(normalize_native_address(address).as_slice()))
 }
 
+fn deserialize_non_negative_f64<'de, D>(deserializer: D) -> Result<f64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = f64::deserialize(deserializer)?;
+    if !value.is_finite() || value < 0.0 {
+        return Err(serde::de::Error::custom("expected a non-negative finite number"))
+    }
+    Ok(value)
+}
+
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct NativeOrderbookEntry {
     #[serde(deserialize_with = "deserialize_address")]
     pub base_address: Bytes,
     #[serde(deserialize_with = "deserialize_address")]
     pub quote_address: Bytes,
-    /// Minimum input in atomic base-token units. Unlike level quantities, this is not a
-    /// human-readable token amount in Native's aggregator orderbook response.
+    /// Minimum quantity of this entry's base token, in atomic units. It constrains input for a
+    /// bid and output for an ask.
+    #[serde(deserialize_with = "deserialize_non_negative_f64")]
     pub minimum_in_base: f64,
     pub side: NativeOrderbookSide,
     #[serde(deserialize_with = "deserialize_levels")]
@@ -77,10 +91,18 @@ pub struct NativeOrderbookEntry {
 pub struct NativePriceData {
     pub base_address: Bytes,
     pub quote_address: Bytes,
-    /// Minimum input in atomic base-token units.
+    /// Minimum base-token input when selling base into bids.
     pub minimum_in_base: f64,
-    /// Minimum input in atomic quote-token units.
+    /// Minimum quote-token input when selling quote into asks.
     pub minimum_in_quote: f64,
+    /// Minimum base-token output when selling quote into asks. Defaults to zero for snapshots
+    /// written before output minimums were tracked.
+    #[serde(default)]
+    pub minimum_out_base: f64,
+    /// Minimum quote-token output when selling base into bids. Defaults to zero for snapshots
+    /// written before output minimums were tracked.
+    #[serde(default)]
+    pub minimum_out_quote: f64,
     pub bids: Vec<NativePriceLevel>,
     pub asks: Vec<NativePriceLevel>,
 }
@@ -327,12 +349,54 @@ mod tests {
     }
 
     #[test]
+    fn rejects_negative_orderbook_minimum() {
+        let result = serde_json::from_value::<NativeOrderbookEntry>(serde_json::json!({
+            "base_address": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+            "quote_address": "0xdac17f958d2ee523a2206206994597c13d831ec7",
+            "minimum_in_base": -1,
+            "side": "bid",
+            "levels": [[1, 2_000]],
+        }));
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn defaults_output_minimums_when_deserializing_legacy_price_data() {
+        let price_data = NativePriceData {
+            base_address: addr("0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"),
+            quote_address: addr("0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"),
+            minimum_in_base: 1.0,
+            minimum_in_quote: 2.0,
+            minimum_out_base: 3.0,
+            minimum_out_quote: 4.0,
+            bids: vec![],
+            asks: vec![],
+        };
+        let mut value = serde_json::to_value(price_data).unwrap();
+        let object = value
+            .as_object_mut()
+            .expect("NativePriceData serializes as an object");
+        object.remove("minimum_out_base");
+        object.remove("minimum_out_quote");
+
+        let decoded: NativePriceData = serde_json::from_value(value).unwrap();
+
+        assert_eq!(decoded.minimum_in_base, 1.0);
+        assert_eq!(decoded.minimum_in_quote, 2.0);
+        assert_eq!(decoded.minimum_out_base, 0.0);
+        assert_eq!(decoded.minimum_out_quote, 0.0);
+    }
+
+    #[test]
     fn calculates_tvl_as_average_bid_ask_quote_value() {
         let price_data = NativePriceData {
             base_address: addr("0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"),
             quote_address: addr("0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"),
             minimum_in_base: 0.0,
             minimum_in_quote: 0.0,
+            minimum_out_base: 0.0,
+            minimum_out_quote: 0.0,
             bids: vec![
                 NativePriceLevel { quantity: 1.0, price: 2000.0 },
                 NativePriceLevel { quantity: 2.0, price: 1999.0 },
@@ -355,6 +419,8 @@ mod tests {
             quote_address: tamara.clone(),
             minimum_in_base: 0.0,
             minimum_in_quote: 0.0,
+            minimum_out_base: 0.0,
+            minimum_out_quote: 0.0,
             bids: vec![NativePriceLevel { quantity: 3.0, price: 100.0 }],
             asks: vec![NativePriceLevel { quantity: 3.0, price: 100.0 }],
         };
@@ -363,6 +429,8 @@ mod tests {
             quote_address: usdc,
             minimum_in_base: 0.0,
             minimum_in_quote: 0.0,
+            minimum_out_base: 0.0,
+            minimum_out_quote: 0.0,
             bids: vec![NativePriceLevel { quantity: 300.0, price: 9.0 }],
             asks: vec![NativePriceLevel { quantity: 300.0, price: 11.0 }],
         };
@@ -378,6 +446,8 @@ mod tests {
             quote_address: tamara.clone(),
             minimum_in_base: 0.0,
             minimum_in_quote: 0.0,
+            minimum_out_base: 0.0,
+            minimum_out_quote: 0.0,
             bids: vec![NativePriceLevel { quantity: 3.0, price: 100.0 }],
             asks: vec![],
         };
@@ -386,6 +456,8 @@ mod tests {
             quote_address: addr("0xA0b86991c6218b36c1d19d4a2e9Eb0cE3606eB48"),
             minimum_in_base: 0.0,
             minimum_in_quote: 0.0,
+            minimum_out_base: 0.0,
+            minimum_out_quote: 0.0,
             bids: vec![NativePriceLevel { quantity: 300.0, price: 10.0 }],
             asks: vec![],
         };
