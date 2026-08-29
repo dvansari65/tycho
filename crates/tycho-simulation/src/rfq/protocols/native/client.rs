@@ -65,7 +65,7 @@ impl QuoteAttemptError {
 #[derive(Default)]
 struct AggregatedLevels {
     levels: Vec<NativePriceLevel>,
-    // Maximum minimum_in_base among the Native entries contributing these levels.
+    // Maximum atomic minimum_in_base among the Native entries contributing these levels.
     minimum: f64,
 }
 
@@ -175,7 +175,11 @@ impl NativeClient {
                     self.quote_tokens
                         .contains(&candidate.quote_address)
             })
-            .map(|candidate| (candidate, candidate.calculate_tvl(None)))
+            .filter_map(|candidate| {
+                candidate
+                    .calculate_tvl(None)
+                    .map(|liquidity| (candidate, liquidity))
+            })
             .max_by(|(candidate_a, liquidity_a), (candidate_b, liquidity_b)| {
                 liquidity_a
                     .total_cmp(liquidity_b)
@@ -229,6 +233,8 @@ impl NativeClient {
         let response = self
             .http_client()
             .get(format!("{}/orderbook", self.endpoint))
+            // `showNative` is not boolean: its value selects the address used for native-token
+            // books. Request address(0) so the response matches Tycho's internal representation.
             .query(&[("chain", chain.as_str()), ("showNative", "0x0")])
             .header("accept", "application/json")
             .header("apikey", &self.api_key)
@@ -307,6 +313,10 @@ impl NativeClient {
             let mut mirrored_bids = AggregatedLevels::default();
             let mut mirrored_asks = AggregatedLevels::default();
 
+            // Native's minimum_in_base is always denominated in entry.base_address. For a bid the
+            // taker sells base, so it is an input minimum; for an ask the taker receives base, so
+            // it is an output minimum. Mirroring swaps bid/ask and remaps that minimum into the
+            // canonical direction.
             for entry in entries {
                 // A zero-only direct entry must not suppress usable mirrored liquidity for the
                 // same side. NativeState also filters zero quantities as a defensive measure for
@@ -454,8 +464,9 @@ impl NativeClient {
             )));
         }
 
-        // Tycho transfers params.amount_in before execution. Both Native's response and the
-        // signed order must cover that exact amount so no unspent input remains in the Router.
+        // Bind Native's top-level amountIn and signed sellerTokenAmount to the requested quote
+        // baseline. The encoder stores this baseline as signedAmountIn; the executor supplies
+        // actualSellerAmount when execution receives a different amount from the preceding hop.
         let quoted_amount_in = BigUint::from_str(&quote_response.amount_in).map_err(|_| {
             RFQError::ParsingError(format!(
                 "Failed to parse amount_in: {}",
@@ -485,9 +496,9 @@ impl NativeClient {
         // effectiveSellerTokenAmount may differ from the requested gross input for
         // fee-on-transfer tokens, so it is not an equality invariant here. amountIn and
         // sellerTokenAmount still bind the quote to Tycho's requested input.
-        // Native requires txRequest.value for native-token quotes. Validate the
-        // quoted value here, while it still describes the original signed amount.
-        // During execution, Tycho's actual amountIn may be smaller due to under-delivery.
+        // Native requires txRequest.value for native-token quotes. Validate the quoted value here,
+        // while it still describes the original signed amount. During execution, the preceding hop
+        // may deliver either less or more; the executor handles that through actualSellerAmount.
         let quoted_value = BigUint::from_str(&quote_response.tx_request.value).map_err(|_| {
             RFQError::ParsingError(format!(
                 "Failed to parse Native txRequest.value: {}",
@@ -718,7 +729,10 @@ impl RFQClient for NativeClient {
                         continue;
                     }
 
-                    let incoming_tvl = book.calculate_tvl(quote_price_data);
+                    let Some(incoming_tvl) = book.calculate_tvl(quote_price_data) else {
+                        warn!("Skipping Native Relay market {component_id} because its TVL is unavailable or non-finite");
+                        continue;
+                    };
 
                     if incoming_tvl < client.tvl {
                         info!("Filtering out Native Relay market {} due to low TVL: {:.2} < {:.2}", component_id, incoming_tvl, client.tvl);
@@ -1129,7 +1143,8 @@ mod tests {
             component_id.clone(),
             vec![book.base_address.clone(), book.quote_address.clone()],
             book.clone(),
-            book.calculate_tvl(None),
+            book.calculate_tvl(None)
+                .expect("TVL should be finite"),
         );
 
         assert_eq!(component.component.id, component_id);

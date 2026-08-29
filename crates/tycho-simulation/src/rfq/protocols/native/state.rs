@@ -108,6 +108,8 @@ impl NativeState {
             return Ok(())
         }
 
+        // Native Relay reports minimums in atomic units, matching `amount`. Round up defensively
+        // because the JSON number is deserialized into an f64 by the orderbook model.
         let minimum = BigUint::from_f64(minimum.ceil()).ok_or_else(|| {
             SimulationError::FatalError(format!(
                 "Can't convert Native minimum {amount_kind} amount to BigUint"
@@ -130,6 +132,21 @@ impl ProtocolSim for NativeState {
     }
 
     fn spot_price(&self, base: &Token, quote: &Token) -> Result<f64, SimulationError> {
+        let inverse = if base.address == self.base_token.address &&
+            quote.address == self.quote_token.address
+        {
+            false
+        } else if base.address == self.quote_token.address &&
+            quote.address == self.base_token.address
+        {
+            true
+        } else {
+            return Err(SimulationError::RecoverableError(format!(
+                "Invalid token addresses: {}, {}",
+                base.address, quote.address
+            )))
+        };
+
         let best_bid = self
             .book
             .bids
@@ -142,7 +159,8 @@ impl ProtocolSim for NativeState {
             .map(|lvl| lvl.price);
 
         let average_price = match (best_bid, best_ask) {
-            (Some(bid), Some(ask)) => (bid + ask) / 2.0,
+            // Avoid overflowing when both finite prices are close to `f64::MAX`.
+            (Some(bid), Some(ask)) => bid + (ask - bid) / 2.0,
             (Some(bid), None) => bid,
             (None, Some(ask)) => ask,
             (None, None) => {
@@ -150,18 +168,15 @@ impl ProtocolSim for NativeState {
             }
         };
 
-        if base.address == self.quote_token.address && quote.address == self.base_token.address {
-            Ok(1.0 / average_price)
-        } else if quote.address == self.quote_token.address &&
-            base.address == self.base_token.address
-        {
-            Ok(average_price)
-        } else {
-            Err(SimulationError::RecoverableError(format!(
-                "Invalid token addresses: {}, {}",
-                base.address, quote.address
-            )))
+        let spot_price = if inverse { average_price.recip() } else { average_price };
+
+        if !spot_price.is_finite() || spot_price <= 0.0 {
+            return Err(SimulationError::RecoverableError(
+                "Native spot price is not positive and finite".to_string(),
+            ))
         }
+
+        Ok(spot_price)
     }
 
     fn get_amount_out(
@@ -480,6 +495,56 @@ mod tests {
     }
 
     #[test]
+    fn returns_finite_spot_price_for_large_finite_levels() {
+        let mut state = state();
+        state.book.bids[0] = NativePriceLevel { quantity: 1e-306, price: 1e308 };
+        state.book.asks[0] = NativePriceLevel { quantity: 1e-306, price: 1e308 };
+        let state = NativeState::new(state.base_token, state.quote_token, state.book, state.client)
+            .unwrap();
+
+        let price = state
+            .spot_price(&state.base_token, &state.quote_token)
+            .unwrap();
+
+        assert_eq!(price, 1e308);
+    }
+
+    #[test]
+    fn calculates_midpoint_spot_price_in_both_directions() {
+        let mut state = state();
+        state.book.bids[0].price = 1_900.0;
+        state.book.asks[0].price = 2_100.0;
+
+        let direct = state
+            .spot_price(&state.base_token, &state.quote_token)
+            .unwrap();
+        let inverse = state
+            .spot_price(&state.quote_token, &state.base_token)
+            .unwrap();
+
+        assert_eq!(direct, 2_000.0);
+        assert_eq!(inverse, direct.recip());
+    }
+
+    #[test]
+    fn rejects_non_finite_inverted_spot_price() {
+        let mut state = state();
+        let smallest_positive_price = f64::from_bits(1);
+        state.book.bids[0].price = smallest_positive_price;
+        state.book.asks[0].price = smallest_positive_price;
+        let state = NativeState::new(state.base_token, state.quote_token, state.book, state.client)
+            .unwrap();
+
+        let result = state.spot_price(&state.quote_token, &state.base_token);
+
+        assert!(matches!(
+            result,
+            Err(SimulationError::RecoverableError(message))
+                if message.contains("not positive and finite")
+        ));
+    }
+
+    #[test]
     fn calculates_amount_out_for_quote_sell() {
         let state = state();
 
@@ -588,8 +653,8 @@ mod tests {
     }
 
     #[test]
-    fn rejects_invalid_pair_for_amount_and_limits() {
-        let state = state();
+    fn rejects_invalid_pair() {
+        let mut state = state();
         let other = token("0x1111111111111111111111111111111111111111", "OTHER", 18);
 
         assert!(matches!(
@@ -597,8 +662,17 @@ mod tests {
             Err(SimulationError::InvalidInput(_, None))
         ));
         assert!(matches!(
-            state.get_limits(other.address, state.quote_token.address.clone()),
+            state.get_limits(other.address.clone(), state.quote_token.address.clone()),
             Err(SimulationError::InvalidInput(_, None))
+        ));
+
+        // Direction validation must win even when the book has no liquidity.
+        state.book.bids.clear();
+        state.book.asks.clear();
+        assert!(matches!(
+            state.spot_price(&other, &state.quote_token),
+            Err(SimulationError::RecoverableError(message))
+                if message.contains("Invalid token addresses")
         ));
     }
 

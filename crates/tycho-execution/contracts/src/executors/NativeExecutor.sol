@@ -49,7 +49,11 @@ contract NativeExecutor is IExecutor {
         return msg.sender;
     }
 
-    function swap(uint256 amountIn, bytes calldata data, address receiver)
+    function swap(
+        uint256 amountIn,
+        bytes calldata data,
+        address /* receiver */
+    )
         external
         payable
     {
@@ -73,24 +77,26 @@ contract NativeExecutor is IExecutor {
             revert NativeExecutor__InvalidPayload();
         }
 
-        // Native treats a zero actualSellerAmount as "use the signed amount".
-        // Therefore zero cannot represent an actual zero input.
+        // signedAmountIn is the Native quote baseline validated and encoded off-chain; amountIn is
+        // the amount actually delivered by Tycho's Dispatcher. Native treats a zero
+        // actualSellerAmount as "use the signed amount", so Tycho rejects zero amountIn rather
+        // than unintentionally executing the signed amount.
         if (amountIn == 0 || signedAmountIn == 0) {
             revert NativeExecutor__InvalidAmountIn();
         }
 
         _validateOverrideArguments(payload);
 
-        // Native scales the signed minimum output when actualSellerAmount is overridden
-        // and actualMinOutputAmount remains zero. Its router also enforces the flexible-input bounds:
+        // For an exact fill, leave actualSellerAmount at zero so Native uses the signed amount. For
+        // under- or over-delivery, pass the actual amount. When actualMinOutputAmount remains zero,
+        // Native automatically adapts the signed slippage control and enforces its flexible-input
+        // bounds:
         // https://docs.native.org/native-dev/build-with-native/swap-aggregators/firmquote-swap-apis/miscellaneous/compose-with-amm
         if (amountIn != signedAmountIn) {
             _setActualSellerAmount(payload, amountIn);
         }
 
-        // amountIn is authoritative at execution time. It equals Native's quoted
-        // payable value for exact fills and reflects the amount delivered by the
-        // preceding hop for composed swaps.
+        // amountIn is authoritative for the ETH forwarded during execution.
         uint256 executionValue = tokenIn == ETH_ADDRESS ? amountIn : 0;
 
         // slither-disable-next-line unused-return
@@ -143,7 +149,7 @@ contract NativeExecutor is IExecutor {
         // Native's firm-quote calldata leaves both unsigned override arguments
         // at zero. Tycho owns these fields during execution: accepting a pre-set
         // seller amount could bypass amountIn, while a pre-set minimum would
-        // disable Native's automatic proportional slippage adjustment.
+        // disable Native's automatic slippage adjustment.
         if (actualSellerAmount != 0 || actualMinOutputAmount != 0) {
             revert NativeExecutor__UnexpectedOverride();
         }
@@ -193,6 +199,8 @@ contract NativeExecutor is IExecutor {
             receiver = target;
         }
 
+        // Binding quotes use TychoRouter as their signed recipient. Dispatcher measures the output
+        // there before forwarding it to the route's receiver.
         outputToRouter = true;
     }
 }

@@ -110,6 +110,9 @@ impl SwapEncoder for NativeSwapEncoder {
                     .await
             })
         })??;
+        // NativeClient already bound response.amountIn and order.sellerTokenAmount to the requested
+        // amount. Store that validated quote baseline in the executor header so it can detect
+        // under- or over-delivery at execution time.
         validate_quote_amount(&signed_quote, &amount_in)?;
         let target_bytes = signed_quote
             .quote_attributes
@@ -159,15 +162,15 @@ impl SwapEncoder for NativeSwapEncoder {
             )));
         }
 
-        let requested_amount_bytes = amount_in.to_bytes_be();
-        if requested_amount_bytes.len() > 32 {
+        let quoted_amount_bytes = amount_in.to_bytes_be();
+        if quoted_amount_bytes.len() > 32 {
             return Err(EncodingError::InvalidInput(
                 "Native requested amount exceeds uint256".to_string(),
             ));
         }
-        let mut encoded_requested_amount = [0u8; 32];
-        encoded_requested_amount[32 - requested_amount_bytes.len()..]
-            .copy_from_slice(&requested_amount_bytes);
+        let mut encoded_quoted_amount = [0u8; 32];
+        encoded_quoted_amount[32 - quoted_amount_bytes.len()..]
+            .copy_from_slice(&quoted_amount_bytes);
 
         // We must translate Tycho's internal `address(0)` representation to the standard
         // EVM `0xEeeee...` address used by TychoRouter so the Executor correctly processes Native
@@ -189,7 +192,7 @@ impl SwapEncoder for NativeSwapEncoder {
         // `native_calldata`.
         let args = (token_in, token_out, target);
         let mut encoded = args.abi_encode_packed();
-        encoded.extend_from_slice(&encoded_requested_amount);
+        encoded.extend_from_slice(&encoded_quoted_amount);
         encoded.extend_from_slice(calldata);
         Ok(encoded)
     }

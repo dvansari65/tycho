@@ -29,7 +29,12 @@ where
             "price level quantity must be a non-negative finite number",
         ))
     }
-    if quantity > 0.0 && (!price.is_finite() || price <= 0.0) {
+    // Native may use zero-quantity placeholders such as [0, 0]. They are discarded when books are
+    // grouped, so their price is irrelevant.
+    if quantity == 0.0 {
+        return Ok(NativePriceLevel { quantity, price })
+    }
+    if !price.is_finite() || price <= 0.0 {
         return Err(serde::de::Error::custom("price level price must be a positive finite number"))
     }
 
@@ -87,8 +92,11 @@ pub struct NativeOrderbookEntry {
     pub base_address: Bytes,
     #[serde(deserialize_with = "deserialize_address")]
     pub quote_address: Bytes,
-    /// Minimum quantity of this entry's base token, in atomic units. It constrains input for a
-    /// bid and output for an ask.
+    /// Minimum base-token amount in atomic units.
+    ///
+    /// Unlike `levels`, whose quantities are expressed in normal token units, Native Relay's
+    /// aggregated orderbook returns this field in atomic units. It constrains input for a bid and
+    /// output for an ask.
     #[serde(deserialize_with = "deserialize_non_negative_f64")]
     pub minimum_in_base: f64,
     pub side: NativeOrderbookSide,
@@ -100,16 +108,16 @@ pub struct NativeOrderbookEntry {
 pub struct NativePriceData {
     pub base_address: Bytes,
     pub quote_address: Bytes,
-    /// Minimum base-token input when selling base into bids.
+    /// Atomic base-token minimum input when selling base into bids.
     pub minimum_in_base: f64,
-    /// Minimum quote-token input when selling quote into asks.
+    /// Atomic quote-token minimum input when selling quote into asks.
     pub minimum_in_quote: f64,
-    /// Minimum base-token output when selling quote into asks. Defaults to zero for snapshots
-    /// written before output minimums were tracked.
+    /// Atomic base-token minimum output when selling quote into asks. Defaults to zero for
+    /// snapshots written before output minimums were tracked.
     #[serde(default)]
     pub minimum_out_base: f64,
-    /// Minimum quote-token output when selling base into bids. Defaults to zero for snapshots
-    /// written before output minimums were tracked.
+    /// Atomic quote-token minimum output when selling base into bids. Defaults to zero for
+    /// snapshots written before output minimums were tracked.
     #[serde(default)]
     pub minimum_out_quote: f64,
     pub bids: Vec<NativePriceLevel>,
@@ -117,7 +125,8 @@ pub struct NativePriceData {
 }
 
 impl NativePriceData {
-    pub fn calculate_tvl(&self, quote_price_data: Option<&NativePriceData>) -> f64 {
+    /// Returns `None` when the book cannot be valued or the calculation is non-finite.
+    pub fn calculate_tvl(&self, quote_price_data: Option<&NativePriceData>) -> Option<f64> {
         let bid_tvl: f64 = self
             .bids
             .iter()
@@ -129,23 +138,25 @@ impl NativePriceData {
             .map(|level: &NativePriceLevel| level.quantity * level.price)
             .sum();
 
-        let mut total_tvl = match (self.bids.is_empty(), self.asks.is_empty()) {
+        let total_tvl = match (self.bids.is_empty(), self.asks.is_empty()) {
             (false, false) => (bid_tvl + ask_tvl) / 2.0,
             (false, true) => bid_tvl,
             (true, false) => ask_tvl,
             (true, true) => 0.0,
         };
-        if let Some(quote_data) = quote_price_data {
-            if let Some(price_of_quote_token) =
-                quote_data.get_mid_price(total_tvl, &self.quote_address)
-            {
-                total_tvl *= price_of_quote_token;
-            } else {
-                return 0.0;
-            }
+        if !total_tvl.is_finite() {
+            return None
         }
 
-        total_tvl
+        if let Some(quote_data) = quote_price_data {
+            let price_of_quote_token = quote_data.get_mid_price(total_tvl, &self.quote_address)?;
+            let converted_tvl = total_tvl * price_of_quote_token;
+            return converted_tvl
+                .is_finite()
+                .then_some(converted_tvl)
+        }
+
+        Some(total_tvl)
     }
 
     pub fn get_mid_price(&self, amount: f64, sell_token: &Bytes) -> Option<f64> {
@@ -432,7 +443,10 @@ mod tests {
             ],
         };
 
-        assert!((price_data.calculate_tvl(None) - 5500.75).abs() < 0.01);
+        let tvl = price_data
+            .calculate_tvl(None)
+            .expect("TVL should be finite");
+        assert!((tvl - 5500.75).abs() < 0.01);
     }
 
     #[test]
@@ -460,7 +474,10 @@ mod tests {
             asks: vec![NativePriceLevel { quantity: 300.0, price: 11.0 }],
         };
 
-        assert_eq!(price_data_eth_tamara.calculate_tvl(Some(&price_data_tamara_usdc)), 3000.0);
+        assert_eq!(
+            price_data_eth_tamara.calculate_tvl(Some(&price_data_tamara_usdc)),
+            Some(3000.0)
+        );
     }
 
     #[test]
@@ -487,7 +504,33 @@ mod tests {
             asks: vec![],
         };
 
-        assert_eq!(price_data_eth_tamara.calculate_tvl(None), 300.0);
-        assert_eq!(price_data_eth_tamara.calculate_tvl(Some(&price_data_tamara_usdc)), 3000.0);
+        assert_eq!(price_data_eth_tamara.calculate_tvl(None), Some(300.0));
+        assert_eq!(
+            price_data_eth_tamara.calculate_tvl(Some(&price_data_tamara_usdc)),
+            Some(3000.0)
+        );
+    }
+
+    #[test]
+    fn rejects_non_finite_derived_tvl() {
+        let weth = addr("0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2");
+        let tamara = addr("0x1234567890123456789012345678901234567890");
+        let usdc = addr("0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48");
+        let book = |base_address, quote_address, quantity, price| NativePriceData {
+            base_address,
+            quote_address,
+            minimum_in_base: 0.0,
+            minimum_in_quote: 0.0,
+            minimum_out_base: 0.0,
+            minimum_out_quote: 0.0,
+            bids: vec![NativePriceLevel { quantity, price }],
+            asks: vec![],
+        };
+        let overflowing_book = book(weth.clone(), usdc.clone(), 1e308, 2.0);
+        let finite_book = book(weth, tamara.clone(), 1.0, 2.0);
+        let overflowing_conversion_book = book(tamara, usdc, 2.0, 1e308);
+
+        assert_eq!(overflowing_book.calculate_tvl(None), None);
+        assert_eq!(finite_book.calculate_tvl(Some(&overflowing_conversion_book)), None);
     }
 }
