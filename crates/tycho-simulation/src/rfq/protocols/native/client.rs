@@ -161,6 +161,36 @@ impl NativeClient {
         Ok(())
     }
 
+    fn select_tvl_conversion_book<'a>(
+        &self,
+        quote_address: &Bytes,
+        books: &'a HashMap<String, NativePriceData>,
+    ) -> Option<&'a NativePriceData> {
+        books
+            .values()
+            .filter(|candidate| {
+                // `group_orderbook` keeps the configured quote token on the quote side, so every
+                // matching conversion book is valued in comparable approved-token units.
+                candidate.base_address == *quote_address &&
+                    self.quote_tokens
+                        .contains(&candidate.quote_address)
+            })
+            .map(|candidate| (candidate, candidate.calculate_tvl(None)))
+            .max_by(|(candidate_a, liquidity_a), (candidate_b, liquidity_b)| {
+                liquidity_a
+                    .total_cmp(liquidity_b)
+                    // Prefer the smaller token address when liquidity is equal so the result does
+                    // not depend on HashMap or HashSet iteration order.
+                    .then_with(|| {
+                        candidate_b
+                            .quote_address
+                            .as_ref()
+                            .cmp(candidate_a.quote_address.as_ref())
+                    })
+            })
+            .map(|(candidate, _)| candidate)
+    }
+
     fn create_component_with_state(
         &self,
         component_id: String,
@@ -677,21 +707,9 @@ impl RFQClient for NativeClient {
                         None
                     } else {
                         // TVL thresholds are applied in approved quote-token units. If Native
-                        // quotes this market against another token, normalize through any
-                        // available approved quote-token market before filtering.
-                        client
-                            .quote_tokens
-                            .iter()
-                            .find_map(|approved_quote_token| {
-                                books
-                                    .values()
-                                    .find(|candidate| {
-                                        (candidate.base_address == book.quote_address &&
-                                            &candidate.quote_address == approved_quote_token) ||
-                                            (candidate.quote_address == book.quote_address &&
-                                                &candidate.base_address == approved_quote_token)
-                                    })
-                            })
+                        // quotes this market against another token, normalize through the most
+                        // liquid available approved quote-token market before filtering.
+                        client.select_tvl_conversion_book(&book.quote_address, &books)
                     };
 
                     if !client.quote_tokens.contains(&book.quote_address) &&
@@ -820,7 +838,7 @@ impl RFQClient for NativeClient {
 #[cfg(test)]
 mod tests {
     use std::{
-        collections::HashSet,
+        collections::{HashMap, HashSet},
         str::FromStr,
         sync::{
             atomic::{AtomicUsize, Ordering},
@@ -895,6 +913,24 @@ mod tests {
 
     fn successful_quote_response(amount_in: &str) -> FirmQuoteResponse {
         serde_json::from_value(successful_quote_json(amount_in)).unwrap()
+    }
+
+    fn conversion_book(
+        base_address: Bytes,
+        quote_address: Bytes,
+        quantity: f64,
+        price: f64,
+    ) -> NativePriceData {
+        NativePriceData {
+            base_address,
+            quote_address,
+            minimum_in_base: 0.0,
+            minimum_in_quote: 0.0,
+            minimum_out_base: 0.0,
+            minimum_out_quote: 0.0,
+            bids: vec![NativePriceLevel { quantity, price }],
+            asks: vec![],
+        }
     }
 
     #[test]
@@ -973,6 +1009,70 @@ mod tests {
             Err(RFQError::InvalidInput(message))
                 if message == "Native polling interval must be greater than zero"
         ));
+    }
+
+    #[test]
+    fn selects_most_liquid_tvl_conversion_book() {
+        let weth = Bytes::from_str("0x3333333333333333333333333333333333333333").unwrap();
+        let usdc = Bytes::from_str("0x1111111111111111111111111111111111111111").unwrap();
+        let usdt = Bytes::from_str("0x2222222222222222222222222222222222222222").unwrap();
+        let wbtc = Bytes::from_str("0x4444444444444444444444444444444444444444").unwrap();
+        let unapproved = Bytes::from_str("0x5555555555555555555555555555555555555555").unwrap();
+        let client = NativeClient::new(
+            Chain::Ethereum,
+            "test-api-key".to_string(),
+            HashSet::from([
+                weth.clone(),
+                usdc.clone(),
+                usdt.clone(),
+                wbtc.clone(),
+                unapproved.clone(),
+            ]),
+            0.0,
+            HashSet::from([usdc.clone(), usdt.clone()]),
+            Duration::from_secs(1),
+            Duration::from_secs(5),
+        )
+        .unwrap();
+        let books = HashMap::from([
+            ("usdc".to_string(), conversion_book(weth.clone(), usdc.clone(), 1.0, 100.0)),
+            ("usdt".to_string(), conversion_book(weth.clone(), usdt.clone(), 2.0, 100.0)),
+            ("unrelated".to_string(), conversion_book(wbtc, usdc, 1_000.0, 100.0)),
+            ("unapproved".to_string(), conversion_book(weth.clone(), unapproved, 2_000.0, 100.0)),
+        ]);
+
+        let selected = client
+            .select_tvl_conversion_book(&weth, &books)
+            .expect("one conversion book");
+
+        assert_eq!(selected.quote_address, usdt);
+    }
+
+    #[test]
+    fn selects_lower_quote_address_for_equal_tvl_conversion_liquidity() {
+        let weth = Bytes::from_str("0x3333333333333333333333333333333333333333").unwrap();
+        let lower_quote = Bytes::from_str("0x1111111111111111111111111111111111111111").unwrap();
+        let higher_quote = Bytes::from_str("0x2222222222222222222222222222222222222222").unwrap();
+        let client = NativeClient::new(
+            Chain::Ethereum,
+            "test-api-key".to_string(),
+            HashSet::from([weth.clone(), lower_quote.clone(), higher_quote.clone()]),
+            0.0,
+            HashSet::from([lower_quote.clone(), higher_quote.clone()]),
+            Duration::from_secs(1),
+            Duration::from_secs(5),
+        )
+        .unwrap();
+        let books = HashMap::from([
+            ("higher".to_string(), conversion_book(weth.clone(), higher_quote, 2.0, 100.0)),
+            ("lower".to_string(), conversion_book(weth.clone(), lower_quote.clone(), 1.0, 200.0)),
+        ]);
+
+        let selected = client
+            .select_tvl_conversion_book(&weth, &books)
+            .expect("one conversion book");
+
+        assert_eq!(selected.quote_address, lower_quote);
     }
 
     #[test]
