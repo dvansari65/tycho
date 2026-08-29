@@ -23,8 +23,17 @@ fn deserialize_level<'de, D>(deserializer: D) -> Result<NativePriceLevel, D::Err
 where
     D: serde::Deserializer<'de>,
 {
-    let values = <[f64; 2]>::deserialize(deserializer)?;
-    Ok(NativePriceLevel { quantity: values[0], price: values[1] })
+    let [quantity, price] = <[f64; 2]>::deserialize(deserializer)?;
+    if !quantity.is_finite() || quantity < 0.0 {
+        return Err(serde::de::Error::custom(
+            "price level quantity must be a non-negative finite number",
+        ))
+    }
+    if quantity > 0.0 && (!price.is_finite() || price <= 0.0) {
+        return Err(serde::de::Error::custom("price level price must be a positive finite number"))
+    }
+
+    Ok(NativePriceLevel { quantity, price })
 }
 
 fn deserialize_levels<'de, D>(deserializer: D) -> Result<Vec<NativePriceLevel>, D::Error>
@@ -339,13 +348,14 @@ mod tests {
             "quote_address": "0xdac17f958d2ee523a2206206994597c13d831ec7",
             "minimum_in_base": 0,
             "side": "bid",
-            "levels": [[0.0001, 3213.12345], [12.75786733219471, 3210.15]]
+            "levels": [[0, 0], [0.0001, 3213.12345], [12.75786733219471, 3210.15]]
         }"#;
 
         let entry: NativeOrderbookEntry = serde_json::from_str(json).unwrap();
         assert_eq!(entry.side, NativeOrderbookSide::Bid);
-        assert_eq!(entry.levels[0].quantity, 0.0001);
-        assert_eq!(entry.levels[0].price, 3213.12345);
+        assert_eq!(entry.levels[0].quantity, 0.0);
+        assert_eq!(entry.levels[1].quantity, 0.0001);
+        assert_eq!(entry.levels[1].price, 3213.12345);
     }
 
     #[test]
@@ -359,6 +369,21 @@ mod tests {
         }));
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn rejects_invalid_orderbook_levels() {
+        for level in [[-1.0, 2_000.0], [1.0, 0.0], [1.0, -2_000.0]] {
+            let result = serde_json::from_value::<NativeOrderbookEntry>(serde_json::json!({
+                "base_address": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+                "quote_address": "0xdac17f958d2ee523a2206206994597c13d831ec7",
+                "minimum_in_base": 0,
+                "side": "bid",
+                "levels": [level],
+            }));
+
+            assert!(result.is_err(), "level {level:?} should be rejected");
+        }
     }
 
     #[test]
