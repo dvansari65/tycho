@@ -1,3 +1,11 @@
+## [0.370.1](https://github.com/propeller-heads/tycho/compare/0.370.0...0.370.1) (2026-08-29)
+
+
+### Bug Fixes
+
+* **simulation:** keep the Angstrom filter when a caller filter is set ([5119ea7](https://github.com/propeller-heads/tycho/commit/5119ea774148712bdfb3eda62dc3d445b0a69e94))
+* **simulation:** keep the Angstrom filter when a caller filter is set ([#1366](https://github.com/propeller-heads/tycho/issues/1366)) ([a54c6dc](https://github.com/propeller-heads/tycho/commit/a54c6dc3a54951f5a7f7c2d0086e511c395be366))
+
 ## [0.370.0](https://github.com/propeller-heads/tycho/compare/0.369.0...0.370.0) (2026-08-28)
 
 
