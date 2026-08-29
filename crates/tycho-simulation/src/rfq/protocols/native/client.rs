@@ -139,6 +139,7 @@ impl NativeClient {
         quote_timeout: Duration,
     ) -> Result<Self, RFQError> {
         NativeSupportedChain::try_from(chain).map_err(RFQError::InvalidInput)?;
+        Self::validate_poll_time(poll_time)?;
         Ok(Self {
             chain,
             endpoint: Self::DEFAULT_ENDPOINT.to_string(),
@@ -149,6 +150,15 @@ impl NativeClient {
             poll_time,
             quote_timeout,
         })
+    }
+
+    fn validate_poll_time(poll_time: Duration) -> Result<(), RFQError> {
+        if poll_time.is_zero() {
+            return Err(RFQError::InvalidInput(
+                "Native polling interval must be greater than zero".to_string(),
+            ))
+        }
+        Ok(())
     }
 
     fn create_component_with_state(
@@ -637,6 +647,12 @@ impl RFQClient for NativeClient {
         let client = self.clone();
 
         Box::pin(async_stream::stream! {
+            // `NativeClient` is deserializable and its fields are public, so construction-time
+            // validation alone cannot guarantee this invariant at the Tokio boundary.
+            if let Err(error) = Self::validate_poll_time(client.poll_time) {
+                yield Err(error);
+                return;
+            }
             let mut current_components: HashMap<String, ComponentWithState> = HashMap::new();
             let mut ticker = interval(client.poll_time);
 
@@ -812,6 +828,7 @@ mod tests {
         },
     };
 
+    use futures::StreamExt;
     use rstest::rstest;
     use tokio::{
         io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
@@ -820,6 +837,7 @@ mod tests {
     use tycho_common::models::Chain;
 
     use super::*;
+    use crate::rfq::protocols::native::client_builder::NativeClientBuilder;
 
     fn successful_quote_json(amount_in: &str) -> serde_json::Value {
         let calldata = format!("0x0947c2d9{:064x}{:064x}{:064x}", 0x60u8, 0u8, 0u8);
@@ -919,6 +937,42 @@ mod tests {
         );
 
         assert!(matches!(result, Err(RFQError::InvalidInput(_))));
+    }
+
+    #[test]
+    fn builder_rejects_zero_poll_time() {
+        let result = NativeClientBuilder::new(Chain::Ethereum, "test-api-key".to_string())
+            .poll_time(Duration::ZERO)
+            .build();
+
+        assert!(matches!(
+            result,
+            Err(RFQError::InvalidInput(message))
+                if message == "Native polling interval must be greater than zero"
+        ));
+    }
+
+    #[tokio::test]
+    async fn stream_rejects_zero_poll_time_if_construction_is_bypassed() {
+        let mut client = NativeClient::new(
+            Chain::Ethereum,
+            "test-api-key".to_string(),
+            HashSet::new(),
+            0.0,
+            HashSet::new(),
+            Duration::from_secs(1),
+            Duration::from_secs(5),
+        )
+        .unwrap();
+        client.poll_time = Duration::ZERO;
+
+        let result = client.stream().next().await.unwrap();
+
+        assert!(matches!(
+            result,
+            Err(RFQError::InvalidInput(message))
+                if message == "Native polling interval must be greater than zero"
+        ));
     }
 
     #[test]
