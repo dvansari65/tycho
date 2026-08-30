@@ -139,7 +139,7 @@ impl NativePriceData {
             .sum();
 
         let total_tvl = match (self.bids.is_empty(), self.asks.is_empty()) {
-            (false, false) => (bid_tvl + ask_tvl) / 2.0,
+            (false, false) => bid_tvl.midpoint(ask_tvl),
             (false, true) => bid_tvl,
             (true, false) => ask_tvl,
             (true, true) => 0.0,
@@ -169,7 +169,7 @@ impl NativePriceData {
         let bids_price = Self::get_price_for_levels(amount, &self.bids, inverse);
 
         match (bids_price, asks_price) {
-            (Some(bid), Some(ask)) => Some((bid + ask) / 2.0),
+            (Some(bid), Some(ask)) => Some(bid.midpoint(ask)),
             (Some(bid), None) => Some(bid),
             (None, Some(ask)) => Some(ask),
             (None, None) => None,

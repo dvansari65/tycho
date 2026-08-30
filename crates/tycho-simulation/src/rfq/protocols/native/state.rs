@@ -159,8 +159,7 @@ impl ProtocolSim for NativeState {
             .map(|lvl| lvl.price);
 
         let average_price = match (best_bid, best_ask) {
-            // Avoid overflowing when both finite prices are close to `f64::MAX`.
-            (Some(bid), Some(ask)) => bid + (ask - bid) / 2.0,
+            (Some(bid), Some(ask)) => bid.midpoint(ask),
             (Some(bid), None) => bid,
             (None, Some(ask)) => ask,
             (None, None) => {
