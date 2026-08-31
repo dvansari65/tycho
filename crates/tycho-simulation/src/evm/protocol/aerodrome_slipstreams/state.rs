@@ -744,6 +744,9 @@ mod tests {
 
     /// Pool whose last swap wrote an observation at `last_observation_ts`, with the initial fee
     /// enabled (750 pips) and a dynamic component on top of a 2700 pip base.
+    ///
+    /// Built with the first-in-block assumption on: most tests here exercise the optimistic
+    /// path. The worst-case-default tests flip `assume_first_in_block` back off.
     fn initial_fee_pool(last_observation_ts: u32) -> AerodromeSlipstreamsState {
         let mut pool = create_basic_test_pool();
         pool.dfc = DynamicFeeConfig::new(2700, 30_000, 0, true, 750);
@@ -951,7 +954,8 @@ mod tests {
     #[test]
     fn quotes_initial_fee_for_the_next_block_after_the_pool_traded() {
         // The pool wrote its observation in the block we decoded. A quote lands in the *next*
-        // block, where no observation exists yet, so it pays the initial fee.
+        // block, where no observation exists yet — under the first-in-block assumption it pays
+        // the initial fee.
         let mut pool = initial_fee_pool(1_000);
         pool.apply_block(&BlockContext::new(101, 1_002));
 

@@ -131,8 +131,10 @@ impl DynamicFeeConfig {
 
 /// A resolved swap fee, in pips, plus whether resolving it required a TWAP `observe`.
 ///
-/// The module short-circuits to the initial fee before touching the oracle, so a swap that pays
-/// the initial fee does not pay for the observation reads either.
+/// Under the first-in-block assumption the module short-circuits to the initial fee before
+/// touching the oracle, so such a swap does not pay for the observation reads either. Under the
+/// worst-case default the oracle read is charged whenever the dynamic branch evaluated it, even
+/// when the initial fee wins the max — conservative on both fee and gas.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ResolvedFee {
     pub(crate) fee: u32,
