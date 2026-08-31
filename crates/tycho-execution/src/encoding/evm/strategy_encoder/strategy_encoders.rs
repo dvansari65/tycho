@@ -576,7 +576,7 @@ mod tests {
         /// Two RFQ hops each wait 300ms for their quote. Encoded together they finish well
         /// before the 600ms a one-after-the-other encoding needs, and stay in route order.
         #[test]
-        fn test_sequential_swap_encodes_rfq_hops_at_the_same_time() {
+        fn test_sequential_swap_encodes_rfq_hops_in_parallel() {
             let usdc = Bytes::from_str("0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48").unwrap();
             let weth = weth();
             let dai = Bytes::from_str("0x6b175474e89094c44da98b954eedeac495271d0f").unwrap();

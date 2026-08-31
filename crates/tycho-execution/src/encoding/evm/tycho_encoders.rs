@@ -355,7 +355,7 @@ mod tests {
         /// they finish well before the 600ms a one-after-the-other encoding needs, and stay in
         /// input order.
         #[test]
-        fn test_encode_solutions_encodes_rfq_solutions_at_the_same_time() {
+        fn test_encode_solutions_encodes_rfq_solutions_in_parallel() {
             let encoder = get_tycho_router_encoder();
             let delay = Duration::from_millis(300);
             let single_bebop_solution = |token_in: Bytes, token_out: Bytes| {
