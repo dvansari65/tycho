@@ -2,7 +2,10 @@ use std::{
     env,
     fs::OpenOptions,
     io::{BufRead, BufReader, Write},
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex,
+    },
 };
 
 use alloy::{
@@ -176,7 +179,14 @@ where
     })
 }
 
-/// Runs `f` on every item, each on its own OS thread, and returns the results in input order.
+/// Upper bound on the OS threads one `map_on_threads` call runs at a time.
+///
+/// The threads block on RFQ network round trips, so the cap bounds peak memory (each thread
+/// reserves stack space) while still overlapping the waits.
+const MAX_ENCODING_THREADS: usize = 32;
+
+/// Runs `f` on every item on up to [`MAX_ENCODING_THREADS`] OS threads, and returns the results
+/// in input order.
 ///
 /// An RFQ encoder blocks on a network round trip for its signed quote, so running the items at
 /// the same time bounds the total wait by the slowest item instead of the sum of all items.
@@ -191,22 +201,56 @@ where
     if let [item] = items {
         return Ok(vec![f(item)?]);
     }
+    let next_index = AtomicUsize::new(0);
+    let workers = items.len().min(MAX_ENCODING_THREADS);
     std::thread::scope(|scope| {
-        let mut handles = Vec::with_capacity(items.len());
-        for item in items {
-            handles.push(scope.spawn(|| f(item)));
+        let mut handles = Vec::with_capacity(workers);
+        for _ in 0..workers {
+            handles.push(scope.spawn(|| {
+                let mut worker_results = Vec::new();
+                loop {
+                    let index = next_index.fetch_add(1, Ordering::Relaxed);
+                    let Some(item) = items.get(index) else {
+                        return worker_results;
+                    };
+                    worker_results.push((index, f(item)));
+                }
+            }));
         }
-        let mut results = Vec::with_capacity(handles.len());
+        let mut results: Vec<Option<R>> = Vec::new();
+        results.resize_with(items.len(), || None);
+        let mut first_error: Option<(usize, EncodingError)> = None;
         for handle in handles {
-            let result = handle.join().map_err(|payload| {
+            let worker_results = handle.join().map_err(|payload| {
                 EncodingError::FatalError(format!(
                     "encoding thread panicked: {}",
                     panic_message(&*payload)
                 ))
-            })??;
-            results.push(result);
+            })?;
+            for (index, result) in worker_results {
+                match result {
+                    Ok(value) => results[index] = Some(value),
+                    Err(error) => {
+                        if first_error
+                            .as_ref()
+                            .is_none_or(|(first_index, _)| index < *first_index)
+                        {
+                            first_error = Some((index, error));
+                        }
+                    }
+                }
+            }
         }
-        Ok(results)
+        if let Some((_, error)) = first_error {
+            return Err(error);
+        }
+        let mut ordered = Vec::with_capacity(items.len());
+        for result in results {
+            ordered.push(result.ok_or_else(|| {
+                EncodingError::FatalError("encoding thread dropped a result".to_string())
+            })?);
+        }
+        Ok(ordered)
     })
 }
 
@@ -295,6 +339,37 @@ pub fn write_calldata_to_file(test_identifier: &str, hex_calldata: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_map_on_threads_keeps_input_order_above_the_thread_cap() {
+        let items: Vec<usize> = (0..(MAX_ENCODING_THREADS * 3 + 1)).collect();
+
+        let results = map_on_threads(&items, |item| Ok(*item * 2)).unwrap();
+
+        let expected: Vec<usize> = items
+            .iter()
+            .map(|item| item * 2)
+            .collect();
+        assert_eq!(results, expected);
+    }
+
+    #[test]
+    fn test_map_on_threads_returns_the_earliest_error() {
+        let items: Vec<usize> = (0..(MAX_ENCODING_THREADS * 2)).collect();
+
+        let result: Result<Vec<usize>, EncodingError> = map_on_threads(&items, |item| {
+            if *item >= 3 {
+                Err(EncodingError::InvalidInput(format!("item {item} is broken")))
+            } else {
+                Ok(*item)
+            }
+        });
+
+        let Err(EncodingError::InvalidInput(message)) = result else {
+            panic!("expected an InvalidInput error, got {result:?}");
+        };
+        assert_eq!(message, "item 3 is broken");
+    }
 
     #[test]
     fn test_map_on_threads_reports_the_panic_message() {

@@ -24,12 +24,14 @@ use crate::encoding::{
 /// * `single_swap_strategy`: Encoder for single swaps
 /// * `sequential_swap_strategy`: Encoder for sequential swaps
 /// * `split_swap_strategy`: Encoder for split swaps
+/// * `swap_encoder_registry`: SwapEncoderRegistry, containing all possible swap encoders
 /// * `router_address`: Address of the Tycho router contract
 #[derive(Clone)]
 pub(crate) struct TychoRouterEncoder {
     single_swap_strategy: SingleSwapStrategyEncoder,
     sequential_swap_strategy: SequentialSwapStrategyEncoder,
     split_swap_strategy: SplitSwapStrategyEncoder,
+    swap_encoder_registry: SwapEncoderRegistry,
 }
 
 impl TychoRouterEncoder {
@@ -47,9 +49,20 @@ impl TychoRouterEncoder {
                 router_address.clone(),
             )?,
             split_swap_strategy: SplitSwapStrategyEncoder::new(
-                swap_encoder_registry,
+                swap_encoder_registry.clone(),
                 router_address.clone(),
             )?,
+            swap_encoder_registry,
+        })
+    }
+
+    /// Whether any swap in the solution encodes through an encoder that blocks on a quote
+    /// request.
+    fn blocks_on_quote(&self, solution: &Solution) -> bool {
+        solution.swaps().iter().any(|swap| {
+            self.swap_encoder_registry
+                .get_encoder(&swap.component().protocol_system)
+                .is_some_and(|encoder| encoder.blocks_on_quote())
         })
     }
 
@@ -78,7 +91,10 @@ impl TychoRouterEncoder {
 }
 
 impl TychoEncoder for TychoRouterEncoder {
-    /// Encodes every solution through [`map_on_threads`] and keeps the input order.
+    /// Encodes every solution and keeps the input order.
+    ///
+    /// Solutions run through [`map_on_threads`] only when one of them blocks on a quote
+    /// request; a batch of pure on-chain solutions encodes on the calling thread.
     fn encode_solutions(
         &self,
         solutions: Vec<Solution>,
@@ -87,6 +103,16 @@ impl TychoEncoder for TychoRouterEncoder {
         // other solutions requesting signed quotes first.
         for solution in &solutions {
             self.validate_solution(solution)?;
+        }
+        if !solutions
+            .iter()
+            .any(|solution| self.blocks_on_quote(solution))
+        {
+            let mut encoded_solutions = Vec::with_capacity(solutions.len());
+            for solution in &solutions {
+                encoded_solutions.push(self.encode_solution(solution)?);
+            }
+            return Ok(encoded_solutions);
         }
         map_on_threads(&solutions, |solution| self.encode_solution(solution))
     }

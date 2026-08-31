@@ -71,12 +71,31 @@ fn encode_swap_group(
     })
 }
 
-/// Encodes every swap group through [`map_on_threads`] and keeps the input order.
+/// Encodes every swap group and keeps the input order.
+///
+/// Groups run through [`map_on_threads`] only when one of their encoders blocks on a quote
+/// request; a route of pure on-chain protocols encodes on the calling thread.
 fn encode_swap_groups(
     swap_encoder_registry: &SwapEncoderRegistry,
     grouped_swaps: &[SwapGroup],
     router_address: &Bytes,
 ) -> Result<Vec<EncodedSwapGroup>, EncodingError> {
+    let any_group_blocks = grouped_swaps.iter().any(|group| {
+        swap_encoder_registry
+            .get_encoder(&group.protocol_system)
+            .is_some_and(|encoder| encoder.blocks_on_quote())
+    });
+    if !any_group_blocks {
+        let mut encoded_groups = Vec::with_capacity(grouped_swaps.len());
+        for grouped_swap in grouped_swaps {
+            encoded_groups.push(encode_swap_group(
+                swap_encoder_registry,
+                grouped_swap,
+                router_address,
+            )?);
+        }
+        return Ok(encoded_groups);
+    }
     map_on_threads(grouped_swaps, |grouped_swap| {
         encode_swap_group(swap_encoder_registry, grouped_swap, router_address)
     })

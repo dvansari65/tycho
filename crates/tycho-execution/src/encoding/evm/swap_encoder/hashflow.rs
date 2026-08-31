@@ -105,6 +105,10 @@ impl SwapEncoder for HashflowSwapEncoder {
         &self.executor_address
     }
 
+    fn blocks_on_quote(&self) -> bool {
+        true
+    }
+
     fn clone_box(&self) -> Box<dyn SwapEncoder> {
         Box::new(self.clone())
     }
