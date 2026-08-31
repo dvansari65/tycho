@@ -81,6 +81,10 @@ pub struct AerodromeSlipstreamsState {
     ticks: TickList,
     observations: Observations,
     dfc: DynamicFeeConfig,
+    /// Quote as if the swap lands first in its execution block (see
+    /// [`DecoderContext::assume_first_in_block`]); off = the worse of the two fee branches.
+    #[serde(default)]
+    assume_first_in_block: bool,
 }
 
 impl AerodromeSlipstreamsState {
@@ -129,7 +133,14 @@ impl AerodromeSlipstreamsState {
             ticks: tick_list,
             observations: Observations::new(observations),
             dfc,
+            assume_first_in_block: false,
         })
+    }
+
+    /// Sets whether quotes assume the swap lands first in its execution block.
+    pub fn with_first_in_block_assumption(mut self, assume: bool) -> Self {
+        self.assume_first_in_block = assume;
+        self
     }
 
     fn get_fee(&self) -> Result<ResolvedFee, SimulationError> {
@@ -142,6 +153,7 @@ impl AerodromeSlipstreamsState {
             self.observation_cardinality,
             &self.observations,
             self.execution_block_timestamp as u32,
+            self.assume_first_in_block,
         )
     }
 
@@ -735,6 +747,7 @@ mod tests {
     fn initial_fee_pool(last_observation_ts: u32) -> AerodromeSlipstreamsState {
         let mut pool = create_basic_test_pool();
         pool.dfc = DynamicFeeConfig::new(2700, 30_000, 0, true, 750);
+        pool.assume_first_in_block = true;
         pool.observations = Observations::new(vec![Observation {
             block_timestamp: last_observation_ts,
             initialized: true,
@@ -788,7 +801,9 @@ mod tests {
             observations,
             DynamicFeeConfig::new(2700, 0, 0, true, 750),
         )
-        .expect("state should build");
+        .expect("state should build")
+        // The replayed swap was in fact the block's first: the optimistic mode reproduces it.
+        .with_first_in_block_assumption(true);
 
         // The quotes execute in block 50166683 (ts 1_787_122_713).
         assert!(pool.apply_block(&BlockContext::new(50_166_683, 1_787_122_713)));
@@ -863,6 +878,52 @@ mod tests {
         };
 
         assert_eq!(partial.new_state.fee(), 2700.0 / 1_000_000.0);
+    }
+
+    #[test]
+    fn default_quotes_the_worse_fee_when_position_is_unknown() {
+        // Without the first-in-block assumption the quote must never over-state the output:
+        // before the pool is touched in the execution block, the worse of the two branches
+        // (here the 2700 dynamic fee) applies — which is also the pre-fix behavior.
+        let mut pool = initial_fee_pool(1_000);
+        pool.assume_first_in_block = false;
+        pool.apply_block(&BlockContext::new(101, 1_002));
+
+        assert_eq!(
+            pool.get_fee()
+                .expect("fee should be computable")
+                .fee,
+            2700
+        );
+    }
+
+    #[test]
+    fn worst_case_picks_the_initial_fee_when_it_is_the_higher_one() {
+        // Nothing stops a pool from configuring initialFee above its dynamic fee: worst case
+        // must be max(initial, dynamic), not "the dynamic fee".
+        let mut pool = initial_fee_pool(1_000);
+        pool.dfc = DynamicFeeConfig::new(500, 30_000, 0, true, 4_000);
+        pool.assume_first_in_block = false;
+        pool.apply_block(&BlockContext::new(101, 1_002));
+
+        assert_eq!(
+            pool.get_fee()
+                .expect("fee should be computable")
+                .fee,
+            4_000
+        );
+    }
+
+    #[test]
+    fn worst_case_keeps_a_flat_fee_pool_quiet_across_blocks() {
+        // With scaling 0 the worst-case fee is constant, so apply_block must never request a
+        // re-emission: the default mode adds no per-block load for such pools.
+        let mut pool = initial_fee_pool(1_000);
+        pool.assume_first_in_block = false;
+        pool.apply_block(&BlockContext::new(100, 1_000));
+
+        assert!(!pool.apply_block(&BlockContext::new(101, 1_002)));
+        assert!(!pool.apply_block(&BlockContext::new(102, 1_004)));
     }
 
     #[test]

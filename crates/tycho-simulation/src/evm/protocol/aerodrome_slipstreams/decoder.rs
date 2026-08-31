@@ -27,7 +27,7 @@ impl TryFromWithBlock<ComponentWithState, BlockHeader> for AerodromeSlipstreamsS
         block: BlockHeader,
         _account_balances: &HashMap<Bytes, HashMap<Bytes, Bytes>>,
         _all_tokens: &HashMap<Bytes, Token>,
-        _decoder_context: &DecoderContext,
+        decoder_context: &DecoderContext,
     ) -> Result<Self, Self::Error> {
         let liq = snapshot
             .state
@@ -214,6 +214,7 @@ impl TryFromWithBlock<ComponentWithState, BlockHeader> for AerodromeSlipstreamsS
             observations,
             dynamic_fee_config,
         )
+        .map(|state| state.with_first_in_block_assumption(decoder_context.assume_first_in_block))
         .map_err(|err| InvalidSnapshotError::ValueError(err.to_string()))
     }
 }

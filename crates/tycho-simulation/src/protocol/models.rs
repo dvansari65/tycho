@@ -45,6 +45,14 @@ use crate::evm::override_stream::OverrideSnapshot;
 pub struct DecoderContext {
     pub adapter_path: Option<String>,
     pub vm_traces: Option<bool>,
+    /// Quote as if the swap lands before any other on the same pool in its execution block.
+    ///
+    /// Only consumed by protocols that price the first swap of a block differently (currently
+    /// `aerodrome_slipstreams`). Off by default: position within the block is unknowable from a
+    /// local simulation, so the worse of the two fees is quoted and the output is never
+    /// over-quoted. Enable only if your submission path can realistically win that race —
+    /// a wrong bet surfaces as reverts or negative slippage at execution time.
+    pub assume_first_in_block: bool,
     /// Live per-block VM state override channel, wired into the pool at construction time.
     ///
     /// Set internally by the decoder from its registered override providers; not part of the
@@ -54,7 +62,17 @@ pub struct DecoderContext {
 
 impl DecoderContext {
     pub fn new() -> Self {
-        Self { adapter_path: None, vm_traces: None, live_override: None }
+        Self {
+            adapter_path: None,
+            vm_traces: None,
+            assume_first_in_block: false,
+            live_override: None,
+        }
+    }
+
+    pub fn assume_first_in_block(mut self, assume: bool) -> Self {
+        self.assume_first_in_block = assume;
+        self
     }
 
     pub fn vm_adapter_path<S: Into<String>>(mut self, path: S) -> Self {

@@ -1377,7 +1377,10 @@ mod tests {
                 vec![Observation { block_timestamp: 500, initialized: true, ..Default::default() }],
                 DynamicFeeConfig::new(2700, 30_000, 0, true, 750),
             )
-            .expect("state should build"),
+            .expect("state should build")
+            // These fixtures exercise the fee-flip path, which needs the optimistic mode:
+            // under the worst-case default a flat-fee pool never flips.
+            .with_first_in_block_assumption(true),
         )
     }
 

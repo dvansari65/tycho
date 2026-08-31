@@ -147,9 +147,11 @@ impl ResolvedFee {
 
 /// Resolves the fee a swap executing at `execution_timestamp` would pay.
 ///
-/// `execution_timestamp` is the timestamp of the block the swap lands in, not the block the state
-/// was decoded from. The initial-vs-dynamic branch is exactly the module's on-chain test: the
-/// initial fee applies until an observation has been written at that timestamp.
+/// When no observation has been written in the execution block yet, the swap's position within
+/// the block is unknown: `assume_first_in_block` quotes the initial fee (betting the swap lands
+/// before any other on the pool), while the default quotes the worse of the initial and dynamic
+/// fees so the output is never over-quoted. Once the pool has been touched in the execution
+/// block, position is a known fact and the flag has no effect.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn get_dynamic_fee(
     dfc: &DynamicFeeConfig,
@@ -160,6 +162,7 @@ pub(crate) fn get_dynamic_fee(
     observation_cardinality: u16,
     observations: &Observations,
     execution_timestamp: u32,
+    assume_first_in_block: bool,
 ) -> Result<ResolvedFee, SimulationError> {
     if dfc.base_fee == ZERO_FEE_INDICATOR {
         return Ok(ResolvedFee::flat(0));
@@ -170,13 +173,55 @@ pub(crate) fn get_dynamic_fee(
         observations.timestamp_at(observation_index, observation_cardinality)? !=
             execution_timestamp
     {
-        return match dfc.initial_fee {
-            0 => Ok(ResolvedFee::flat(base_fee)),
-            ZERO_FEE_INDICATOR => Ok(ResolvedFee::flat(0)),
-            initial_fee => Ok(ResolvedFee::flat(initial_fee)),
+        let initial = match dfc.initial_fee {
+            0 => base_fee,
+            ZERO_FEE_INDICATOR => 0,
+            initial_fee => initial_fee,
         };
+        if assume_first_in_block {
+            // First in block: the module returns before touching the oracle.
+            return Ok(ResolvedFee::flat(initial));
+        }
+        // Position unknown: quote the worse of the two branches. `max`, not "the dynamic fee" —
+        // nothing stops a pool from configuring `initialFee` above its dynamic fee. Gas stays
+        // conservative too: the oracle read is charged whenever the dynamic branch evaluated it.
+        let dynamic = resolve_dynamic_fee(
+            dfc,
+            base_fee,
+            current_tick,
+            liquidity,
+            observation_index,
+            observation_cardinality,
+            observations,
+            execution_timestamp,
+        )?;
+        return Ok(ResolvedFee { fee: initial.max(dynamic.fee), ..dynamic });
     }
 
+    resolve_dynamic_fee(
+        dfc,
+        base_fee,
+        current_tick,
+        liquidity,
+        observation_index,
+        observation_cardinality,
+        observations,
+        execution_timestamp,
+    )
+}
+
+/// The dynamic branch of the module: base fee plus the TWAP-deviation component, capped.
+#[allow(clippy::too_many_arguments)]
+fn resolve_dynamic_fee(
+    dfc: &DynamicFeeConfig,
+    base_fee: u32,
+    current_tick: i32,
+    liquidity: u128,
+    observation_index: u16,
+    observation_cardinality: u16,
+    observations: &Observations,
+    execution_timestamp: u32,
+) -> Result<ResolvedFee, SimulationError> {
     let (scaling_factor, fee_cap) = if dfc.scaling_factor != 0 {
         (dfc.scaling_factor, dfc.fee_cap)
     } else {
@@ -255,7 +300,7 @@ mod tests {
             ..Default::default()
         }]);
 
-        let fee = get_dynamic_fee(&dfc, 500, 0, 1, 0, 1, &observations, 100)
+        let fee = get_dynamic_fee(&dfc, 500, 0, 1, 0, 1, &observations, 100, true)
             .expect("Failed to calculate dynamic fee");
 
         assert_eq!(fee, ResolvedFee::flat(30));
@@ -271,7 +316,7 @@ mod tests {
             ..Default::default()
         }]);
 
-        let fee = get_dynamic_fee(&dfc, 500, 0, 1, 0, 1, &observations, 100)
+        let fee = get_dynamic_fee(&dfc, 500, 0, 1, 0, 1, &observations, 100, true)
             .expect("Failed to calculate dynamic fee");
 
         assert_eq!(fee, ResolvedFee::flat(150));
@@ -289,7 +334,7 @@ mod tests {
         }]);
 
         let dfc = DynamicFeeConfig::new(150, 400, 0, true, initial_fee);
-        let fee = get_dynamic_fee(&dfc, 500, 0, 1, 0, 1, &observations, 100)
+        let fee = get_dynamic_fee(&dfc, 500, 0, 1, 0, 1, &observations, 100, true)
             .expect("Failed to calculate dynamic fee");
 
         assert_eq!(fee.fee, expected_fee);
@@ -330,9 +375,18 @@ mod tests {
                 .is_ok());
         }
 
-        let dynamic_fee =
-            get_dynamic_fee(&dfc, 362, -195239, 1102101691356476042, 534, 3010, &obs, 1762330021)
-                .expect("Failed to calculate dynamic fee");
+        let dynamic_fee = get_dynamic_fee(
+            &dfc,
+            362,
+            -195239,
+            1102101691356476042,
+            534,
+            3010,
+            &obs,
+            1762330021,
+            true,
+        )
+        .expect("Failed to calculate dynamic fee");
 
         assert_eq!(dynamic_fee, ResolvedFee { fee: 380, observed_twap: true });
     }
@@ -379,7 +433,7 @@ mod tests {
             ..Default::default()
         }]);
 
-        let fee = get_dynamic_fee(&dfc, 3000, 0, 1, 0, 1, &observations, 100)
+        let fee = get_dynamic_fee(&dfc, 3000, 0, 1, 0, 1, &observations, 100, true)
             .expect("Failed to calculate dynamic fee");
 
         assert_eq!(fee, ResolvedFee::flat(3000));
@@ -406,7 +460,7 @@ mod tests {
             },
         ]);
 
-        let fee = get_dynamic_fee(&dfc, 3000, 0, 1, 1, 300, &observations, 1_000_000)
+        let fee = get_dynamic_fee(&dfc, 3000, 0, 1, 1, 300, &observations, 1_000_000, true)
             .expect("observe failure should fall back to the base fee, not error");
 
         assert_eq!(fee, ResolvedFee::flat(3000));
