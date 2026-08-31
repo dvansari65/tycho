@@ -14,7 +14,6 @@ use crate::encoding::{
         utils::{map_on_threads, ple_encode},
     },
     models::{EncodedSolution, EncodingContext, Solution},
-    strategy_encoder::StrategyEncoder,
     tycho_encoder::TychoEncoder,
 };
 

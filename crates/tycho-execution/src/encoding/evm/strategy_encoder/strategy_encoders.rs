@@ -16,7 +16,6 @@ use crate::encoding::{
         utils::{get_token_position, map_on_threads, percentage_to_uint24, ple_encode},
     },
     models::{EncodedSolution, EncodingContext, Solution, Strategy, UserTransferType},
-    strategy_encoder::StrategyEncoder,
 };
 
 /// The protocol data of one swap group and the executor that runs it.
@@ -137,8 +136,12 @@ impl SingleSwapStrategyEncoder {
     }
 }
 
-impl StrategyEncoder for SingleSwapStrategyEncoder {
-    fn encode_strategy(&self, solution: &Solution) -> Result<EncodedSolution, EncodingError> {
+impl SingleSwapStrategyEncoder {
+    /// Encodes the solution into calldata for the router's `singleSwap` method family.
+    pub(crate) fn encode_strategy(
+        &self,
+        solution: &Solution,
+    ) -> Result<EncodedSolution, EncodingError> {
         let function_signature = match solution.user_transfer_type() {
             UserTransferType::TransferFromPermit2 => {
                 "singleSwapPermit2(uint256,address,address,uint256,uint256,address,\
@@ -229,8 +232,12 @@ impl SequentialSwapStrategyEncoder {
     }
 }
 
-impl StrategyEncoder for SequentialSwapStrategyEncoder {
-    fn encode_strategy(&self, solution: &Solution) -> Result<EncodedSolution, EncodingError> {
+impl SequentialSwapStrategyEncoder {
+    /// Encodes the solution into calldata for the router's `sequentialSwap` method family.
+    pub(crate) fn encode_strategy(
+        &self,
+        solution: &Solution,
+    ) -> Result<EncodedSolution, EncodingError> {
         let function_signature = match solution.user_transfer_type() {
             UserTransferType::TransferFromPermit2 => {
                 "sequentialSwapPermit2(uint256,address,address,uint256,uint256,address,\
@@ -320,8 +327,12 @@ impl SplitSwapStrategyEncoder {
     }
 }
 
-impl StrategyEncoder for SplitSwapStrategyEncoder {
-    fn encode_strategy(&self, solution: &Solution) -> Result<EncodedSolution, EncodingError> {
+impl SplitSwapStrategyEncoder {
+    /// Encodes the solution into calldata for the router's `splitSwap` method family.
+    pub(crate) fn encode_strategy(
+        &self,
+        solution: &Solution,
+    ) -> Result<EncodedSolution, EncodingError> {
         let function_signature = match solution.user_transfer_type() {
             UserTransferType::TransferFromPermit2 => {
                 "splitSwapPermit2(uint256,address,address,uint256,uint256,uint256,address,\

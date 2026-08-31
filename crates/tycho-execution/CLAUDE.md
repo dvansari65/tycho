@@ -204,12 +204,12 @@ Last swap's receiver is the final user/vault address.
 
 ## Rust Encoding Pipeline (`src/encoding/`)
 
-Encodes a `Solution` into EVM calldata through three trait layers:
+Encodes a `Solution` into EVM calldata through three layers:
 
 ```
 TychoEncoder (trait)                     -- public API, validates Solution
   └─ TychoRouterEncoder                 -- selects strategy, auto-inserts WETH swaps
-       └─ StrategyEncoder (trait)        -- encodes swap structure (single/sequential/split)
+       └─ strategy encoders             -- encode swap structure (single/sequential/split)
             └─ SwapEncoder (trait)       -- encodes protocol-specific pool data
 ```
 
@@ -218,9 +218,10 @@ wrap/unwrap where ETH↔WETH bridges are missing, then selects strategy: **Singl
 with no splits), **Sequential** (multiple swaps, all `split == 0.0`), **Split** (any `split > 0.0`). *
 *TychoExecutorEncoder** is a simplified variant that bypasses TychoRouterV3 and calls the executor directly.
 
-### StrategyEncoder
+### Strategy encoders
 
-Three implementations (`evm/strategy_encoder/`), each targeting a TychoRouterV3 method family. Protocol data within a
+Three concrete encoders (`evm/strategy_encoder/`), each with an `encode_strategy` method targeting a TychoRouterV3
+method family. Protocol data within a
 group is PLE-encoded (`[len: u16][data]...`); Ekubo uses concatenation instead (`NON_PLE_ENCODED_PROTOCOLS`).
 
 | Strategy                        | Router methods                              | Encoding                                                                                                                           |
