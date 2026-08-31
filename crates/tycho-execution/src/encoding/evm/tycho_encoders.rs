@@ -84,6 +84,11 @@ impl TychoEncoder for TychoRouterEncoder {
         &self,
         solutions: Vec<Solution>,
     ) -> Result<Vec<EncodedSolution>, EncodingError> {
+        // Validate every solution before encoding any, so an invalid solution fails without the
+        // other solutions requesting signed quotes first.
+        for solution in &solutions {
+            self.validate_solution(solution)?;
+        }
         map_on_threads(&solutions, |solution| self.encode_solution(solution))
     }
 
@@ -379,6 +384,41 @@ mod tests {
             assert_eq!(encoded_solutions.len(), 2);
             assert!(encode(encoded_solutions[0].swaps()).contains(&encode(usdc())[..]));
             assert!(encode(encoded_solutions[1].swaps()).contains(&encode(dai())[..]));
+        }
+
+        /// A batch that holds one invalid solution fails before the valid solutions request their
+        /// signed quotes, so the 300ms RFQ round trip never runs.
+        #[test]
+        fn test_encode_solutions_rejects_an_invalid_solution_before_requesting_quotes() {
+            let encoder = get_tycho_router_encoder();
+            let delay = Duration::from_millis(300);
+            let delayed_solution = Solution::new(
+                Bytes::from_str("0xcd09f75E2BF2A4d11F3AB23f1389FcC1621c0cc2").unwrap(),
+                Bytes::default(),
+                usdc(),
+                weth(),
+                BigUint::from(1_000u64),
+                BigUint::from(1_000u64),
+                BigUint::from(900u64),
+                vec![delayed_bebop_swap(usdc(), weth(), delay)],
+            );
+            let solution_without_swaps = Solution::new(
+                Bytes::from_str("0xcd09f75E2BF2A4d11F3AB23f1389FcC1621c0cc2").unwrap(),
+                Bytes::default(),
+                dai(),
+                wbtc(),
+                BigUint::from(1_000u64),
+                BigUint::from(1_000u64),
+                BigUint::from(900u64),
+                vec![],
+            );
+
+            let start = Instant::now();
+            let result = encoder.encode_solutions(vec![delayed_solution, solution_without_swaps]);
+            let elapsed = start.elapsed();
+
+            assert!(matches!(result, Err(EncodingError::FatalError(_))), "{result:?}");
+            assert!(elapsed < delay, "encoding took {elapsed:?}");
         }
 
         #[test]

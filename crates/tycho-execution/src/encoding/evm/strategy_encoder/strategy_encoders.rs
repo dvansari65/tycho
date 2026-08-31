@@ -351,15 +351,26 @@ impl StrategyEncoder for SplitSwapStrategyEncoder {
         tokens.extend(intermediary_tokens);
         tokens.push(solution.token_out());
 
+        // Look the token indices up before encoding, so an unknown token fails without an RFQ
+        // encoder requesting a signed quote first.
+        let mut token_indices = Vec::with_capacity(grouped_swaps.len());
+        for grouped_swap in &grouped_swaps {
+            token_indices.push((
+                get_token_position(&tokens, &grouped_swap.token_in)?,
+                get_token_position(&tokens, &grouped_swap.token_out)?,
+            ));
+        }
+
         let encoded_groups =
             encode_swap_groups(&self.swap_encoder_registry, &grouped_swaps, &self.router_address)?;
 
-        let mut swaps = vec![];
-        for (grouped_swap, encoded_group) in grouped_swaps.iter().zip(encoded_groups) {
+        let mut swaps = Vec::with_capacity(grouped_swaps.len());
+        for (index, encoded_group) in encoded_groups.into_iter().enumerate() {
+            let (token_in_index, token_out_index) = token_indices[index];
             let swap_data = self.encode_swap_header(
-                get_token_position(&tokens, &grouped_swap.token_in)?,
-                get_token_position(&tokens, &grouped_swap.token_out)?,
-                percentage_to_uint24(grouped_swap.split),
+                token_in_index,
+                token_out_index,
+                percentage_to_uint24(grouped_swaps[index].split),
                 encoded_group.executor_address,
                 encoded_group.protocol_data,
             );
