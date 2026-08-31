@@ -145,6 +145,17 @@ pub(crate) fn create_encoding_runtime() -> Result<(Handle, SafeRuntime), Encodin
     Ok((handle, SafeRuntime(Some(rt))))
 }
 
+/// Extracts the human-readable message from a panic payload, if it carries one.
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> &str {
+    if let Some(message) = payload.downcast_ref::<&str>() {
+        message
+    } else if let Some(message) = payload.downcast_ref::<String>() {
+        message
+    } else {
+        "non-string panic payload"
+    }
+}
+
 /// Runs a closure on a fresh OS thread, blocking the caller until it completes.
 ///
 /// Unlike `tokio::task::block_in_place`, this works on any runtime flavor
@@ -156,9 +167,12 @@ where
     T: Send,
 {
     std::thread::scope(|s| {
-        s.spawn(f)
-            .join()
-            .map_err(|_| EncodingError::FatalError("blocking thread panicked".to_string()))
+        s.spawn(f).join().map_err(|payload| {
+            EncodingError::FatalError(format!(
+                "blocking thread panicked: {}",
+                panic_message(&*payload)
+            ))
+        })
     })
 }
 
@@ -184,9 +198,12 @@ where
         }
         let mut results = Vec::with_capacity(handles.len());
         for handle in handles {
-            let result = handle
-                .join()
-                .map_err(|_| EncodingError::FatalError("encoding thread panicked".to_string()))??;
+            let result = handle.join().map_err(|payload| {
+                EncodingError::FatalError(format!(
+                    "encoding thread panicked: {}",
+                    panic_message(&*payload)
+                ))
+            })??;
             results.push(result);
         }
         Ok(results)
@@ -278,6 +295,21 @@ pub fn write_calldata_to_file(test_identifier: &str, hex_calldata: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_map_on_threads_reports_the_panic_message() {
+        let items = vec![1, 2];
+
+        let result: Result<Vec<i32>, EncodingError> = map_on_threads(&items, |item| {
+            assert_ne!(*item, 2, "item 2 is broken");
+            Ok(*item)
+        });
+
+        let Err(EncodingError::FatalError(message)) = result else {
+            panic!("expected a FatalError, got {result:?}");
+        };
+        assert!(message.contains("item 2 is broken"), "{message}");
+    }
 
     #[test]
     fn test_pad_or_truncate_to_size() {
