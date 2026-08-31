@@ -1,3 +1,16 @@
+## [0.371.0](https://github.com/propeller-heads/tycho/compare/0.370.2...0.371.0) (2026-08-31)
+
+
+### Features
+
+* re-analyze recently traded quality-5 tokens ([d769f12](https://github.com/propeller-heads/tycho/commit/d769f12dc30567fe46211590528a7da449f97c00))
+
+
+### Bug Fixes
+
+* fetch all pages before analysis and log pass outcomes ([b653a85](https://github.com/propeller-heads/tycho/commit/b653a859c0edc6740f90cf68c2711db168ca459b))
+* replace unwrap_or_else with unwrap_or_default for clippy ([ce79bbf](https://github.com/propeller-heads/tycho/commit/ce79bbf878f13c22783b37ec68d1eece664dc4e3))
+
 ## [0.370.2](https://github.com/propeller-heads/tycho/compare/0.370.1...0.370.2) (2026-08-29)
 
 
