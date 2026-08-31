@@ -274,16 +274,6 @@ impl NativeClient {
             HashMap::new();
 
         for entry in entries {
-            if !self
-                .tokens
-                .contains(&entry.base_address) ||
-                !self
-                    .tokens
-                    .contains(&entry.quote_address)
-            {
-                continue;
-            }
-
             let pair = if entry.base_address.as_ref() <= entry.quote_address.as_ref() {
                 (entry.base_address.clone(), entry.quote_address.clone())
             } else {
@@ -714,6 +704,14 @@ impl RFQClient for NativeClient {
                 let mut new_components = HashMap::new();
 
                 for (component_id, book) in &books {
+                    // Keep unrequested books available for TVL conversion, but only emit requested
+                    // markets as components.
+                    if !client.tokens.contains(&book.base_address) ||
+                        !client.tokens.contains(&book.quote_address)
+                    {
+                        continue;
+                    }
+
                     let quote_price_data = if client.quote_tokens.contains(&book.quote_address) {
                         None
                     } else {
@@ -1708,6 +1706,65 @@ mod tests {
         assert!(request.starts_with("GET /orderbook?"));
         assert!(request.contains("chain=ethereum"));
         assert!(request.contains("showNative=0x0"));
+    }
+
+    #[rstest]
+    #[case::with_conversion_helper(true, 300.0, Some(400.0))]
+    #[case::without_conversion_helper(false, 300.0, None)]
+    #[case::below_normalized_tvl_threshold(true, 401.0, None)]
+    #[tokio::test]
+    async fn stream_uses_unrequested_books_only_for_tvl_conversion(
+        #[case] include_helper: bool,
+        #[case] tvl_threshold: f64,
+        #[case] expected_tvl: Option<f64>,
+    ) {
+        let weth = Bytes::from_str("0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2").unwrap();
+        let usdt = Bytes::from_str("0xdac17f958d2ee523a2206206994597c13d831ec7").unwrap();
+        let usdc = Bytes::from_str("0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48").unwrap();
+        let mut entries = vec![serde_json::json!({
+            "base_address": weth.to_string(),
+            "quote_address": usdt.to_string(),
+            "minimum_in_base": 0.0,
+            "side": "bid",
+            "levels": [[2.0, 100.0]]
+        })];
+        if include_helper {
+            // Use a reversed helper with a non-unit price so the test distinguishes the market's
+            // 200 USDT of liquidity from its normalized value of 400 USDC.
+            entries.push(serde_json::json!({
+                "base_address": usdc.to_string(),
+                "quote_address": usdt.to_string(),
+                "minimum_in_base": 0.0,
+                "side": "bid",
+                "levels": [[1_000.0, 0.5]]
+            }));
+        }
+        let (address, _) =
+            create_quote_server("200 OK", serde_json::to_string(&entries).unwrap()).await;
+        let mut client = create_test_client(format!("http://{address}"));
+        client.tokens = HashSet::from([weth.clone(), usdt.clone()]);
+        client.quote_tokens = HashSet::from([usdc]);
+        client.tvl = tvl_threshold;
+
+        let (_, update) = timeout(Duration::from_secs(5), client.stream().next())
+            .await
+            .expect("orderbook poll timed out")
+            .expect("stream ended")
+            .expect("orderbook poll failed");
+
+        if let Some(tvl) = expected_tvl {
+            assert_eq!(update.snapshots.states.len(), 1, "helper must not be emitted");
+            let component = update
+                .snapshots
+                .states
+                .values()
+                .next()
+                .unwrap();
+            assert_eq!(component.component.tokens, vec![weth, usdt]);
+            assert_eq!(component.component_tvl, Some(tvl));
+        } else {
+            assert!(update.snapshots.states.is_empty());
+        }
     }
 
     async fn create_quote_server(
