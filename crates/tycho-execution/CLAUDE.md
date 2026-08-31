@@ -351,11 +351,11 @@ When writing code that calls TychoRouterV3 swap functions:
   quoted output; `minAmountOut` is the revert guardrail —
   the tx reverts if the actual output falls below it. Compute it off-chain from your slippage
   tolerance. Example: 1000 USDC quoted, 5% tolerance → `expectedAmountOut = 1000 * 10**6`,
-  `minAmountOut = 950 * 10**6`. The router rejects `minAmountOut > expectedAmountOut` and any
-  `minAmountOut` more than `MAX_SLIPPAGE_TOLERANCE_BPS` below it, which also excludes zero.
+  `minAmountOut = 950 * 10**6`. The router rejects a zero `minAmountOut` and any
+  `minAmountOut > expectedAmountOut`.
   Setting `minAmountOut` too low may result in a sandwiched swap.
-- **Verify the price data** used for `expectedAmountOut` against at least one independent source.
-  Incorrect price data may set the slippage floor too low.
+- **Verify the price data** used to compute `minAmountOut` against at least one independent source.
+  A `minAmountOut` derived from a bad quote may be too low to prevent a sandwiched swap.
 - **Never approve infinite allowances**, including Permit2. Set Permit2 allowance and deadline as low as practical.
 
 ### Building Executors (executor checklist)

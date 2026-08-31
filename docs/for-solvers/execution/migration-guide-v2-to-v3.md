@@ -380,17 +380,23 @@ position. `splitSwap` keeps `nTokens` between `minAmountOut` and `receiver`.
 
 #### Slippage Bounds
 
-V3.0 accepted any non-zero `minAmountOut`, including `1`. V3.1 requires it to sit inside a window
-anchored on `expectedAmountOut`:
+The accepted `minAmountOut` range changed across V3 minor versions:
+
+- **V3.0** accepted any non-zero `minAmountOut`, including `1`.
+- **V3.1** required it to sit within `MAX_SLIPPAGE_TOLERANCE_BPS` (`2_000`, 20%) of `expectedAmountOut`:
+  `expectedAmountOut * (10_000 - 2_000) / 10_000 <= minAmountOut <= expectedAmountOut`.
+- **V3.2** removed the lower cap. `minAmountOut` must be non-zero and no greater than `expectedAmountOut`:
 
 ```
-expectedAmountOut * (10_000 - MAX_SLIPPAGE_TOLERANCE_BPS) / 10_000  <=  minAmountOut  <=  expectedAmountOut
+0  <  minAmountOut  <=  expectedAmountOut
 ```
 
-`MAX_SLIPPAGE_TOLERANCE_BPS` is `2_000`, which puts the floor 20% below the quote. Two things follow
-from this. Calldata that used to pass `minAmountOut = 1` now reverts, so compute a real floor from your
-slippage tolerance. And because `expectedAmountOut` sets both ends of the window, inflating it raises
-your floor rather than relaxing it — pass the amount your simulation actually returned.
+The router reverts with `TychoRouter__InvalidMinAmountOut` for a zero `minAmountOut` or one above
+`expectedAmountOut`. With no lower cap, compute a real floor from your slippage tolerance — a
+`minAmountOut` set too low may result in a sandwiched swap. Pass the amount your simulation actually
+returned as `expectedAmountOut`.
+
+> V3.2 removes this window. See [V3.1 to V3.2](#v3-1-to-v3-2). 
 
 #### Client Fee Signature
 
@@ -462,3 +468,29 @@ struct FeeInput {
 | `TychoRouter__FeesExceedOutput(totalFees, actualAmountOut)`          | Calculated fees exceed the swap output                    |
 
 `TychoRouter__UndefinedMinAmountOut` is removed — the first two errors replace it.
+
+## V3.1 to V3.2
+
+{% hint style="info" %}
+Router V3.1 stays available on the `tycho-execution` releases that precede this change. Pin your
+dependency to the last of those releases to keep using it. All later versions target V3.2.
+{% endhint %}
+
+### Execution Changes
+
+#### Slippage Bounds
+
+V3.2 removes the lower cap on `minAmountOut`. The router no longer requires it to stay within
+`MAX_SLIPPAGE_TOLERANCE_BPS` of `expectedAmountOut`, and the constant is gone. `minAmountOut` now only
+has to be non-zero and no greater than `expectedAmountOut`:
+
+```
+0  <  minAmountOut  <=  expectedAmountOut
+```
+
+`TychoRouter__InvalidMinAmountOut` fires only for a zero `minAmountOut` or one above
+`expectedAmountOut`. Nothing stops you from setting `minAmountOut` far below the quote, so compute a
+real floor from your slippage tolerance — a `minAmountOut` set too low invites a sandwiched swap.
+Function selectors are unchanged, so V3.1 calldata keeps working.
+
+Encoding is unchanged.
