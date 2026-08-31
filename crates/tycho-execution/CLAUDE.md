@@ -229,11 +229,8 @@ group is PLE-encoded (`[len: u16][data]...`); Ekubo uses concatenation instead (
 | `SequentialSwapStrategyEncoder` | `sequentialSwap` / `Permit2` / `UsingVault` | Validates path connectivity, groups by protocol, PLE-encodes each group with executor header                                       |
 | `SplitSwapStrategyEncoder`      | `splitSwap` / `Permit2` / `UsingVault`      | Builds token array [tokenIn, intermediaries, tokenOut], encodes token indices + split percentages (U24) + executor + protocol data |
 
-**Parallel encoding**: `encode_swap_groups` (`strategy_encoders.rs`) encodes every swap group of a solution on its
-own OS thread, and `TychoRouterEncoder::encode_solutions` does the same for every solution. Both use
-`map_on_threads` (`evm/utils.rs`) and keep input order. This bounds a route with several RFQ hops (each a network
-round trip for the signed quote) by its slowest hop instead of the sum. A single group or solution runs on the
-calling thread.
+**Parallel encoding**: `encode_swap_groups` (`strategy_encoders.rs`) and `TychoRouterEncoder::encode_solutions`
+encode groups and solutions in parallel via `map_on_threads` (`evm/utils.rs`), preserving input order.
 
 **Swap grouping** (`evm/group_swaps.rs`): Consecutive swaps on the same groupable protocol (UniswapV4, BalancerV3,
 Ekubo) are batched into a single `SwapGroup` and executed via one delegatecall. The `SingleSwapStrategyEncoder` can also

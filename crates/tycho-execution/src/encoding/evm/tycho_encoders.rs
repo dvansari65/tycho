@@ -78,8 +78,7 @@ impl TychoRouterEncoder {
 }
 
 impl TychoEncoder for TychoRouterEncoder {
-    /// Encodes the solutions on one thread each, so RFQ quote requests in different solutions
-    /// run at the same time. The result keeps the input order.
+    /// Encodes every solution through [`map_on_threads`] and keeps the input order.
     fn encode_solutions(
         &self,
         solutions: Vec<Solution>,

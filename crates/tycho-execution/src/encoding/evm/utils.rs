@@ -164,6 +164,9 @@ where
 
 /// Runs `f` on every item, each on its own OS thread, and returns the results in input order.
 ///
+/// An RFQ encoder blocks on a network round trip for its signed quote, so running the items at
+/// the same time bounds the total wait by the slowest item instead of the sum of all items.
+///
 /// A single item runs on the calling thread. Any item's error is returned; earlier items win.
 pub(crate) fn map_on_threads<T, R, F>(items: &[T], f: F) -> Result<Vec<R>, EncodingError>
 where

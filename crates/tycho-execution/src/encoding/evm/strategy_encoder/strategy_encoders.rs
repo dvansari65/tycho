@@ -71,10 +71,7 @@ fn encode_swap_group(
     })
 }
 
-/// Encodes every swap group, one thread per group, and keeps the input order.
-///
-/// RFQ encoders block on a network round trip per swap. Encoding the groups at the same time
-/// bounds the total wait by the slowest group instead of the sum of all groups.
+/// Encodes every swap group through [`map_on_threads`] and keeps the input order.
 fn encode_swap_groups(
     swap_encoder_registry: &SwapEncoderRegistry,
     grouped_swaps: &[SwapGroup],
