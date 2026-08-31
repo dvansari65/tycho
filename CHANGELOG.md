@@ -1,3 +1,10 @@
+## [0.371.1](https://github.com/propeller-heads/tycho/compare/0.371.0...0.371.1) (2026-08-31)
+
+
+### Bug Fixes
+
+* classify token analysis reverts as bad tokens ([63334ed](https://github.com/propeller-heads/tycho/commit/63334ed3f6b5a9536859188706271eed5d2ef44e))
+
 ## [0.371.0](https://github.com/propeller-heads/tycho/compare/0.370.2...0.371.0) (2026-08-31)
 
 
