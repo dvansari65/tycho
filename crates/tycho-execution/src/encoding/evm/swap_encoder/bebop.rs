@@ -227,6 +227,7 @@ mod tests {
                 ),
                 ("tx_to".to_string(), target.clone()),
             ]),
+            ..Default::default()
         };
 
         let token_in = Bytes::from("0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2");
