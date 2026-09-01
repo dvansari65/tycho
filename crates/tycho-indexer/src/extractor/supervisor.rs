@@ -86,8 +86,21 @@ impl ExtractorSupervisor {
         ExtractorHandle::new(self.id.clone(), self.ctrl_tx.clone())
     }
 
-    /// Runs the supervision loop. Returns when the extractor has been stopped via
-    /// `ControlMessage::Stop` or has exhausted all restart attempts.
+    /// Runs the supervision loop. Returns `Ok` when the extractor exited gracefully or was
+    /// stopped via `ControlMessage::Stop`.
+    ///
+    /// Returns `Err` only in exceptional situations that cannot be recovered from inside the
+    /// process, and callers are expected to treat it as fatal:
+    /// - The runner could not be rebuilt after a failure. Rebuilding only touches external state,
+    ///   so this means the database was unreachable while reading back the cursor, last block, or
+    ///   DCI entry points, or the spkg file on disk is missing or corrupted. An invalid
+    ///   configuration fails the first build the same way, aborting startup.
+    /// - `max_restarts` consecutive failures were exhausted.
+    ///
+    /// In both cases a process restart is the safest recovery: it rebuilds from a clean
+    /// slate, and it avoids indefinitely serving the dead extractor's stale pending deltas
+    /// over RPC. A future improvement could instead retry transient build failures in place
+    /// and reserve `Err` for deterministic configuration errors.
     pub async fn run(mut self) -> Result<(), ExtractionError> {
         let mut restart_count: u32 = 0;
         let mut backoff_strategy = restart_backoff();

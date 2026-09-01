@@ -298,31 +298,34 @@ fn run_indexer(global_args: GlobalArgs, index_args: IndexArgs) -> Result<(), Ext
 
     let extractor_ctrl_tx = control_tx.clone();
     extraction_runtime.spawn(async move {
-        // Wait for ALL supervisors to complete (each manages its own restarts).
-        // Only signal the main thread once all extractors are permanently stopped.
-        let results = futures03::future::join_all(extraction_tasks).await;
-        let mut any_error = false;
-        for result in &results {
+        // Wait for the supervisors, shutting the whole process down as soon as one of them
+        // fails. A supervisor handles ordinary extractor failures itself and only returns an
+        // error in exceptional situations it cannot recover from (see
+        // `ExtractorSupervisor::run`). Keeping the process up past such an error would leave
+        // the extractor permanently dead while its stale pending deltas keep being served
+        // over RPC; a process restart rebuilds everything from a clean slate instead. A
+        // future improvement could accept a supervisor error and handle it in place.
+        let mut supervisors = extraction_tasks;
+        let mut res: Result<(), ExtractionError> = Ok(());
+        while !supervisors.is_empty() {
+            let (result, _, remaining) = select_all(supervisors).await;
+            supervisors = remaining;
             match result {
                 Ok(Ok(())) => {}
                 Ok(Err(err)) => {
-                    error!(error = %err, "Supervisor exited with error");
-                    any_error = true;
+                    error!(error = %err, "Supervisor exited with error, shutting down");
+                    res = Err(err);
+                    break;
                 }
                 Err(join_err) => {
-                    error!(error = %join_err, "Supervisor task panicked");
-                    any_error = true;
+                    error!(error = %join_err, "Supervisor task panicked, shutting down");
+                    res = Err(ExtractionError::Unknown(format!(
+                        "Supervisor task panicked: {join_err}"
+                    )));
+                    break;
                 }
             }
         }
-
-        let res: Result<(), ExtractionError> = if any_error {
-            Err(ExtractionError::Unknown(
-                "All extractors have stopped — at least one with errors".into(),
-            ))
-        } else {
-            Ok(())
-        };
 
         if extractor_ctrl_tx.send(res).is_err() {
             error!("Fatal: failed to communicate with main thread. Exiting the process...");
