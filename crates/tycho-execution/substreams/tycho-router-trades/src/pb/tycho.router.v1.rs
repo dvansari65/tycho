@@ -69,7 +69,7 @@ pub struct Trade {
     pub router_version: ::prost::alloc::string::String,
     /// "single", "sequential" or "split".
     #[prost(string, tag="11")]
-    pub method: ::prost::alloc::string::String,
+    pub strategy: ::prost::alloc::string::String,
     /// How user funds enter the router: "transfer_from", "permit2", "vault" or "none".
     #[prost(string, tag="12")]
     pub funding: ::prost::alloc::string::String,

@@ -26,7 +26,7 @@ fmt:
 	cargo +nightly fmt
 
 protogen:
-	cd tycho-router-trades && substreams protogen chains/ethereum.yaml --output-path ../src/pb --exclude-paths="sf/substreams,google,sf/ethereum"
+	cd tycho-router-trades && substreams protogen chains/ethereum.yaml --output-path src/pb --exclude-paths="sf/substreams,google,sf/ethereum"
 
 pack: build
 	substreams pack $(MANIFEST) -o tycho-router-trades-$(CHAIN).spkg

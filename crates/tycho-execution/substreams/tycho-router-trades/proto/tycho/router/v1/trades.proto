@@ -43,7 +43,7 @@ message Trade {
   // Router ABI generation: "v2", "v3_0" or "v3_1".
   string router_version = 10;
   // "single", "sequential" or "split".
-  string method = 11;
+  string strategy = 11;
   // How user funds enter the router: "transfer_from", "permit2", "vault" or "none".
   string funding = 12;
 

@@ -175,34 +175,88 @@ fn decode_fee_calculator_event(log: &Log) -> Option<Decoded> {
 #[substreams::handlers::store]
 pub fn store_fee_config(events: FeeConfigEvents, store: StoreSetString) {
     for ev in &events.events {
-        let fc = ev.emitter.as_slice();
-        match ev.event.as_str() {
-            events::ROUTER_FEE_ON_OUTPUT_UPDATED => {
-                store.set(ev.ordinal, keys::fee_on_output(fc), &ev.new_value)
-            }
-            events::ROUTER_FEE_ON_CLIENT_FEE_UPDATED => {
-                store.set(ev.ordinal, keys::fee_on_client_fee(fc), &ev.new_value)
-            }
-            events::CUSTOM_FEE_ON_OUTPUT_UPDATED => {
-                store.set(ev.ordinal, keys::custom_fee_on_output(fc, &ev.client), &ev.new_value)
-            }
-            events::CUSTOM_FEE_ON_CLIENT_FEE_UPDATED => {
-                store.set(ev.ordinal, keys::custom_fee_on_client_fee(fc, &ev.client), &ev.new_value)
-            }
-            events::CUSTOM_FEE_ON_OUTPUT_REMOVED => {
-                store.delete_prefix(ev.ordinal as i64, &keys::custom_fee_on_output(fc, &ev.client))
-            }
-            events::CUSTOM_FEE_ON_CLIENT_FEE_REMOVED => store
-                .delete_prefix(ev.ordinal as i64, &keys::custom_fee_on_client_fee(fc, &ev.client)),
-            events::POSITIVE_SLIPPAGE_TOGGLED => {
-                store.set(ev.ordinal, keys::positive_slippage(fc), &ev.new_value)
-            }
-            events::ROUTER_FEE_RECEIVER_UPDATED => {}
-            events::FEE_CALCULATOR_ACTIVATED | events::FEE_CALCULATOR_UPDATED => {
-                store.set(ev.ordinal, keys::router_fee_calculator(fc), &ev.new_value)
-            }
-            events::FEE_CALCULATOR_SET => {}
-            other => substreams::log::info!("ignoring unknown fee config event {}", other),
+        match store_action(ev) {
+            StoreAction::Set { key, value } => store.set(ev.ordinal, key, &value),
+            StoreAction::DeletePrefix(key) => store.delete_prefix(ev.ordinal as i64, &key),
+            StoreAction::Ignore => {}
         }
+    }
+}
+
+#[derive(Debug, PartialEq)]
+enum StoreAction {
+    Set { key: String, value: String },
+    DeletePrefix(String),
+    Ignore,
+}
+
+fn store_action(ev: &FeeConfigEvent) -> StoreAction {
+    let fc = ev.emitter.as_slice();
+    let set = |key| StoreAction::Set { key, value: ev.new_value.clone() };
+    match ev.event.as_str() {
+        events::ROUTER_FEE_ON_OUTPUT_UPDATED => set(keys::fee_on_output(fc)),
+        events::ROUTER_FEE_ON_CLIENT_FEE_UPDATED => set(keys::fee_on_client_fee(fc)),
+        events::CUSTOM_FEE_ON_OUTPUT_UPDATED => set(keys::custom_fee_on_output(fc, &ev.client)),
+        events::CUSTOM_FEE_ON_CLIENT_FEE_UPDATED => {
+            set(keys::custom_fee_on_client_fee(fc, &ev.client))
+        }
+        events::CUSTOM_FEE_ON_OUTPUT_REMOVED => {
+            StoreAction::DeletePrefix(keys::custom_fee_on_output(fc, &ev.client))
+        }
+        events::CUSTOM_FEE_ON_CLIENT_FEE_REMOVED => {
+            StoreAction::DeletePrefix(keys::custom_fee_on_client_fee(fc, &ev.client))
+        }
+        events::POSITIVE_SLIPPAGE_TOGGLED => set(keys::positive_slippage(fc)),
+        events::FEE_CALCULATOR_ACTIVATED | events::FEE_CALCULATOR_UPDATED => {
+            set(keys::router_fee_calculator(fc))
+        }
+        events::ROUTER_FEE_RECEIVER_UPDATED | events::FEE_CALCULATOR_SET => StoreAction::Ignore,
+        other => {
+            substreams::log::info!("ignoring unknown fee config event {}", other);
+            StoreAction::Ignore
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn event(name: &str) -> FeeConfigEvent {
+        FeeConfigEvent {
+            emitter: vec![0xaa; 20],
+            client: vec![0xbb; 20],
+            event: name.to_string(),
+            new_value: "42".to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn plans_global_and_custom_fee_updates() {
+        assert_eq!(
+            store_action(&event(events::ROUTER_FEE_ON_OUTPUT_UPDATED)),
+            StoreAction::Set { key: keys::fee_on_output(&[0xaa; 20]), value: "42".to_string() }
+        );
+        assert_eq!(
+            store_action(&event(events::CUSTOM_FEE_ON_CLIENT_FEE_UPDATED)),
+            StoreAction::Set {
+                key: keys::custom_fee_on_client_fee(&[0xaa; 20], &[0xbb; 20]),
+                value: "42".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn plans_custom_fee_removal() {
+        assert_eq!(
+            store_action(&event(events::CUSTOM_FEE_ON_OUTPUT_REMOVED)),
+            StoreAction::DeletePrefix(keys::custom_fee_on_output(&[0xaa; 20], &[0xbb; 20]))
+        );
+    }
+
+    #[test]
+    fn ignores_fee_receiver_updates() {
+        assert_eq!(store_action(&event(events::ROUTER_FEE_RECEIVER_UPDATED)), StoreAction::Ignore);
     }
 }

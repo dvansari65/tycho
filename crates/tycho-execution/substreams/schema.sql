@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS trades (
     call_success               BOOLEAN NOT NULL,
     router                     TEXT NOT NULL,
     router_version             TEXT NOT NULL,
-    method                     TEXT NOT NULL,
+    strategy                   TEXT NOT NULL,
     funding                    TEXT NOT NULL,
     eoa                        TEXT NOT NULL,
     msg_sender                 TEXT NOT NULL,

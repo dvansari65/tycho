@@ -12,45 +12,45 @@
 set -euo pipefail
 
 wait_for_db() {
-  local uri="${1/psql:\/\//postgres://}"
-  until pg_isready -q -d "$uri"; do
-    echo "waiting for database" >&2
-    sleep 2
-  done
+	local uri="${1/psql:\/\//postgres://}"
+	until pg_isready -q -d "$uri"; do
+		echo "waiting for database" >&2
+		sleep 2
+	done
 }
 
 mode="${1:-sink}"
 case "$mode" in
 sink)
-  : "${CHAIN:?set CHAIN (ethereum, base, ...)}"
-  : "${DSN:?set DSN, e.g. psql://user:pass@host:5432/db?sslmode=disable}"
-  : "${SUBSTREAMS_API_TOKEN:?set SUBSTREAMS_API_TOKEN}"
-  spkg="/opt/router-trades/spkg/${CHAIN}.spkg"
-  [ -f "$spkg" ] || {
-    echo "no package for chain '$CHAIN'" >&2
-    exit 1
-  }
-  args=("$DSN" "$spkg")
-  [ -n "${START_BLOCK:-}${STOP_BLOCK:-}" ] && args+=("${START_BLOCK:-}:${STOP_BLOCK:-}")
-  [ -n "${SUBSTREAMS_ENDPOINT:-}" ] && args+=(-e "$SUBSTREAMS_ENDPOINT")
-  wait_for_db "$DSN"
-  substreams-sink-sql setup "$DSN" "$spkg"
-  exec substreams-sink-sql run "${args[@]}" \
-    --batch-block-flush-interval "${FLUSH_INTERVAL:-100}" \
-    --metrics-listen-addr "${METRICS_ADDR:-:9102}"
-  ;;
+	: "${CHAIN:?set CHAIN (ethereum, base, ...)}"
+	: "${DSN:?set DSN, e.g. psql://user:pass@host:5432/db?sslmode=disable}"
+	: "${SUBSTREAMS_API_TOKEN:?set SUBSTREAMS_API_TOKEN}"
+	spkg="/opt/router-trades/spkg/${CHAIN}.spkg"
+	[ -f "$spkg" ] || {
+		echo "no package for chain '$CHAIN'" >&2
+		exit 1
+	}
+	args=("$DSN" "$spkg")
+	[ -n "${START_BLOCK:-}${STOP_BLOCK:-}" ] && args+=("${START_BLOCK:-}:${STOP_BLOCK:-}")
+	[ -n "${SUBSTREAMS_ENDPOINT:-}" ] && args+=(-e "$SUBSTREAMS_ENDPOINT")
+	wait_for_db "$DSN"
+	substreams-sink-sql setup "$DSN" "$spkg"
+	exec substreams-sink-sql run "${args[@]}" \
+		--batch-block-flush-interval "${FLUSH_INTERVAL:-100}" \
+		--metrics-listen-addr "${METRICS_ADDR:-:9102}"
+	;;
 price)
-  : "${DSN:?set DSN}"
-  wait_for_db "$DSN"
-  if [ "${LOCAL_PRICING:-0}" = 1 ]; then
-    psql "$DSN" -q -v ON_ERROR_STOP=1 -v chain=ethereum \
-      -f /opt/router-trades/pricing/dev_stub.sql
-  else
-    /opt/router-trades/scripts/fdw_setup.sh
-  fi
-  exec /opt/router-trades/scripts/price_trades.sh "${INTERVAL:-60}"
-  ;;
+	: "${DSN:?set DSN}"
+	wait_for_db "$DSN"
+	if [ "${LOCAL_PRICING:-0}" = 1 ]; then
+		psql "$DSN" -q -v ON_ERROR_STOP=1 -v chain=ethereum \
+			-f /opt/router-trades/pricing/dev_stub.sql
+	else
+		/opt/router-trades/scripts/fdw_setup.sh
+	fi
+	exec /opt/router-trades/scripts/price_trades.sh "${INTERVAL:-60}"
+	;;
 *)
-  exec "$@"
-  ;;
+	exec "$@"
+	;;
 esac

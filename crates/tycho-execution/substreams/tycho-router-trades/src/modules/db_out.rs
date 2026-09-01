@@ -79,7 +79,7 @@ fn insert_trade(tables: &mut Tables, t: &Trade) -> Result<()> {
         .set("call_success", t.call_success)
         .set("router", hex_addr(&t.router))
         .set("router_version", &t.router_version)
-        .set("method", &t.method)
+        .set("strategy", &t.strategy)
         .set("funding", &t.funding)
         .set("eoa", hex_addr(&t.eoa))
         .set("msg_sender", hex_addr(&t.msg_sender))
@@ -152,7 +152,7 @@ fn insert_trade(tables: &mut Tables, t: &Trade) -> Result<()> {
             .set("executor", hex_addr(&hop.executor))
             .set("protocol_data", hex_addr(&hop.protocol_data));
         row.set("protocol_systems", psql_text_array(&hop.protocol_systems));
-        if t.method == "split" {
+        if t.strategy == "split" {
             row.set("token_in_index", hop.token_in_index)
                 .set("token_out_index", hop.token_out_index)
                 .set("split", hop.split);
@@ -205,7 +205,7 @@ fn slippage_tolerance_bps(expected: &str, min: &str) -> Option<String> {
     ))
 }
 
-/// Strips insignificant trailing zeros (and a dangling ) from a decimal string.
+/// Strips insignificant trailing zeros and a dangling decimal point.
 fn trim_decimal(s: String) -> String {
     if !s.contains('.') {
         return s;

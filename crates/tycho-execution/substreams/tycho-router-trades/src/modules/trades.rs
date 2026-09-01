@@ -220,7 +220,7 @@ fn build_trade(
         call_success,
         router: router.address.clone(),
         router_version: router.version.as_str().to_string(),
-        method: swap.method.as_str().to_string(),
+        strategy: swap.method.as_str().to_string(),
         funding: swap.funding.as_str().to_string(),
         eoa: tx.from.clone(),
         msg_sender: call.caller.clone(),
