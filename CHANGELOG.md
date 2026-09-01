@@ -1,3 +1,27 @@
+## [0.375.0](https://github.com/propeller-heads/tycho/compare/0.374.0...0.375.0) (2026-09-01)
+
+
+### Features
+
+* add write-cache flush to CachedGateway and ExtractorGateway ([1fab0b0](https://github.com/propeller-heads/tycho/commit/1fab0b08fa4d4926e1b882189ae895baad063ee8))
+* count revert misses per attribute with component_found label ([c1dfef2](https://github.com/propeller-heads/tycho/commit/c1dfef29251bd161c46a3ca591405a1809ccb786))
+* **indexer:** retain committing blocks in ReorgBuffer until released ([d8cab45](https://github.com/propeller-heads/tycho/commit/d8cab456b1dbfbe6a6d0328679ce6096418fb492))
+* label revert component-not-found counter by cause ([6eb5ee8](https://github.com/propeller-heads/tycho/commit/6eb5ee8e0da8e93552b4eaed90176dd72b90c6c4))
+* register revert attr miss counter at zero ([8936ffb](https://github.com/propeller-heads/tycho/commit/8936ffb06ff4bd4ecdc401386b98cb73251de471))
+* **storage:** track the flushed block height in CachedGateway ([e784648](https://github.com/propeller-heads/tycho/commit/e7846489a5cb5d176a71fc7df7e6640cd28f436e))
+
+
+### Bug Fixes
+
+* exclude born-in-range deleted attrs from revert lookups ([d9aa66e](https://github.com/propeller-heads/tycho/commit/d9aa66e682dc53bbf0e9f46e94968ab450b76bec))
+* resolve revert lookups from retained blocks instead of awaiting commits ([bd553f3](https://github.com/propeller-heads/tycho/commit/bd553f36fb2bc403842db0bf3212ea3206215ae0))
+* restore pre-range value for same-tx delete-then-recreate reverts ([950be01](https://github.com/propeller-heads/tycho/commit/950be014a9cd4c465f3b9d1333c26f624f89ca97))
+* restore prior value for attrs deleted then recreated in reverted range ([5f9609f](https://github.com/propeller-heads/tycho/commit/5f9609f33e48998f635bc401f3c746107ab04350))
+* revert missing-component attrs as deletions, not fatal ([cf8dfee](https://github.com/propeller-heads/tycho/commit/cf8dfeefb394ba13493f76edeeb41a7c0aabd04f))
+* settle pending DB commit on revert only when buffer lookups miss ([6c751b5](https://github.com/propeller-heads/tycho/commit/6c751b5c818e076a0c189b65980a525fc5398bb3))
+* skip revert deletions for attrs created and deleted inside the range ([cd7ee8b](https://github.com/propeller-heads/tycho/commit/cd7ee8bcbe284a12e7201e88a27fc117ed9ee001))
+* wait for pending DB commit before revert lookups ([fcf8721](https://github.com/propeller-heads/tycho/commit/fcf8721c56549efe5a3d677c921acdf20fe1c189))
+
 ## [0.374.0](https://github.com/propeller-heads/tycho/compare/0.373.1...0.374.0) (2026-09-01)
 
 
