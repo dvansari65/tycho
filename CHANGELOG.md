@@ -1,3 +1,39 @@
+## [0.371.1](https://github.com/propeller-heads/tycho/compare/0.371.0...0.371.1) (2026-08-31)
+
+
+### Bug Fixes
+
+* classify token analysis reverts as bad tokens ([63334ed](https://github.com/propeller-heads/tycho/commit/63334ed3f6b5a9536859188706271eed5d2ef44e))
+
+## [0.371.0](https://github.com/propeller-heads/tycho/compare/0.370.2...0.371.0) (2026-08-31)
+
+
+### Features
+
+* re-analyze recently traded quality-5 tokens ([d769f12](https://github.com/propeller-heads/tycho/commit/d769f12dc30567fe46211590528a7da449f97c00))
+
+
+### Bug Fixes
+
+* fetch all pages before analysis and log pass outcomes ([b653a85](https://github.com/propeller-heads/tycho/commit/b653a859c0edc6740f90cf68c2711db168ca459b))
+* replace unwrap_or_else with unwrap_or_default for clippy ([ce79bbf](https://github.com/propeller-heads/tycho/commit/ce79bbf878f13c22783b37ec68d1eece664dc4e3))
+
+## [0.370.2](https://github.com/propeller-heads/tycho/compare/0.370.1...0.370.2) (2026-08-29)
+
+
+### Bug Fixes
+
+* republish crates after partial 0.370.1 publish ([c619d1f](https://github.com/propeller-heads/tycho/commit/c619d1f476e6fb61bb6908ae07e379850e77d82e))
+* republish crates after partial 0.370.1 publish ([#1367](https://github.com/propeller-heads/tycho/issues/1367)) ([0871f4e](https://github.com/propeller-heads/tycho/commit/0871f4eb73d4ee658b13571198c0d2aae88ca406))
+
+## [0.370.1](https://github.com/propeller-heads/tycho/compare/0.370.0...0.370.1) (2026-08-29)
+
+
+### Bug Fixes
+
+* **simulation:** keep the Angstrom filter when a caller filter is set ([5119ea7](https://github.com/propeller-heads/tycho/commit/5119ea774148712bdfb3eda62dc3d445b0a69e94))
+* **simulation:** keep the Angstrom filter when a caller filter is set ([#1366](https://github.com/propeller-heads/tycho/issues/1366)) ([a54c6dc](https://github.com/propeller-heads/tycho/commit/a54c6dc3a54951f5a7f7c2d0086e511c395be366))
+
 ## [0.370.0](https://github.com/propeller-heads/tycho/compare/0.369.0...0.370.0) (2026-08-28)
 
 
