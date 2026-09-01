@@ -65,15 +65,16 @@ impl ExtractorSupervisor {
         }
     }
 
-    /// Registers a subscriber before the supervision loop starts.
+    /// Registers a subscriber.
     ///
     /// The subscriber receives every [`DeltaCommand`] the extractor emits, across restarts.
-    /// Subscribers joining at runtime go through
+    /// External subscribers joining at runtime go through
     /// [`MessageSender::subscribe`](crate::extractor::runner::MessageSender::subscribe) on an
     /// [`ExtractorHandle`] instead.
     pub async fn add_subscriber(&mut self, sender: Sender<DeltaCommand>) {
         let subscriber_id = self.next_subscriber_id;
         self.next_subscriber_id += 1;
+        info!(extractor = %self.id, subscriber_id, "New extractor subscription");
         self.subscriptions
             .lock()
             .await
@@ -134,17 +135,7 @@ impl ExtractorSupervisor {
                                 };
                             }
                             ControlMessage::Subscribe(sender) => {
-                                let subscriber_id = self.next_subscriber_id;
-                                self.next_subscriber_id += 1;
-                                info!(
-                                    extractor = %self.id,
-                                    subscriber_id,
-                                    "New subscription via supervisor"
-                                );
-                                self.subscriptions
-                                    .lock()
-                                    .await
-                                    .insert(subscriber_id, sender);
+                                self.add_subscriber(sender).await;
                             }
                         }
                     }
@@ -254,7 +245,29 @@ impl ExtractorSupervisor {
                 restart_count,
                 "Waiting for backoff before restarting extractor"
             );
-            tokio::time::sleep(backoff).await;
+            // Keep servicing control messages while waiting: a `Stop` must not have to sit
+            // out a backoff of up to `MAX_RESTART_BACKOFF`, and new subscribers registered
+            // now take effect on the next run.
+            let deadline = tokio::time::Instant::now() + backoff;
+            loop {
+                tokio::select! {
+                    _ = tokio::time::sleep_until(deadline) => break,
+                    Some(ctrl) = self.control_rx.recv() => {
+                        match ctrl {
+                            ControlMessage::Stop => {
+                                info!(
+                                    extractor = %self.id,
+                                    "Stop signal received during restart backoff"
+                                );
+                                return Ok(());
+                            }
+                            ControlMessage::Subscribe(sender) => {
+                                self.add_subscriber(sender).await;
+                            }
+                        }
+                    }
+                }
+            }
             warn!(
                 extractor = %self.id,
                 ?backoff,
