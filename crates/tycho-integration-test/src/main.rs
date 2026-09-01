@@ -56,7 +56,7 @@ use tycho_test::{
 
 use crate::{
     fee_fetcher::{fetch_router_fee_on_output, RouterFeeOnOutput},
-    oracle_overrides::{override_protocol, BlockOverrides, OracleOverrides},
+    oracle_overrides::{override_protocol, titan_providers, BlockOverrides, OracleOverrides},
     statistics::TestStatistics,
     stream_processor::{
         price_level_stream_processor::PriceLevelStreamProcessor,
@@ -374,6 +374,14 @@ async fn run(cli: Cli) -> miette::Result<()> {
     let mut rfq_handle = None;
     let mut price_level_handle = None;
 
+    // One Titan connection serves both the indexed pAMM pools and the execution overrides. The
+    // price level stream only runs on Ethereum, so off it the providers are only worth opening
+    // for the pools.
+    let overrides_wanted =
+        chain == Chain::Ethereum && !cli.disable_price_level_stream && !cli.disable_execution;
+    let override_providers =
+        if !cli.disable_onchain || overrides_wanted { titan_providers() } else { HashMap::new() };
+
     if !cli.disable_onchain {
         if let Ok(protocol_stream_processor) = ProtocolStreamProcessor::new(
             chain,
@@ -387,6 +395,7 @@ async fn run(cli: Cli) -> miette::Result<()> {
         ) {
             protocol_handle = Some(
                 protocol_stream_processor
+                    .with_override_providers(override_providers.clone())
                     .run_stream(&all_tokens, protocol_tx)
                     .await?,
             );
@@ -426,7 +435,7 @@ async fn run(cli: Cli) -> miette::Result<()> {
 
     // Without the overrides the venue reverts `StaleUpdate()`.
     let oracle_overrides = if price_level_handle.is_some() && !cli.disable_execution {
-        OracleOverrides::spawn().map(Arc::new)
+        OracleOverrides::spawn(&override_providers).map(Arc::new)
     } else {
         None
     };

@@ -11,7 +11,9 @@ use alloy::primitives::{
 };
 use tokio::sync::watch;
 use tracing::{debug, info, warn};
-use tycho_simulation::evm::override_stream::{titan::default_providers, OverrideSnapshot};
+use tycho_simulation::evm::override_stream::{
+    titan::default_providers, OverrideSnapshot, StateOverrideProvider,
+};
 
 /// The pAMM protocol systems collected from the stream — every one Titan's state override stream
 /// serves. A price level stream venue outside this set (Metric, TaurusFi, auto-detected ones)
@@ -75,15 +77,24 @@ impl BlockOverrides {
     }
 }
 
+/// Opens the one Titan state override connection this process uses, mapped under every protocol
+/// system it serves.
+///
+/// The same providers back the indexed pAMM pools (through
+/// `ProtocolStreamBuilder::with_override_provider`) and [`OracleOverrides`], so both read one
+/// socket and one parse loop instead of opening one each and disagreeing about the current frame.
+pub fn titan_providers() -> HashMap<String, Arc<dyn StateOverrideProvider>> {
+    default_providers(
+        OVERRIDE_STREAM_PROTOCOLS
+            .iter()
+            .map(|protocol| protocol.to_string()),
+    )
+}
+
 impl OracleOverrides {
-    /// Collects Titan's state overrides in the background. `None` when the stream serves no pAMM
+    /// Collects Titan's state overrides in the background. `None` when `providers` serves no pAMM
     /// channel.
-    pub fn spawn() -> Option<Self> {
-        let providers = default_providers(
-            OVERRIDE_STREAM_PROTOCOLS
-                .iter()
-                .map(|protocol| protocol.to_string()),
-        );
+    pub fn spawn(providers: &HashMap<String, Arc<dyn StateOverrideProvider>>) -> Option<Self> {
         let mut receivers = Vec::new();
         for protocol in OVERRIDE_STREAM_PROTOCOLS {
             match providers
