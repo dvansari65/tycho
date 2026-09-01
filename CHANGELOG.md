@@ -1,3 +1,12 @@
+## [0.373.1](https://github.com/propeller-heads/tycho/compare/0.373.0...0.373.1) (2026-09-01)
+
+
+### Bug Fixes
+
+* decouple partition retention from partition creation ([16b496a](https://github.com/propeller-heads/tycho/commit/16b496ac84182ea1c36ced3521aee15fa88d127f))
+* decouple partition retention from partition creation ([#1323](https://github.com/propeller-heads/tycho/issues/1323)) ([3c04de4](https://github.com/propeller-heads/tycho/commit/3c04de46d307b9c78e9147de14875eb75a2dd193))
+* share the retention setting between drop and cleanup jobs ([152b561](https://github.com/propeller-heads/tycho/commit/152b561831c83a580a05c13a5f535865852a1371))
+
 ## [0.373.0](https://github.com/propeller-heads/tycho/compare/0.372.0...0.373.0) (2026-09-01)
 
 
