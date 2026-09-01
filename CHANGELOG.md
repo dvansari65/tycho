@@ -1,3 +1,11 @@
+## [0.376.0](https://github.com/propeller-heads/tycho/compare/0.375.0...0.376.0) (2026-09-01)
+
+
+### Features
+
+* reduce fee calculator timelock to 1 day ([7134968](https://github.com/propeller-heads/tycho/commit/7134968f94a6abb643f56113eba1a6c3bf4412c3))
+* reduce fee calculator timelock to 1 day ([#1373](https://github.com/propeller-heads/tycho/issues/1373)) ([a19c795](https://github.com/propeller-heads/tycho/commit/a19c79541e9c895e9fe6a5bcb11632cdc90d2a42))
+
 ## [0.375.0](https://github.com/propeller-heads/tycho/compare/0.374.0...0.375.0) (2026-09-01)
 
 
