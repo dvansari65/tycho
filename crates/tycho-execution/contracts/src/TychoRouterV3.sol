@@ -125,7 +125,7 @@ contract TychoRouterV3 is AccessControl, Dispatcher, EIP712 {
     bytes32 public constant ROUTER_FEE_SETTER_ROLE =
         0x9939157be7760e9462f1d5a0dcad88b616ddc64138e317108b40b1cf55601348;
 
-    uint256 public constant DELAY_FEE_CALCULATOR_ACTIVATION = 3 days;
+    uint256 public constant DELAY_FEE_CALCULATOR_ACTIVATION = 1 days;
 
     bytes32 public constant CLIENT_FEE_TYPEHASH = keccak256(
         "ClientFee(uint32 clientFeeBps,address clientFeeReceiver,"
