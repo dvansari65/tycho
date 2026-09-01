@@ -1,6 +1,6 @@
 -- Exposes the price tables of one chain's Tycho indexer database in this database through
 -- postgres_fdw, in the schema `tycho_<chain>`. Run once per chain (each chain has its own Tycho
--- database), then apply current_token_prices.sql to (re)build the union view.
+-- database). Pricing queries each resulting schema independently.
 --
 --   psql "$DSN" -v chain=ethereum -v tycho_host=... -v tycho_port=5432 -v tycho_db=... \
 --        -v tycho_user=... -v tycho_password=... -f pricing/tycho_foreign_tables.sql

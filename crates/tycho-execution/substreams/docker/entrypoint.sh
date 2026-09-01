@@ -4,7 +4,7 @@
 #   entrypoint sink   CHAIN, DSN, SUBSTREAMS_API_TOKEN; optional SUBSTREAMS_ENDPOINT,
 #                     START_BLOCK, STOP_BLOCK, FLUSH_INTERVAL (default 100), METRICS_ADDR
 #   entrypoint price  DSN, TYCHO_<CHAIN>_DATABASE_URL...; optional MAX_AGE (default "1 hour"),
-#                     INTERVAL (default 60)
+#                     INTERVAL (default 60), LOCAL_PRICING=1 for local stand-in tables
 #
 # Both modes wait for the database first, so the container can start together with Postgres.
 # `sink` applies schema.sql with `substreams-sink-sql setup`; `price` registers the postgres_fdw
@@ -42,7 +42,12 @@ sink)
 price)
   : "${DSN:?set DSN}"
   wait_for_db "$DSN"
-  /opt/router-trades/scripts/fdw_setup.sh
+  if [ "${LOCAL_PRICING:-0}" = 1 ]; then
+    psql "$DSN" -q -v ON_ERROR_STOP=1 -v chain=ethereum \
+      -f /opt/router-trades/pricing/dev_stub.sql
+  else
+    /opt/router-trades/scripts/fdw_setup.sh
+  fi
   exec /opt/router-trades/scripts/price_trades.sh "${INTERVAL:-60}"
   ;;
 *)

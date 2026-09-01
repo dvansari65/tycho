@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Registers one postgres_fdw server per chain and rebuilds the current_token_prices view.
+# Registers one postgres_fdw server per chain.
 #
 # Reads TYCHO_<CHAIN>_DATABASE_URL (e.g. TYCHO_ETHEREUM_DATABASE_URL=postgres://u:p@host:5432/db)
 # for every chain and applies pricing/tycho_foreign_tables.sql with the parsed parts. Re-running
@@ -35,5 +35,3 @@ if [ "$found" = 0 ]; then
   echo "no TYCHO_<CHAIN>_DATABASE_URL variables set; nothing to register" >&2
   exit 1
 fi
-
-psql "$DSN" -q -v ON_ERROR_STOP=1 -f "$DIR/pricing/current_token_prices.sql"

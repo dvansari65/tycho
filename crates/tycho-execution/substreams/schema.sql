@@ -70,7 +70,8 @@ CREATE INDEX IF NOT EXISTS trades_token_in_idx ON trades (chain, token_in);
 CREATE INDEX IF NOT EXISTS trades_token_out_idx ON trades (chain, token_out);
 CREATE INDEX IF NOT EXISTS trades_eoa_idx ON trades (chain, eoa);
 CREATE INDEX IF NOT EXISTS trades_client_idx ON trades (chain, client_fee_receiver);
-CREATE INDEX IF NOT EXISTS trades_unpriced_idx ON trades (block_time) WHERE priced_at IS NULL;
+CREATE INDEX IF NOT EXISTS trades_unpriced_idx ON trades (block_time)
+    WHERE priced_at IS NULL AND tx_success AND call_success;
 
 CREATE TABLE IF NOT EXISTS trade_hops (
     id              TEXT PRIMARY KEY, -- {trade_id}:{hop_index}

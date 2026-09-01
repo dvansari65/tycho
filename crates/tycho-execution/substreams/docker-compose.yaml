@@ -67,6 +67,7 @@ services:
     command: price
     environment:
       DSN: postgres://tycho:tycho@db:5432/router_trades
+      LOCAL_PRICING: "1"
 
 volumes:
   router_trades_pg:

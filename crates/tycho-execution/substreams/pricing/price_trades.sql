@@ -1,10 +1,16 @@
--- Prices freshly ingested trades with the *current* token prices. Only rows younger than
+-- Prices one chain's freshly ingested trades with its current token prices. Only rows younger than
 -- :max_age are touched, so a lagging or backfilling sink never gets today's price stamped on
 -- old trades; those stay NULL for a later historical pass.
 --
 -- Native ETH (0xeeee…) is priced at 1.0 with 18 decimals; WETH comes from the price table.
 --
--- Usage: psql "$DSN" -v max_age='1 hour' -f pricing/price_trades.sql
+-- Usage: psql "$DSN" -v chain=ethereum -v max_age='1 hour' -f pricing/price_trades.sql
+\if :{?chain}
+\else
+\echo 'set chain, e.g. -v chain=ethereum'
+\quit
+\endif
+\set schema 'tycho_' :chain
 \set max_age_default '1 hour'
 \if :{?max_age}
 \else
@@ -12,10 +18,17 @@
 \endif
 
 WITH prices AS (
-    SELECT chain, token, decimals, price_eth FROM current_token_prices
+    SELECT :'chain' AS chain,
+           '0x' || encode(a.address, 'hex') AS token,
+           t.decimals,
+           power(10::numeric, t.decimals) / tp.price AS price_eth
+    FROM :schema.token_price tp
+    JOIN :schema.token t ON t.id = tp.token_id
+    JOIN :schema.account a ON a.id = t.account_id
+    WHERE tp.modified_ts > now() - :'max_age'::interval
+      AND tp.price > 0
     UNION ALL
-    SELECT DISTINCT chain, '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee', 18, 1.0
-    FROM current_token_prices
+    SELECT :'chain', '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee', 18, 1.0
 ),
 priced AS (
     SELECT
@@ -32,6 +45,9 @@ priced AS (
     LEFT JOIN prices p_in  ON p_in.chain  = t.chain AND p_in.token  = t.token_in
     LEFT JOIN prices p_out ON p_out.chain = t.chain AND p_out.token = t.token_out
     WHERE t.priced_at IS NULL
+      AND t.chain = :'chain'
+      AND t.tx_success
+      AND t.call_success
       AND t.block_time > now() - :'max_age'::interval
       AND (p_in.token IS NOT NULL OR p_out.token IS NOT NULL)
 )
