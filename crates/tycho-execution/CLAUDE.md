@@ -42,7 +42,7 @@ Entry (e.g. splitSwap)
 |--------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `TychoRouterV3.sol`              | Entry point. 3 swap strategies (single/sequential/split) x 3 funding modes (transferFrom/Permit2/vault) = 9 public methods. `_takeFees()` deducts fees, `_settleOutput()` transfers/credits final output to receiver or vault                                  |
 | `Vault.sol`                    | ERC6909 multi-token vault (see subsection below)                                                                                                                                                                                                               |
-| `Dispatcher.sol`               | Executor dispatch. 3-day timelock on new executors. Balance-diff verification of swap outputs. Queries transfer data via staticcall, executes swaps via delegatecall                                                                                           |
+| `Dispatcher.sol`               | Executor dispatch. 1-day timelock on new executors. Balance-diff verification of swap outputs. Queries transfer data via staticcall, executes swaps via delegatecall                                                                                           |
 | `TransferManager.sol`          | Caps transferFrom to the declared input amount. `_transferOut` for output transfers (handles FoT/rebasing tokens via balance-diff). 6 transfer scenarios depending on context                                                                                  |
 | `FeeCalculator.sol`            | Dual fee system: router fee on output + router fee on client fee. Per-client custom rates. Upgradeable without redeploying router                                                                                                                              |
 | `uniswap_x/UniswapXFiller.sol` | Filler contract for UniswapX V2DutchOrder Reactor. Wraps TychoRouterV3: receives an order via `reactorCallback`, approves TychoRouterV3 to pull input tokens, calls TychoRouterV3, then approves the reactor to pull output. Single-order only; AccessControl-gated. |
@@ -351,11 +351,11 @@ When writing code that calls TychoRouterV3 swap functions:
   quoted output; `minAmountOut` is the revert guardrail —
   the tx reverts if the actual output falls below it. Compute it off-chain from your slippage
   tolerance. Example: 1000 USDC quoted, 5% tolerance → `expectedAmountOut = 1000 * 10**6`,
-  `minAmountOut = 950 * 10**6`. The router rejects `minAmountOut > expectedAmountOut` and any
-  `minAmountOut` more than `MAX_SLIPPAGE_TOLERANCE_BPS` below it, which also excludes zero.
-  Setting `minAmountOut` too low may result in a sandwiched swap.
-- **Verify the price data** used for `expectedAmountOut` against at least one independent source.
-  Incorrect price data may set the slippage floor too low.
+  `minAmountOut = 950 * 10**6`. The router rejects a zero `minAmountOut` and any
+  `minAmountOut > expectedAmountOut`.
+  Setting `minAmountOut` too low exposes the swap to MEV attacks.
+- **Verify the price data** used to compute `minAmountOut` against at least one independent source.
+  A `minAmountOut` derived from a bad quote may be too low to prevent a sandwiched swap.
 - **Never approve infinite allowances**, including Permit2. Set Permit2 allowance and deadline as low as practical.
 
 ### Building Executors (executor checklist)
