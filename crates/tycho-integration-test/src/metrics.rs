@@ -57,8 +57,13 @@ pub fn initialize_metrics() {
     );
     describe_counter!(
         "tycho_integration_price_level_oracle_override_misses_total",
-        "Price level stream updates simulated without pAMM overrides, because Titan published \
-         none for the quoted block"
+        "Price level stream swaps simulated without their venue's overrides, because Titan \
+         published none for the venue at the quoted block"
+    );
+    describe_counter!(
+        "tycho_integration_price_level_oracle_override_unserved_total",
+        "Price level stream swaps simulated without overrides, because Titan's state override \
+         stream carries no channel for the venue at all"
     );
     describe_histogram!(
         "tycho_integration_simulation_execution_slippage_ratio",
@@ -251,9 +256,23 @@ pub fn record_price_level_target_block_miss() {
     counter!("tycho_integration_price_level_target_block_misses_total").increment(1);
 }
 
-/// Record a price level stream update simulated without pAMM overrides.
-pub fn record_price_level_oracle_override_miss() {
-    counter!("tycho_integration_price_level_oracle_override_misses_total").increment(1);
+/// Record a swap of `protocol` simulated without the overrides Titan publishes for its venue.
+pub fn record_price_level_oracle_override_miss(protocol: &str) {
+    counter!(
+        "tycho_integration_price_level_oracle_override_misses_total",
+        "protocol" => protocol.to_string()
+    )
+    .increment(1);
+}
+
+/// Record a swap of `protocol` simulated without overrides because Titan's state override stream
+/// serves no channel for its venue.
+pub fn record_price_level_oracle_override_unserved(protocol: &str) {
+    counter!(
+        "tycho_integration_price_level_oracle_override_unserved_total",
+        "protocol" => protocol.to_string()
+    )
+    .increment(1);
 }
 
 /// Explicitly mark a protocol as stale when no update has been received within the expected window.

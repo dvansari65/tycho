@@ -56,7 +56,7 @@ use tycho_test::{
 
 use crate::{
     fee_fetcher::{fetch_router_fee_on_output, RouterFeeOnOutput},
-    oracle_overrides::OracleOverrides,
+    oracle_overrides::{override_protocol, BlockOverrides, OracleOverrides},
     statistics::TestStatistics,
     stream_processor::{
         price_level_stream_processor::PriceLevelStreamProcessor,
@@ -1249,18 +1249,15 @@ async fn process_update(
     // Titan publishes overrides per block, so only price level stream updates take them.
     let oracle_overwrites = match update.update_type {
         UpdateType::PriceLevelStream => {
-            let overwrites = oracle_overrides
+            let overrides = oracle_overrides
                 .as_ref()
                 .and_then(|overrides| overrides.for_block(block.header.number));
-            if overwrites.is_none() {
-                metrics::record_price_level_oracle_override_miss();
-                debug!(
-                    block = block.number(),
-                    "Titan published no pAMM state overrides for the quoted block; simulating on \
-                     the indexed state"
-                );
-            }
-            overwrites
+            record_oracle_override_misses(
+                &block_execution_info,
+                overrides.as_ref(),
+                block.number(),
+            );
+            overrides.map(BlockOverrides::into_storage)
         }
         UpdateType::Protocol | UpdateType::Rfq => None,
     };
@@ -1976,6 +1973,49 @@ fn pamm_venue(protocol_system: &str) -> Option<&str> {
     protocol_system
         .strip_prefix(PRICE_LEVEL_STREAM_PREFIX)
         .or_else(|| protocol_system.strip_prefix(PROPAMM_FALLBACK_PREFIX))
+}
+
+/// Counts, per protocol system, the pAMM swaps about to be simulated without the overrides their
+/// own venue needs.
+///
+/// Split in two so a gap Titan could close is not confused with a venue it never serves: a venue
+/// whose protocol published nothing for this block counts as a miss, one Titan's override stream
+/// carries no channel for counts as unserved. Both fill on the router's Uniswap V3 pool instead of
+/// the venue, so neither swap compares a venue's quote against its own fill.
+fn record_oracle_override_misses(
+    execution_info: &HashMap<String, TychoExecutionInput>,
+    overrides: Option<&BlockOverrides>,
+    block: u64,
+) {
+    let mut missing: HashSet<&str> = HashSet::new();
+    let mut unserved: HashSet<&str> = HashSet::new();
+    for info in execution_info.values() {
+        let Some(venue) = pamm_venue(&info.protocol_system) else {
+            continue;
+        };
+        match override_protocol(venue) {
+            Some(protocol) => {
+                if !overrides.is_some_and(|overrides| overrides.covers(protocol)) {
+                    missing.insert(&info.protocol_system);
+                }
+            }
+            None => {
+                unserved.insert(&info.protocol_system);
+            }
+        }
+    }
+
+    for protocol in missing {
+        debug!(
+            block,
+            protocol, "Titan published no state overrides for the venue at the quoted block"
+        );
+        metrics::record_price_level_oracle_override_miss(protocol);
+    }
+    for protocol in unserved {
+        debug!(block, protocol, "Titan's state override stream serves no channel for the venue");
+        metrics::record_price_level_oracle_override_unserved(protocol);
+    }
 }
 
 /// Returns whether a revert reason is the freshness guard of `pamm`: `StaleUpdate()` for every

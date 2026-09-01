@@ -1,7 +1,7 @@
 //! Finds the registry slots to override for a pAMM quote, per block.
 
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     sync::{Arc, RwLock},
 };
 
@@ -13,8 +13,25 @@ use tokio::sync::watch;
 use tracing::{debug, info, warn};
 use tycho_simulation::evm::override_stream::{titan::default_providers, OverrideSnapshot};
 
-/// The pAMM protocol systems collected from the stream.
-const OVERRIDE_STREAM_PROTOCOLS: [&str; 1] = ["vm:fermiswap"];
+/// The pAMM protocol systems collected from the stream — every one Titan's state override stream
+/// serves. A price level stream venue outside this set (Metric, TaurusFi, auto-detected ones)
+/// simulates on the indexed state; see [`override_protocol`].
+const OVERRIDE_STREAM_PROTOCOLS: [&str; 3] = ["vm:fermiswap", "vm:kipseli", "vm:bopamm"];
+
+/// The protocol system whose overrides a price level stream venue needs, or `None` when Titan's
+/// state override stream carries no channel for it.
+///
+/// `venue` is the bare name a pAMM component is served under (`fermiswap`, or a `0x…` address for
+/// an auto-detected venue). Auto-detected venues are never covered: the price level stream keys
+/// them by their router address, which is not the key the override stream publishes under.
+pub fn override_protocol(venue: &str) -> Option<&'static str> {
+    match venue {
+        "fermiswap" => Some("vm:fermiswap"),
+        "kipseli" => Some("vm:kipseli"),
+        "bebop" => Some("vm:bopamm"),
+        _ => None,
+    }
+}
 
 /// How many quoted blocks are kept.
 const RETAINED_BLOCKS: usize = 8;
@@ -35,6 +52,27 @@ type Blocks = Arc<RwLock<VecDeque<(u64, BlockEntry)>>>;
 /// pAMM oracle overrides per quoted block.
 pub struct OracleOverrides {
     blocks: Blocks,
+}
+
+/// What was collected for one quoted block.
+///
+/// Carries the protocols that published alongside their merged slots, because a swap is only
+/// priced by its own venue when that venue's protocol is among them.
+pub struct BlockOverrides {
+    protocols: HashSet<&'static str>,
+    storage: AddressHashMap<B256HashMap<B256>>,
+}
+
+impl BlockOverrides {
+    /// Whether `protocol` published overrides for this block.
+    pub fn covers(&self, protocol: &str) -> bool {
+        self.protocols.contains(protocol)
+    }
+
+    /// The slots to apply, merged across every protocol that published.
+    pub fn into_storage(self) -> AddressHashMap<B256HashMap<B256>> {
+        self.storage
+    }
 }
 
 impl OracleOverrides {
@@ -72,7 +110,7 @@ impl OracleOverrides {
     ///
     /// Every protocol that published for the block contributes its latest snapshot; a slot written
     /// by two protocols takes an arbitrary one of the two values.
-    pub fn for_block(&self, block: u64) -> Option<AddressHashMap<B256HashMap<B256>>> {
+    pub fn for_block(&self, block: u64) -> Option<BlockOverrides> {
         let blocks = match self.blocks.read() {
             Ok(blocks) => blocks,
             Err(e) => {
@@ -83,7 +121,10 @@ impl OracleOverrides {
         blocks
             .iter()
             .find(|(number, _)| *number == block)
-            .map(|(_, entry)| slot_overrides(entry))
+            .map(|(_, entry)| BlockOverrides {
+                protocols: entry.keys().copied().collect(),
+                storage: slot_overrides(entry),
+            })
     }
 }
 
@@ -177,15 +218,41 @@ mod tests {
         OracleOverrides { blocks: Arc::new(RwLock::new(VecDeque::new())) }
     }
 
-    fn slot_value(
-        overrides: &AddressHashMap<B256HashMap<B256>>,
-        account: Address,
-        slot: u64,
-    ) -> Option<B256> {
+    fn slot_value(overrides: &BlockOverrides, account: Address, slot: u64) -> Option<B256> {
         overrides
+            .storage
             .get(&account)?
             .get(&B256::from(U256::from(slot).to_be_bytes::<32>()))
             .copied()
+    }
+
+    /// Every protocol in [`OVERRIDE_STREAM_PROTOCOLS`] must be reachable from a venue name, or its
+    /// subscription collects overrides no swap ever claims.
+    #[test]
+    fn every_subscribed_protocol_is_reachable_from_a_venue() {
+        let reachable: HashSet<&str> = ["fermiswap", "kipseli", "bebop"]
+            .iter()
+            .filter_map(|venue| override_protocol(venue))
+            .collect();
+        assert_eq!(reachable, HashSet::from_iter(OVERRIDE_STREAM_PROTOCOLS));
+    }
+
+    #[test]
+    fn a_venue_titan_does_not_serve_has_no_protocol() {
+        assert_eq!(override_protocol("metric"), None);
+        assert_eq!(override_protocol("0x5979458912f80b96d30d4220af8e2e4925a33320"), None);
+    }
+
+    #[test]
+    fn a_block_covers_only_the_protocols_that_published() {
+        let overrides = overrides();
+        record(&overrides.blocks, FERMISWAP, 100, storage(REGISTRY, &[(1, 11)]));
+
+        let block = overrides
+            .for_block(100)
+            .expect("block 100 was recorded");
+        assert!(block.covers(FERMISWAP));
+        assert!(!block.covers(BOPAMM));
     }
 
     #[test]
