@@ -9,7 +9,7 @@ DSN ?= psql://tycho:tycho@localhost:5433/router_trades?sslmode=disable
 START ?=
 STOP ?= +10
 
-.PHONY: build test lint fmt protogen pack run setup sink price-once price-loop
+.PHONY: build test test-pricing lint fmt protogen pack run setup sink price-once price-loop
 
 # --target-dir keeps the wasm where the manifests expect it even with a global CARGO_TARGET_DIR.
 build:
@@ -17,6 +17,9 @@ build:
 
 test:
 	cargo test --workspace
+
+test-pricing:
+	./scripts/test_pricing.sh
 
 lint:
 	cargo +nightly fmt -- --check
