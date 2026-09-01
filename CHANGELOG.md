@@ -1,3 +1,16 @@
+## [0.373.0](https://github.com/propeller-heads/tycho/compare/0.372.0...0.373.0) (2026-09-01)
+
+
+### Features
+
+* prepare for the router redeploy ([#1368](https://github.com/propeller-heads/tycho/issues/1368)) ([91161f2](https://github.com/propeller-heads/tycho/commit/91161f2f871da28557275f583d29bd860a415430))
+* remove minAmountOut slippage cap ([6acbb85](https://github.com/propeller-heads/tycho/commit/6acbb85a68db90cf326b73336993448bfff9484b))
+
+
+### Bug Fixes
+
+* reduce executor activation timelock to 1 day ([0da9e68](https://github.com/propeller-heads/tycho/commit/0da9e6818cb4041c77f79beaa28c0330f5d4987d))
+
 ## [0.372.0](https://github.com/propeller-heads/tycho/compare/0.371.1...0.372.0) (2026-09-01)
 
 
