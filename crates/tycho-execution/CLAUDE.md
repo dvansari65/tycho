@@ -215,8 +215,7 @@ TychoEncoder (trait)                     -- public API, validates Solution
 
 **TychoRouterEncoder** validates each `Solution` (exact input, has swaps, no invalid cycles), auto-inserts WETH
 wrap/unwrap where ETH↔WETH bridges are missing, then selects strategy: **Single** (1 swap or 1 groupable-protocol batch
-with no splits), **Sequential** (multiple swaps, all `split == 0.0`), **Split** (any `split > 0.0`). *
-*TychoExecutorEncoder** is a simplified variant that bypasses TychoRouterV3 and calls the executor directly.
+with no splits), **Sequential** (multiple swaps, all `split == 0.0`), **Split** (any `split > 0.0`).
 
 ### Strategy encoders
 
