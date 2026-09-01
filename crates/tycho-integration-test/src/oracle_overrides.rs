@@ -22,8 +22,15 @@ const RETAINED_BLOCKS: usize = 8;
 /// Storage overrides keyed by contract address, then by storage slot.
 type Storage = HashMap<Address, HashMap<U256, U256>>;
 
+/// The latest snapshot of every protocol that published for one block.
+///
+/// A Titan frame carries a venue's whole `stateOverride` for the block it targets, so a protocol's
+/// newest snapshot replaces its previous one rather than accumulating with it. Protocols are kept
+/// apart because they publish independently, and are merged only when the block is read.
+type BlockEntry = HashMap<&'static str, Arc<Storage>>;
+
 /// The overrides of the most recent quoted blocks, newest at the back.
-type Blocks = Arc<RwLock<VecDeque<(u64, Storage)>>>;
+type Blocks = Arc<RwLock<VecDeque<(u64, BlockEntry)>>>;
 
 /// pAMM oracle overrides per quoted block.
 pub struct OracleOverrides {
@@ -62,6 +69,9 @@ impl OracleOverrides {
     }
 
     /// The overrides Titan published for `block`, or `None` when none were collected for it.
+    ///
+    /// Every protocol that published for the block contributes its latest snapshot; a slot written
+    /// by two protocols takes an arbitrary one of the two values.
     pub fn for_block(&self, block: u64) -> Option<AddressHashMap<B256HashMap<B256>>> {
         let blocks = match self.blocks.read() {
             Ok(blocks) => blocks,
@@ -73,7 +83,7 @@ impl OracleOverrides {
         blocks
             .iter()
             .find(|(number, _)| *number == block)
-            .map(|(_, storage)| slot_overrides(storage))
+            .map(|(_, entry)| slot_overrides(entry))
     }
 }
 
@@ -99,12 +109,13 @@ async fn collect(
         if storage.is_empty() {
             continue;
         }
-        record(&blocks, block_number, &storage);
+        record(&blocks, protocol, block_number, storage);
     }
 }
 
-/// Merges one snapshot into `block`'s entry, evicting the oldest block past [`RETAINED_BLOCKS`].
-fn record(blocks: &Blocks, block: u64, storage: &Storage) {
+/// Stores `storage` as `protocol`'s snapshot of `block`, replacing the one it published before and
+/// evicting the oldest block past [`RETAINED_BLOCKS`].
+fn record(blocks: &Blocks, protocol: &'static str, block: u64, storage: Arc<Storage>) {
     let mut blocks = match blocks.write() {
         Ok(blocks) => blocks,
         Err(e) => {
@@ -112,45 +123,33 @@ fn record(blocks: &Blocks, block: u64, storage: &Storage) {
             return;
         }
     };
-    let entry = match blocks
+    if let Some((_, entry)) = blocks
         .iter_mut()
         .find(|(number, _)| *number == block)
     {
-        Some((_, entry)) => entry,
-        None => {
-            blocks.push_back((block, Storage::new()));
-            while blocks.len() > RETAINED_BLOCKS {
-                blocks.pop_front();
-            }
-            &mut blocks
-                .back_mut()
-                .expect("the entry just pushed is present")
-                .1
-        }
-    };
-    for (account, slots) in storage.iter() {
-        entry
-            .entry(*account)
-            .or_default()
-            .extend(
-                slots
-                    .iter()
-                    .map(|(slot, value)| (*slot, *value)),
-            );
+        entry.insert(protocol, storage);
+        return;
+    }
+    blocks.push_back((block, BlockEntry::from([(protocol, storage)])));
+    while blocks.len() > RETAINED_BLOCKS {
+        blocks.pop_front();
     }
 }
 
-/// Converts collected storage into the `B256` slots the execution simulation takes.
-fn slot_overrides(storage: &Storage) -> AddressHashMap<B256HashMap<B256>> {
-    let mut overrides = AddressHashMap::default();
-    for (account, slots) in storage {
-        let slots: B256HashMap<B256> = slots
-            .iter()
-            .map(|(slot, value)| {
-                (B256::from(slot.to_be_bytes::<32>()), B256::from(value.to_be_bytes::<32>()))
-            })
-            .collect();
-        overrides.insert(*account, slots);
+/// Converts one block's collected storage into the `B256` slots the execution simulation takes,
+/// merged across the protocols that published for it.
+fn slot_overrides(entry: &BlockEntry) -> AddressHashMap<B256HashMap<B256>> {
+    let mut overrides: AddressHashMap<B256HashMap<B256>> = AddressHashMap::default();
+    for storage in entry.values() {
+        for (account, slots) in storage.iter() {
+            let account_slots = overrides.entry(*account).or_default();
+            for (slot, value) in slots {
+                account_slots.insert(
+                    B256::from(slot.to_be_bytes::<32>()),
+                    B256::from(value.to_be_bytes::<32>()),
+                );
+            }
+        }
     }
     overrides
 }
@@ -159,12 +158,19 @@ fn slot_overrides(storage: &Storage) -> AddressHashMap<B256HashMap<B256>> {
 mod tests {
     use super::*;
 
+    const FERMISWAP: &str = "vm:fermiswap";
+    const BOPAMM: &str = "vm:bopamm";
+
     const REGISTRY: Address =
         alloy::primitives::address!("da7afeed01fe625cf15d187a19f94b45f00b8c5f");
     const VENUE: Address = alloy::primitives::address!("160141a205f5ddcf096ba3f48b7ed21eb52c62ea");
 
-    fn storage(account: Address, slot: u64, value: u64) -> Storage {
-        HashMap::from([(account, HashMap::from([(U256::from(slot), U256::from(value))]))])
+    fn storage(account: Address, slots: &[(u64, u64)]) -> Arc<Storage> {
+        let slots = slots
+            .iter()
+            .map(|(slot, value)| (U256::from(*slot), U256::from(*value)))
+            .collect();
+        Arc::new(HashMap::from([(account, slots)]))
     }
 
     fn overrides() -> OracleOverrides {
@@ -183,11 +189,10 @@ mod tests {
     }
 
     #[test]
-    fn several_venues_write_one_block() {
+    fn several_protocols_write_one_block() {
         let overrides = overrides();
-        record(&overrides.blocks, 100, &storage(REGISTRY, 1, 11));
-        record(&overrides.blocks, 100, &storage(REGISTRY, 2, 22));
-        record(&overrides.blocks, 100, &storage(VENUE, 1, 33));
+        record(&overrides.blocks, FERMISWAP, 100, storage(REGISTRY, &[(1, 11), (2, 22)]));
+        record(&overrides.blocks, BOPAMM, 100, storage(VENUE, &[(1, 33)]));
 
         let block = overrides
             .for_block(100)
@@ -197,23 +202,42 @@ mod tests {
         assert_eq!(slot_value(&block, VENUE, 1), Some(B256::from(U256::from(33))));
     }
 
+    /// A frame carries the venue's whole override set, so a slot the newest frame no longer
+    /// publishes must not survive from an earlier one.
     #[test]
-    fn a_later_frame_rewrites_a_slot() {
+    fn a_later_snapshot_replaces_the_protocols_previous_one() {
         let overrides = overrides();
-        record(&overrides.blocks, 100, &storage(REGISTRY, 1, 11));
-        record(&overrides.blocks, 100, &storage(REGISTRY, 1, 99));
+        record(&overrides.blocks, FERMISWAP, 100, storage(REGISTRY, &[(1, 11), (2, 22)]));
+        record(&overrides.blocks, FERMISWAP, 100, storage(REGISTRY, &[(1, 99)]));
 
         let block = overrides
             .for_block(100)
             .expect("block 100 was recorded");
         assert_eq!(slot_value(&block, REGISTRY, 1), Some(B256::from(U256::from(99))));
+        assert_eq!(slot_value(&block, REGISTRY, 2), None);
+    }
+
+    /// One protocol replacing its snapshot must leave another protocol's slots for the same block
+    /// intact.
+    #[test]
+    fn a_replaced_snapshot_keeps_another_protocols_slots() {
+        let overrides = overrides();
+        record(&overrides.blocks, BOPAMM, 100, storage(VENUE, &[(1, 33)]));
+        record(&overrides.blocks, FERMISWAP, 100, storage(REGISTRY, &[(1, 11)]));
+        record(&overrides.blocks, FERMISWAP, 100, storage(REGISTRY, &[(1, 99)]));
+
+        let block = overrides
+            .for_block(100)
+            .expect("block 100 was recorded");
+        assert_eq!(slot_value(&block, REGISTRY, 1), Some(B256::from(U256::from(99))));
+        assert_eq!(slot_value(&block, VENUE, 1), Some(B256::from(U256::from(33))));
     }
 
     #[test]
     fn two_blocks_write_the_same_slot() {
         let overrides = overrides();
-        record(&overrides.blocks, 100, &storage(REGISTRY, 1, 11));
-        record(&overrides.blocks, 101, &storage(REGISTRY, 1, 22));
+        record(&overrides.blocks, FERMISWAP, 100, storage(REGISTRY, &[(1, 11)]));
+        record(&overrides.blocks, FERMISWAP, 101, storage(REGISTRY, &[(1, 22)]));
 
         assert_eq!(
             slot_value(
@@ -240,7 +264,7 @@ mod tests {
     #[test]
     fn a_block_that_was_never_recorded() {
         let overrides = overrides();
-        record(&overrides.blocks, 100, &storage(REGISTRY, 1, 11));
+        record(&overrides.blocks, FERMISWAP, 100, storage(REGISTRY, &[(1, 11)]));
 
         assert!(overrides.for_block(102).is_none());
     }
@@ -249,7 +273,7 @@ mod tests {
     fn more_blocks_than_the_cache_holds() {
         let overrides = overrides();
         for block in 0..=RETAINED_BLOCKS as u64 {
-            record(&overrides.blocks, block, &storage(REGISTRY, 1, block));
+            record(&overrides.blocks, FERMISWAP, block, storage(REGISTRY, &[(1, block)]));
         }
 
         assert!(overrides.for_block(0).is_none());
