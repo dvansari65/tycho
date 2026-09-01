@@ -286,8 +286,8 @@ example to your use case. See the `TychoRouterV3` contract functions for referen
 
 The router reverts with `TychoRouter__InvalidMinAmountOut` for a zero `minAmountOut` or one above
 `expectedAmountOut`. There is no lower cap on how far below the quote you may set it, so compute a
-real floor from your slippage tolerance — a `minAmountOut` set too low may result in a sandwiched
-swap. Pass the amount your simulation returned as `expectedAmountOut`.
+real floor from your slippage tolerance — a `minAmountOut` set too low exposes the swap to MEV
+attacks. Pass the amount your simulation returned as `expectedAmountOut`.
 
 {% hint style="info" %}
 The router may capture output above `expectedAmountOut` as positive slippage, so it does not guarantee

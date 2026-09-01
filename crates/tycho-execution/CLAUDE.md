@@ -353,7 +353,7 @@ When writing code that calls TychoRouterV3 swap functions:
   tolerance. Example: 1000 USDC quoted, 5% tolerance → `expectedAmountOut = 1000 * 10**6`,
   `minAmountOut = 950 * 10**6`. The router rejects a zero `minAmountOut` and any
   `minAmountOut > expectedAmountOut`.
-  Setting `minAmountOut` too low may result in a sandwiched swap.
+  Setting `minAmountOut` too low exposes the swap to MEV attacks.
 - **Verify the price data** used to compute `minAmountOut` against at least one independent source.
   A `minAmountOut` derived from a bad quote may be too low to prevent a sandwiched swap.
 - **Never approve infinite allowances**, including Permit2. Set Permit2 allowance and deadline as low as practical.

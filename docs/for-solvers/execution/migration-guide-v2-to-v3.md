@@ -393,10 +393,8 @@ The accepted `minAmountOut` range changed across V3 minor versions:
 
 The router reverts with `TychoRouter__InvalidMinAmountOut` for a zero `minAmountOut` or one above
 `expectedAmountOut`. With no lower cap, compute a real floor from your slippage tolerance — a
-`minAmountOut` set too low may result in a sandwiched swap. Pass the amount your simulation actually
-returned as `expectedAmountOut`.
-
-> V3.2 removes this window. See [V3.1 to V3.2](#v3-1-to-v3-2). 
+`minAmountOut` set too low exposes the swap to MEV attacks such. Pass the amount your
+simulation actually returned as `expectedAmountOut`.
 
 #### Client Fee Signature
 
