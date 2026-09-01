@@ -197,9 +197,7 @@ pub fn store_fee_config(events: FeeConfigEvents, store: StoreSetString) {
             events::POSITIVE_SLIPPAGE_TOGGLED => {
                 store.set(ev.ordinal, keys::positive_slippage(fc), &ev.new_value)
             }
-            events::ROUTER_FEE_RECEIVER_UPDATED => {
-                store.set(ev.ordinal, keys::fee_receiver(fc), &ev.new_value)
-            }
+            events::ROUTER_FEE_RECEIVER_UPDATED => {}
             events::FEE_CALCULATOR_ACTIVATED | events::FEE_CALCULATOR_UPDATED => {
                 store.set(ev.ordinal, keys::router_fee_calculator(fc), &ev.new_value)
             }

@@ -50,7 +50,7 @@ CREATE TABLE IF NOT EXISTS trades (
     n_tokens                   INTEGER NOT NULL,
     n_hops                     INTEGER NOT NULL,
     executors                  TEXT[] NOT NULL,
-    protocols                  TEXT[] NOT NULL,
+    protocol_systems           TEXT[] NOT NULL,
     watermark                  TEXT,
     wrap_eth                   BOOLEAN NOT NULL,
     unwrap_eth                 BOOLEAN NOT NULL,
@@ -79,7 +79,7 @@ CREATE TABLE IF NOT EXISTS trade_hops (
     block_number    BIGINT NOT NULL,
     hop_index       INTEGER NOT NULL,
     executor        TEXT NOT NULL,
-    protocol        TEXT,
+    protocol_systems TEXT[] NOT NULL,
     token_in_index  INTEGER,
     token_out_index INTEGER,
     -- Raw uint24 split share; 0 means "all remaining input".
@@ -87,7 +87,7 @@ CREATE TABLE IF NOT EXISTS trade_hops (
     protocol_data   TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS trade_hops_trade_idx ON trade_hops (trade_id);
-CREATE INDEX IF NOT EXISTS trade_hops_protocol_idx ON trade_hops (chain, protocol);
+CREATE INDEX IF NOT EXISTS trade_hops_protocol_idx ON trade_hops USING GIN (protocol_systems);
 
 CREATE TABLE IF NOT EXISTS fees_taken (
     id           TEXT PRIMARY KEY, -- {trade_id}:{index}
@@ -96,10 +96,29 @@ CREATE TABLE IF NOT EXISTS fees_taken (
     block_number BIGINT NOT NULL,
     token        TEXT NOT NULL,
     recipient    TEXT NOT NULL,
-    amount       NUMERIC(78, 0) NOT NULL
+    amount       NUMERIC(78, 0) NOT NULL,
+    role         TEXT NOT NULL CHECK (role IN ('router', 'client'))
 );
 CREATE INDEX IF NOT EXISTS fees_taken_trade_idx ON fees_taken (trade_id);
 CREATE INDEX IF NOT EXISTS fees_taken_recipient_idx ON fees_taken (chain, recipient);
+
+CREATE TABLE IF NOT EXISTS router_call_errors (
+    id             TEXT PRIMARY KEY, -- {chain}:{tx_hash}:{call_index}
+    chain          TEXT NOT NULL,
+    block_number   BIGINT NOT NULL,
+    block_time     TIMESTAMPTZ NOT NULL,
+    tx_hash        TEXT NOT NULL,
+    tx_index       INTEGER NOT NULL,
+    call_index     INTEGER NOT NULL,
+    router         TEXT NOT NULL,
+    router_version TEXT NOT NULL,
+    stage          TEXT NOT NULL,
+    error          TEXT NOT NULL,
+    tx_success     BOOLEAN NOT NULL,
+    call_success   BOOLEAN NOT NULL
+);
+CREATE INDEX IF NOT EXISTS router_call_errors_chain_block_idx
+    ON router_call_errors (chain, block_number);
 
 CREATE TABLE IF NOT EXISTS fee_config_events (
     id           TEXT PRIMARY KEY, -- {chain}:{tx_hash}:{log_index}

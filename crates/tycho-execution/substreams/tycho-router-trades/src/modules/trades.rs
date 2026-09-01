@@ -12,7 +12,9 @@ use crate::{
     decode::{self, revert::decode_revert, swaps::decode_hops, SwapCall},
     executors,
     params::{Params, RouterConfig, RouterVersion},
-    pb::tycho::router::v1::{ClientFee, FeeTaken, Hop, RouterFeeConfig, Trade, Trades},
+    pb::tycho::router::v1::{
+        ClientFee, FeeTaken, Hop, RouterCallError, RouterFeeConfig, Trade, Trades,
+    },
 };
 
 const ZERO_ADDRESS: [u8; 20] = [0u8; 20];
@@ -32,6 +34,7 @@ pub fn map_trades(params: String, block: Block, fee_store: StoreGetString) -> Re
     let params = Params::parse(&params)?;
     let timestamp = block_timestamp(&block);
     let mut trades = Vec::new();
+    let mut errors = Vec::new();
     for tx in &block.transaction_traces {
         for call in &tx.calls {
             let Some(router) = params.router(&call.address) else {
@@ -43,27 +46,68 @@ pub fn map_trades(params: String, block: Block, fee_store: StoreGetString) -> Re
             let swap = match decoded {
                 Ok(swap) => swap,
                 Err(err) => {
-                    substreams::log::info!(
-                        "skipping undecodable router call in tx 0x{} call {}: {err}",
-                        hex::encode(&tx.hash),
-                        call.index
-                    );
+                    errors.push(call_error(
+                        &params.chain,
+                        &block,
+                        timestamp,
+                        tx,
+                        call,
+                        router,
+                        "calldata",
+                        err.to_string(),
+                    ));
                     continue;
                 }
             };
-            trades.push(build_trade(
-                &params.chain,
-                &block,
-                timestamp,
-                tx,
-                call,
-                router,
-                swap,
-                &fee_store,
-            ));
+            match build_trade(&params.chain, &block, timestamp, tx, call, router, swap, &fee_store)
+            {
+                Ok(trade) => trades.push(trade),
+                Err(err) => errors.push(call_error(
+                    &params.chain,
+                    &block,
+                    timestamp,
+                    tx,
+                    call,
+                    router,
+                    err.stage,
+                    err.message,
+                )),
+            }
         }
     }
-    Ok(Trades { trades })
+    Ok(Trades { trades, errors })
+}
+
+struct TradeDecodeError {
+    stage: &'static str,
+    message: String,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn call_error(
+    chain: &str,
+    block: &Block,
+    timestamp: u64,
+    tx: &TransactionTrace,
+    call: &Call,
+    router: &RouterConfig,
+    stage: &'static str,
+    error: String,
+) -> RouterCallError {
+    RouterCallError {
+        chain: chain.to_string(),
+        block_number: block.number,
+        block_timestamp: timestamp,
+        tx_hash: tx.hash.clone(),
+        tx_index: tx.index,
+        call_index: call.index,
+        router: router.address.clone(),
+        router_version: router.version.as_str().to_string(),
+        stage: stage.to_string(),
+        error,
+        tx_success: tx.status == 1,
+        call_success: !call.status_failed && !call.status_reverted,
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -76,18 +120,13 @@ fn build_trade(
     router: &RouterConfig,
     swap: SwapCall,
     fee_store: &StoreGetString,
-) -> Trade {
+) -> std::result::Result<Trade, TradeDecodeError> {
     let call_success = !call.status_failed && !call.status_reverted;
     let (amount_out, revert) = if call_success {
         match decode::decode_amount_out(&call.return_data) {
             Ok(v) => (v.to_string(), Default::default()),
             Err(err) => {
-                substreams::log::info!(
-                    "undecodable amountOut in tx 0x{} call {}: {err}",
-                    hex::encode(&tx.hash),
-                    call.index
-                );
-                (String::new(), Default::default())
+                return Err(TradeDecodeError { stage: "amount_out", message: err.to_string() });
             }
         }
     } else {
@@ -100,6 +139,9 @@ fn build_trade(
 
     let hops = match decode_hops(swap.method, &swap.swaps) {
         Ok(hops) => hops,
+        Err(err) if call_success => {
+            return Err(TradeDecodeError { stage: "hops", message: err });
+        }
         Err(err) => {
             substreams::log::info!(
                 "undecodable swaps payload in tx 0x{} call {}: {err}",
@@ -114,7 +156,7 @@ fn build_trade(
         .enumerate()
         .map(|(i, hop)| Hop {
             index: i as u32,
-            protocol: executors::protocol_for(&hop.executor),
+            protocol_systems: executors::protocol_systems_for(&hop.executor),
             executor: hop.executor,
             token_in_index: hop
                 .token_in_index
@@ -134,7 +176,17 @@ fn build_trade(
         .iter()
         .filter_map(FeesTaken::match_and_decode)
         .flat_map(|ev| ev.fees.into_iter())
-        .map(|(recipient, amount)| FeeTaken { recipient, amount: amount.to_string() })
+        .enumerate()
+        .map(|(index, (recipient, amount))| FeeTaken {
+            recipient,
+            amount: amount.to_string(),
+            role: match index {
+                0 => "router",
+                1 => "client",
+                _ => "unknown",
+            }
+            .to_string(),
+        })
         .collect();
 
     let client_fee = swap
@@ -157,7 +209,7 @@ fn build_trade(
             .map(|c| c.receiver.as_slice()),
     );
 
-    Trade {
+    Ok(Trade {
         chain: chain.to_string(),
         block_number: block.number,
         block_timestamp: timestamp,
@@ -198,7 +250,7 @@ fn build_trade(
         watermark: swap.watermark,
         wrap_eth: swap.wrap_eth,
         unwrap_eth: swap.unwrap_eth,
-    }
+    })
 }
 
 /// Resolves the router fee configuration in effect at `ordinal`, applying per-client overrides
