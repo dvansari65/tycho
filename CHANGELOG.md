@@ -1,3 +1,11 @@
+## [0.374.0](https://github.com/propeller-heads/tycho/compare/0.373.1...0.374.0) (2026-09-01)
+
+
+### Features
+
+* **execution:** add per-client positive slippage exemptions ([d4cbc23](https://github.com/propeller-heads/tycho/commit/d4cbc23af5054f18437096da84879582605d36f5))
+* **execution:** add per-client positive slippage exemptions ([#1371](https://github.com/propeller-heads/tycho/issues/1371)) ([015dac1](https://github.com/propeller-heads/tycho/commit/015dac153a28d9fc747bb726ba6f44cfd1c2152f))
+
 ## [0.373.1](https://github.com/propeller-heads/tycho/compare/0.373.0...0.373.1) (2026-09-01)
 
 
