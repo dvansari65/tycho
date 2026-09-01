@@ -27,17 +27,41 @@ UPDATE partman.part_config
 SET retention = NULL
 WHERE parent_table IN ('public.component_balance', 'public.contract_storage', 'public.protocol_state');
 
--- Retention now lives in p_retention below instead of part_config (part_config.retention
--- would put the drop back inside run_maintenance). To change it, alter this default; to
--- change which tables are swept, update the array.
+-- Single source of truth for the retention horizon, replacing the part_config values cleared
+-- above (putting it back into part_config.retention would put the drop back inside
+-- run_maintenance). Read on every run by drop_expired_partitions() and by the
+-- cleanup_orphaned_transactions cron job (rescheduled below), so an UPDATE of this row takes
+-- effect at their next runs with nothing to redeploy. Make permanent changes in a migration
+-- too, so freshly created databases match.
+CREATE TABLE partition_retention_config (
+    id boolean PRIMARY KEY DEFAULT TRUE CHECK (id),
+    retention interval NOT NULL DEFAULT '1 month',
+    updated_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+INSERT INTO partition_retention_config DEFAULT VALUES;
+
+-- Reader for contexts that cannot query the table directly: CALL arguments (as in the cron
+-- commands below) accept function calls but not subqueries. Falls back to 1 month if the
+-- config row is ever missing.
+CREATE OR REPLACE FUNCTION partition_retention()
+RETURNS interval
+LANGUAGE sql STABLE
+AS $$
+    SELECT coalesce(min(retention), interval '1 month') FROM partition_retention_config
+$$;
+
+-- p_retention NULL (the default) resolves to partition_retention() at run time, so scheduled
+-- runs follow the config table. To change which tables are swept, update the array.
 CREATE OR REPLACE PROCEDURE drop_expired_partitions(
-    p_retention interval DEFAULT '1 month',
+    p_retention interval DEFAULT NULL,
     p_lock_timeout text DEFAULT '2s',
     p_max_attempts integer DEFAULT 5
 )
 LANGUAGE plpgsql
 AS $$
 DECLARE
+    v_retention interval := coalesce(p_retention, partition_retention());
     v_parent text;
     v_attempt integer;
     v_done boolean;
@@ -59,7 +83,7 @@ BEGIN
                 PERFORM set_config('lock_timeout', p_lock_timeout, true);
                 PERFORM partman.drop_partition_time(
                     p_parent_table := v_parent,
-                    p_retention := p_retention
+                    p_retention := v_retention
                 );
                 v_done := true;
             EXCEPTION
@@ -98,4 +122,20 @@ SELECT cron.schedule(
     'drop_expired_partitions',
     '30 0 * * *',
     'CALL drop_expired_partitions();'
+);
+
+-- Re-point the transaction cleanup horizon at the shared retention setting. Its default
+-- p_min_age resolves from part_config.retention, which is NULL everywhere after the UPDATE
+-- above, so the default would pin the horizon at the procedure's 31+4-day fallback and stop
+-- tracking retention changes. Passing p_min_age explicitly in the cron command restores the
+-- coupling without redefining the procedure. Manual runs should keep passing p_min_age
+-- explicitly (see scripts/prune_transaction_table.md).
+SELECT cron.unschedule(jobid)
+FROM cron.job
+WHERE command LIKE '%cleanup_orphaned_transactions%';
+
+SELECT cron.schedule(
+    'cleanup_orphaned_transactions',
+    '0 2,14 * * *',
+    'CALL cleanup_orphaned_transactions(p_min_age => partition_retention() + interval ''4 days'');'
 );
