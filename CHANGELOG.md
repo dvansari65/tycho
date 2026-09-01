@@ -1,3 +1,28 @@
+## [0.372.0](https://github.com/propeller-heads/tycho/compare/0.371.1...0.372.0) (2026-09-01)
+
+
+### ⚠ BREAKING CHANGES
+
+* **execution:** TychoExecutorEncoderBuilder is removed from the public API.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+### Features
+
+* **execution:** remove the TychoExecutorEncoder ([fd14a7b](https://github.com/propeller-heads/tycho/commit/fd14a7b9d4579cde3c8ec7d09b3e78c000910704))
+
+
+### Bug Fixes
+
+* **execution:** report the panic message from encoding threads ([f60ed7b](https://github.com/propeller-heads/tycho/commit/f60ed7baabb947a5f2d79e021e8ff69a175286f4))
+
+
+### Performance Improvements
+
+* **execution:** encode swap groups and solutions in parallel ([7f6620c](https://github.com/propeller-heads/tycho/commit/7f6620ca861150b3a63cb539edeb85f0e5712c26))
+* **execution:** spawn encoding threads only for quote requests ([5dcd2dc](https://github.com/propeller-heads/tycho/commit/5dcd2dc761db87a0153c2cded9d49cb3f83540d0))
+* **execution:** validate solutions before requesting quotes ([5420627](https://github.com/propeller-heads/tycho/commit/5420627af73f8991f082b777981213a224d4b18e))
+
 ## [0.371.1](https://github.com/propeller-heads/tycho/compare/0.371.0...0.371.1) (2026-08-31)
 
 
