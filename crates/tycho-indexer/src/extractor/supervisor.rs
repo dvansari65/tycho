@@ -19,6 +19,16 @@ use crate::extractor::{
 const CONTROL_CHANNEL_SIZE: usize = 128;
 /// Upper bound for the restart backoff delay.
 const MAX_RESTART_BACKOFF: Duration = Duration::from_secs(4 * 60 * 60);
+/// Minimum run duration after which a failure is treated as a fresh incident rather than a
+/// continuation of the previous one, resetting the restart count and backoff.
+const HEALTHY_RUN_THRESHOLD: Duration = Duration::from_secs(10 * 60);
+
+/// Exponential backoff for restarts: 60s, 120s, 240s, ... capped at [`MAX_RESTART_BACKOFF`].
+fn restart_backoff() -> ExponentialBackoff {
+    ExponentialBackoff::from_millis(2)
+        .factor(30_000)
+        .max_delay(MAX_RESTART_BACKOFF)
+}
 
 /// Long-lived per-extractor task that owns the factory and manages restart lifecycle.
 ///
@@ -79,10 +89,7 @@ impl ExtractorSupervisor {
     /// `ControlMessage::Stop` or has exhausted all restart attempts.
     pub async fn run(mut self) -> Result<(), ExtractionError> {
         let mut restart_count: u32 = 0;
-        // Exponential backoff: 60s, 120s, 240s, ... capped at 4 hours.
-        let mut backoff_strategy = ExponentialBackoff::from_millis(2)
-            .factor(30_000)
-            .max_delay(MAX_RESTART_BACKOFF);
+        let mut backoff_strategy = restart_backoff();
 
         loop {
             let (stop_tx, stop_rx) = oneshot::channel();
@@ -103,6 +110,7 @@ impl ExtractorSupervisor {
                 }
             };
 
+            let run_started = tokio::time::Instant::now();
             let mut run_handle = runner.run();
 
             // Drive the runner, handling control messages in parallel.
@@ -182,6 +190,15 @@ impl ExtractorSupervisor {
                     )
                     .increment(1);
                 }
+            }
+
+            // A run that lasted well past startup proves the previous failures were not
+            // consecutive, so the failure counting starts afresh. Without this, sporadic
+            // failures accumulate over the process lifetime: the backoff ratchets up to its
+            // cap and `max_restarts` eventually stops a healthy extractor for good.
+            if run_started.elapsed() >= HEALTHY_RUN_THRESHOLD {
+                restart_count = 0;
+                backoff_strategy = restart_backoff();
             }
 
             if self
