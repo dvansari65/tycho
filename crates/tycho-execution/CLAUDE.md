@@ -204,23 +204,23 @@ Last swap's receiver is the final user/vault address.
 
 ## Rust Encoding Pipeline (`src/encoding/`)
 
-Encodes a `Solution` into EVM calldata through three trait layers:
+Encodes a `Solution` into EVM calldata through three layers:
 
 ```
 TychoEncoder (trait)                     -- public API, validates Solution
   └─ TychoRouterEncoder                 -- selects strategy, auto-inserts WETH swaps
-       └─ StrategyEncoder (trait)        -- encodes swap structure (single/sequential/split)
+       └─ strategy encoders             -- encode swap structure (single/sequential/split)
             └─ SwapEncoder (trait)       -- encodes protocol-specific pool data
 ```
 
 **TychoRouterEncoder** validates each `Solution` (exact input, has swaps, no invalid cycles), auto-inserts WETH
 wrap/unwrap where ETH↔WETH bridges are missing, then selects strategy: **Single** (1 swap or 1 groupable-protocol batch
-with no splits), **Sequential** (multiple swaps, all `split == 0.0`), **Split** (any `split > 0.0`). *
-*TychoExecutorEncoder** is a simplified variant that bypasses TychoRouterV3 and calls the executor directly.
+with no splits), **Sequential** (multiple swaps, all `split == 0.0`), **Split** (any `split > 0.0`).
 
-### StrategyEncoder
+### Strategy encoders
 
-Three implementations (`evm/strategy_encoder/`), each targeting a TychoRouterV3 method family. Protocol data within a
+Three concrete encoders (`evm/strategy_encoder/`), each with an `encode_strategy` method targeting a TychoRouterV3
+method family. Protocol data within a
 group is PLE-encoded (`[len: u16][data]...`); Ekubo uses concatenation instead (`NON_PLE_ENCODED_PROTOCOLS`).
 
 | Strategy                        | Router methods                              | Encoding                                                                                                                           |
@@ -228,6 +228,9 @@ group is PLE-encoded (`[len: u16][data]...`); Ekubo uses concatenation instead (
 | `SingleSwapStrategyEncoder`     | `singleSwap` / `Permit2` / `UsingVault`     | Groups swaps, encodes via SwapEncoder, prepends executor address                                                                   |
 | `SequentialSwapStrategyEncoder` | `sequentialSwap` / `Permit2` / `UsingVault` | Validates path connectivity, groups by protocol, PLE-encodes each group with executor header                                       |
 | `SplitSwapStrategyEncoder`      | `splitSwap` / `Permit2` / `UsingVault`      | Builds token array [tokenIn, intermediaries, tokenOut], encodes token indices + split percentages (U24) + executor + protocol data |
+
+**Parallel encoding**: `encode_swap_groups` (`strategy_encoders.rs`) and `TychoRouterEncoder::encode_solutions`
+encode groups and solutions in parallel via `map_on_threads` (`evm/utils.rs`), preserving input order.
 
 **Swap grouping** (`evm/group_swaps.rs`): Consecutive swaps on the same groupable protocol (UniswapV4, BalancerV3,
 Ekubo) are batched into a single `SwapGroup` and executed via one delegatecall. The `SingleSwapStrategyEncoder` can also
