@@ -188,6 +188,12 @@ impl ExtractorSupervisor {
             // failures accumulate over the process lifetime: the backoff ratchets up to its
             // cap and `max_restarts` eventually stops a healthy extractor for good.
             if run_started.elapsed() >= HEALTHY_RUN_THRESHOLD {
+                info!(
+                    extractor = %self.id,
+                    run_duration = ?run_started.elapsed(),
+                    restart_count,
+                    "Healthy run detected — resetting restart count and backoff"
+                );
                 restart_count = 0;
                 backoff_strategy = restart_backoff();
             }
