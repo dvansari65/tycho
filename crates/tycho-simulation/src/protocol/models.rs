@@ -39,16 +39,16 @@ use tycho_common::{
 use crate::evm::override_stream::OverrideSnapshot;
 
 /// What a quote may assume about the swap's position within its execution block, for protocols
-/// that price the first swap of a block differently.
+/// whose pricing depends on that position.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BlockPositionAssumption {
-    /// No assumption: quote the worse of the two fee branches, so the output is never
-    /// over-quoted. Loses fills where the swap would in fact have landed first.
+    /// No assumption: price the swap for the least favourable position it could take, so the
+    /// output is never over-quoted. Loses fills where a better position would in fact have held.
     #[default]
     WorstCase,
-    /// Bet the swap lands before any other on the same pool. Better quotes where the protocol
-    /// discounts the first swap; a lost bet surfaces as reverts or negative slippage at
-    /// execution time. Enable only if the submission path can realistically win that race.
+    /// Bet the swap lands before any other on the same pool. Better quotes wherever the protocol
+    /// favours that position; a lost bet surfaces as reverts or negative slippage at execution
+    /// time. Enable only if the submission path can realistically win that race.
     First,
 }
 

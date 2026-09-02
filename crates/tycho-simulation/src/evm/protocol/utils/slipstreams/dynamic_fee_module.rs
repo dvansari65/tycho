@@ -229,10 +229,10 @@ fn resolve_dynamic_fee(
     } else {
         (DEFAULT_SCALING_FACTOR, DEFAULT_FEE_CAP)
     };
-    // No scaling shortcut: the module runs the TWAP computation regardless and a zero factor
-    // just multiplies the deviation away, so the observe gas is paid whenever the cardinality
-    // guard passes (debug_traceCall of fee() on a zero-scaling pool shows the observe subcall
-    // burning ~50k gas).
+    // The module runs the TWAP computation for any scaling factor — a zero factor just
+    // multiplies the deviation away — so the observe gas is paid whenever the cardinality guard
+    // passes. Verified with debug_traceCall of fee() on a zero-scaling pool: the observe subcall
+    // burns ~50k gas.
     let (dynamic_component, observed_twap) = calculate_dynamic_fee(
         current_tick,
         liquidity,
