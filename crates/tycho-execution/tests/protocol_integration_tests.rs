@@ -57,6 +57,7 @@ fn test_single_encoding_strategy_ekubo() {
         token_out,
         BigUint::from_str("1_000000000000000000").unwrap(),
         BigUint::from_str("1000").unwrap(),
+        BigUint::from_str("980").unwrap(),
         vec![swap],
     );
 
@@ -118,6 +119,7 @@ fn test_single_encoding_strategy_ekubo_erc20() {
         token_out,
         BigUint::from_str("1_000_000_000").unwrap(),
         BigUint::from_str("1000").unwrap(),
+        BigUint::from_str("980").unwrap(),
         vec![swap],
     );
 
@@ -179,6 +181,7 @@ fn test_single_encoding_strategy_ekubo_mev_resist() {
         token_out,
         BigUint::from_str("1_000_000_000").unwrap(),
         BigUint::from_str("1000").unwrap(),
+        BigUint::from_str("980").unwrap(),
         vec![swap],
     );
 
@@ -229,6 +232,7 @@ fn test_single_encoding_strategy_maverick() {
         token_out,
         BigUint::from_str("1_000000000000000000").unwrap(),
         BigUint::from_str("1000").unwrap(),
+        BigUint::from_str("980").unwrap(),
         vec![swap],
     );
 
@@ -290,6 +294,7 @@ fn test_evm_single_encoding_strategy_usv4_eth_in() {
         pepe,
         BigUint::from_str("1_000000000000000000").unwrap(),
         BigUint::from_str("152373460199848577067005852").unwrap(),
+        BigUint::from_str("149325990995851605525665734").unwrap(),
         vec![swap_eth_pepe],
     );
 
@@ -356,6 +361,7 @@ fn test_evm_single_encoding_strategy_usv4_eth_out() {
         eth.clone(),
         BigUint::from_str("3000_000000").unwrap(),
         BigUint::from_str("1117254495486192350").unwrap(),
+        BigUint::from_str("1094909405576468503").unwrap(),
         vec![swap_usdc_eth],
     )
     .with_user_transfer_type(UserTransferType::TransferFromPermit2);
@@ -441,6 +447,7 @@ fn test_evm_single_encoding_strategy_usv4_grouped_swap() {
         pepe,
         BigUint::from_str("1000_000000").unwrap(),
         BigUint::from_str("97191013220606467325121599").unwrap(),
+        BigUint::from_str("95247192956194337978619167").unwrap(),
         vec![swap_usdc_eth, swap_eth_pepe],
     )
     .with_user_transfer_type(UserTransferType::TransferFromPermit2);
@@ -464,14 +471,15 @@ fn test_evm_single_encoding_strategy_usv4_grouped_swap() {
     .data;
 
     let expected_input = [
-        "e7a307b0", // Function selector (singleSwapPermit2)
+        "ca931073", // selector (singleSwapPermit2)
         "000000000000000000000000000000000000000000000000000000003b9aca00", // amount in
         "000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", // token in
         "0000000000000000000000006982508145454ce325ddbe47a25d4ec3d2311933", // token out
-        "0000000000000000000000000000000000000000005064ff624d54346285543f", // min amount out
+        "0000000000000000000000000000000000000000005064ff624d54346285543f", // expectedAmountOut
+        "0000000000000000000000000000000000000000004ec960ad22d28541d4951f", // minAmountOut (2% below expected)
         "000000000000000000000000cd09f75e2bf2a4d11f3ab23f1389fcc1621c0cc2", // receiver
-        "00000000000000000000000000000000000000000000000000000000000001c0", /* clientFeeParams
-                     * offset */
+        // clientFeeParams offset = 480
+        "00000000000000000000000000000000000000000000000000000000000001e0",
     ]
     .join("");
 
@@ -506,8 +514,8 @@ fn test_evm_single_encoding_strategy_usv4_grouped_swap() {
 
     let hex_calldata = encode(&calldata);
 
-    assert_eq!(hex_calldata[..392], expected_input);
-    assert_eq!(hex_calldata[1544..], expected_swaps);
+    assert_eq!(hex_calldata[..456], expected_input);
+    assert_eq!(hex_calldata[1608..], expected_swaps);
     write_calldata_to_file(
         "test_single_encoding_strategy_usv4_grouped_swap",
         hex_calldata.as_str(),
@@ -573,6 +581,7 @@ fn test_evm_single_encoding_strategy_usv4_and_hooks_grouped_swap() {
         eth.clone(),
         BigUint::from_str("1000000000000000000").unwrap(), // 1 WETH
         BigUint::from_str("900000000000000000").unwrap(),  // 0.9 ETH
+        BigUint::from_str("882000000000000000").unwrap(),
         vec![swap_weth_usdc, swap_usdc_eth],
     )
     .with_user_transfer_type(UserTransferType::TransferFromPermit2);
@@ -661,6 +670,7 @@ fn test_single_encoding_strategy_ekubo_grouped_swap() {
         usdt,
         BigUint::from_str("1_000000000000000000").unwrap(),
         BigUint::from_str("1000").unwrap(),
+        BigUint::from_str("980").unwrap(),
         vec![swap1, swap2],
     );
 
@@ -726,6 +736,8 @@ fn test_single_encoding_strategy_curve() {
         token_out,
         BigUint::from_str("1_000000000000000000").unwrap(),
         BigUint::from_str("1").unwrap(),
+        // Dummy 1-wei quote with a matching minAmountOut, so any output is accepted
+        BigUint::from_str("1").unwrap(),
         vec![swap],
     );
 
@@ -790,6 +802,8 @@ fn test_single_encoding_strategy_curve_st_eth() {
         token_in,
         token_out,
         BigUint::from_str("1_000000000000000000").unwrap(),
+        BigUint::from_str("1").unwrap(),
+        // Dummy 1-wei quote with a matching minAmountOut, so any output is accepted
         BigUint::from_str("1").unwrap(),
         vec![swap],
     );
@@ -865,6 +879,8 @@ fn test_single_encoding_strategy_curve_protocol_will_debit_from_vault() {
         usdc,
         BigUint::from_str("1000_000000000000000000").unwrap(), // 1000 DAI
         BigUint::from_str("1").unwrap(),
+        // Dummy 1-wei quote with a matching minAmountOut, so any output is accepted
+        BigUint::from_str("1").unwrap(),
         vec![swap],
     )
     .with_user_transfer_type(UserTransferType::UseVaultsFunds);
@@ -920,6 +936,7 @@ fn test_single_encoding_strategy_balancer_v3() {
         token_out,
         BigUint::from_str("1_000000000000000000").unwrap(),
         BigUint::from_str("1000").unwrap(),
+        BigUint::from_str("980").unwrap(),
         vec![swap],
     );
 
@@ -959,6 +976,7 @@ fn test_single_encoding_strategy_bebop() {
     let partial_fill_offset = 12u64;
     let bebop_calldata = Bytes::from_str("0x4dcebcba00000000000000000000000000000000000000000000000000000000697215240000000000000000000000006bc529dc7b81a031828ddce2bc419d01ff268c6600000000000000000000000051c72848c68a965f66fa7a88855f9f7784502a7f00000000000000000000000000000000000000000000000027d0330b6f18fece000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48000000000000000000000000faba6f8e4a5e8ab82f62fe7c39859fa577269be3000000000000000000000000000000000000000000000000000000000bebc20000000000000000000000000000000000000000000000001f9350ccd9bd54d8ae0000000000000000000000006bc529dc7b81a031828ddce2bc419d01ff268c66000000000000000000000000000000000000000000000000000000000000000020dd178be2d265ea34d555878d0a826c0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001a00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000004000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000041df80ac607bd068150dd110509b97a01177035f4d9d27c00cbcbc184d2bfad9e6410fe402152a7a7298fac95b8c3338055e23905034a09b91cff87ef4b88249101c00000000000000000000000000000000000000000000000000000000000000").unwrap();
     let bebop_state = MockRFQState {
+        quote_amount_in: None,
         quote_amount_out: amount_out.clone(),
         quote_data: HashMap::from([
             ("calldata".to_string(), bebop_calldata),
@@ -975,6 +993,7 @@ fn test_single_encoding_strategy_bebop() {
                 Bytes::from_str("0xbbbbbBB520d69a9775E85b458C58c648259FAD5F").unwrap(),
             ),
         ]),
+        ..Default::default()
     };
 
     let bebop_component = ProtocolComponent {
@@ -1001,7 +1020,9 @@ fn test_single_encoding_strategy_bebop() {
         token_in,
         token_out,
         amount_in,
-        amount_out, // Expected output amount
+        amount_out.clone(), // Expected output amount
+        // 2% below the quote
+        &amount_out * BigUint::from(9800u64) / BigUint::from(10_000u64),
         vec![swap],
     );
 
@@ -1041,6 +1062,7 @@ fn test_single_encoding_strategy_bebop_aggregate() {
 
     let bebop_calldata = Bytes::from_str("0xa2f7489300000000000000000000000000000000000000000000000000000000000000600000000000000000000000000000000000000000000000000000000000000640000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000697215cf0000000000000000000000006bc529dc7b81a031828ddce2bc419d01ff268c66000000000000000000000000000000000000000000000000000000000000016000000000000000000000000000000000000000000000000000000000000001c00000000000000000000000000000000000000000000000000000000000000220000000000000000000000000000000000000000000000000000000000000030000000000000000000000000000000000000000000000000000000000000003e000000000000000000000000000000000000000000000000000000000000004c00000000000000000000000006bc529dc7b81a031828ddce2bc419d01ff268c6600000000000000000000000000000000000000000000000000000000000005a08dd0c54e8e2d4918ad2ae17adcad316c00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000200000000000000000000000067336cec42645f55059eff241cb02ea5cc52ff8600000000000000000000000051c72848c68a965f66fa7a88855f9f7784502a7f000000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000027d0330b6f19040400000000000000000000000000000000000000000000000027d0330b6f1904050000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000004000000000000000000000000000000000000000000000000000000000000000800000000000000000000000000000000000000000000000000000000000000001000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb480000000000000000000000000000000000000000000000000000000000000001000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb480000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000004000000000000000000000000000000000000000000000000000000000000000800000000000000000000000000000000000000000000000000000000000000001000000000000000000000000faba6f8e4a5e8ab82f62fe7c39859fa577269be30000000000000000000000000000000000000000000000000000000000000001000000000000000000000000faba6f8e4a5e8ab82f62fe7c39859fa577269be300000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000040000000000000000000000000000000000000000000000000000000000000008000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000224cce24e000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000002834ae5b200000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000040000000000000000000000000000000000000000000000000000000000000008000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000005af1d63497a5be7d1b500000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000006a97976ceb39a18c1ed00000000000000000000000000000000000000000000000000000000000000040000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000400000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000004000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000041c41d5149290fc301bf2d936e80adc1a857ae230351b28d4c6d905d5cd4fcce5a333bff59c2130df099e8886b1101ed761adcc3510531aab3b40b40e17fd917991b000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000040000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000418df1f9cbfea2aea60a7e34a361e2521b2fd607373197784d8131f857a5888b48380a33803e87e32a7cb1f1ac3845d4a3229d61f74663c2547341e04f08759ce31b00000000000000000000000000000000000000000000000000000000000000").unwrap();
     let bebop_state = MockRFQState {
+        quote_amount_in: None,
         quote_amount_out: amount_out.clone(),
         quote_data: HashMap::from([
             ("calldata".to_string(), bebop_calldata),
@@ -1057,6 +1079,7 @@ fn test_single_encoding_strategy_bebop_aggregate() {
                 Bytes::from_str("0xbbbbbBB520d69a9775E85b458C58c648259FAD5F").unwrap(),
             ),
         ]),
+        ..Default::default()
     };
 
     let bebop_component = ProtocolComponent {
@@ -1077,8 +1100,17 @@ fn test_single_encoding_strategy_bebop_aggregate() {
 
     let encoder = get_tycho_router_encoder(Chain::Ethereum);
 
-    let solution =
-        Solution::new(user.clone(), user, token_in, token_out, amount_in, amount_out, vec![swap]);
+    let solution = Solution::new(
+        user.clone(),
+        user,
+        token_in,
+        token_out,
+        amount_in,
+        amount_out.clone(),
+        // 2% below the quote
+        &amount_out * BigUint::from(9800u64) / BigUint::from(10_000u64),
+        vec![swap],
+    );
 
     let encoded_solution = encoder
         .encode_solutions(vec![solution.clone()])
@@ -1103,6 +1135,90 @@ fn test_single_encoding_strategy_bebop_aggregate() {
 }
 
 #[test]
+fn test_single_encoding_strategy_bebop_partial_fill() {
+    let user = Bytes::from_str("0xd2068e04cf586f76eece7ba5beb779d7bb1474a1").unwrap();
+    let token_in = weth();
+    let token_out = usdc();
+    let runtime_amount_in = BigUint::from_str("10000000000000000000").unwrap();
+    let estimated_amount_in = BigUint::from_str("19000000000000000000").unwrap();
+    let signed_amount_in = BigUint::from_str("20000000000000000000").unwrap();
+    // WETH uses 18 decimals and USDC uses 6, so amount_out cannot double as an input cap.
+    let signed_amount_out = BigUint::from(20_000_000u64);
+    let runtime_amount_out = BigUint::from(10_000_000u64);
+    let partial_fill_offset = 2u64;
+
+    let mut bebop_calldata = hex::decode("a2f74893").unwrap();
+    bebop_calldata.extend_from_slice(&[0u8; 64]);
+    bebop_calldata.extend_from_slice(&biguint_to_u256(&signed_amount_in).to_be_bytes::<32>());
+
+    let bebop_state = MockRFQState {
+        quote_amount_in: Some(signed_amount_in),
+        quote_amount_out: signed_amount_out,
+        quote_data: HashMap::from([
+            ("calldata".to_string(), Bytes::from(bebop_calldata)),
+            (
+                "partial_fill_offset".to_string(),
+                Bytes::from(
+                    partial_fill_offset
+                        .to_be_bytes()
+                        .to_vec(),
+                ),
+            ),
+            (
+                "tx_to".to_string(),
+                Bytes::from_str("0xbbbbbBB520d69a9775E85b458C58c648259FAD5F").unwrap(),
+            ),
+        ]),
+        ..Default::default()
+    };
+    let bebop_component = ProtocolComponent {
+        id: String::from("bebop-rfq"),
+        protocol_system: String::from("rfq:bebop"),
+        ..Default::default()
+    };
+    let swap = Swap::new(
+        bebop_component,
+        default_token(token_in.clone()),
+        default_token(token_out.clone()),
+        BigUint::ZERO,
+    )
+    .with_estimated_amount_in(estimated_amount_in)
+    .with_protocol_state(Arc::new(bebop_state));
+    let solution = Solution::new(
+        user.clone(),
+        user,
+        token_in,
+        token_out,
+        runtime_amount_in,
+        runtime_amount_out.clone(),
+        &runtime_amount_out * BigUint::from(9800u64) / BigUint::from(10_000u64),
+        vec![swap],
+    );
+
+    let encoded_solution = get_tycho_router_encoder(Chain::Ethereum)
+        .encode_solutions(vec![solution.clone()])
+        .unwrap()[0]
+        .clone();
+    let calldata = encode_tycho_router_call(
+        eth_chain().id(),
+        encoded_solution,
+        &solution,
+        &eth(),
+        None,
+        0,
+        Bytes::zero(20),
+        BigUint::ZERO,
+    )
+    .unwrap()
+    .data;
+
+    write_calldata_to_file(
+        "test_single_encoding_strategy_bebop_partial_fill",
+        hex::encode(calldata).as_str(),
+    );
+}
+
+#[test]
 fn test_single_encoding_strategy_hashflow() {
     // Note: This test does not assert anything. It is only used to obtain
     // integration test data for our router solidity test.
@@ -1118,6 +1234,7 @@ fn test_single_encoding_strategy_hashflow() {
     let quote_amount_out = BigUint::from_str("3714751").unwrap();
 
     let hashflow_state = MockRFQState {
+        quote_amount_in: None,
         quote_amount_out,
         quote_data: HashMap::from([
             (
@@ -1159,6 +1276,7 @@ fn test_single_encoding_strategy_hashflow() {
             ),
             ("signature".to_string(), Bytes::from_str("0xdedc8a21a00afdac18e0a62b3f0d641d21de75e1fa0bb8f402ccf047923274fe40df9e249f693d88be4a005f4217d21ed920eac7373fd23d8329d3c6b0c873f71c").unwrap()),
         ]),
+        ..Default::default()
     };
 
     let hashflow_component = ProtocolComponent {
@@ -1184,6 +1302,7 @@ fn test_single_encoding_strategy_hashflow() {
         wbtc,
         BigUint::from_str("4308094737").unwrap(),
         BigUint::from_str("3714751").unwrap(),
+        BigUint::from_str("3640455").unwrap(),
         vec![swap_usdc_wbtc],
     );
 
@@ -1235,6 +1354,7 @@ fn test_single_encoding_strategy_fluid() {
         token_out,
         BigUint::from_str("1_000000000000000000").unwrap(),
         BigUint::from_str("1000").unwrap(),
+        BigUint::from_str("980").unwrap(),
         vec![swap],
     );
 
@@ -1297,6 +1417,7 @@ fn test_sequential_encoding_strategy_fluid() {
         token_out,
         BigUint::from_str("1_000000000000000000").unwrap(),
         BigUint::from_str("1000").unwrap(),
+        BigUint::from_str("980").unwrap(),
         vec![swap_1, swap_2],
     );
 
@@ -1349,6 +1470,7 @@ fn test_single_encoding_strategy_rocketpool_deposit() {
         token_out,
         BigUint::from(85_000_000_000_000_000_000_u128),
         BigUint::from(73_382_345_660_413_064_855_u128),
+        BigUint::from(71914698747204803557u128),
         vec![swap],
     );
 
@@ -1405,6 +1527,7 @@ fn test_single_encoding_strategy_rocketpool_burn() {
         token_out,
         BigUint::from(2_515_686_112_138_065_226_u128),
         BigUint::from(2_912_504_376_202_664_754_u128),
+        BigUint::from(2854254288678611458u128),
         vec![swap],
     );
 
@@ -1456,6 +1579,7 @@ fn test_single_encoding_strategy_bopamm_weth_usdc() {
         token_out,
         BigUint::from_str("100000000000000000").unwrap(),
         BigUint::from(160_000_000_u64),
+        BigUint::from(156800000u64),
         vec![swap],
     );
 
@@ -1526,6 +1650,7 @@ fn test_single_encoding_strategy_ring_swap_v2() {
         token_out,
         BigUint::from_str("100000000000000000000").unwrap(),
         BigUint::from(1_u64),
+        BigUint::from(1_u64),
         vec![swap],
     );
 
@@ -1581,6 +1706,7 @@ fn test_sequential_encoding_strategy_uniswap_v2_ring_swap_v2() {
         token_out,
         BigUint::from_str("100000000").unwrap(),
         BigUint::from(1_u64),
+        BigUint::from(1_u64),
         vec![uniswap_v2_swap, ring_swap],
     );
 
@@ -1633,6 +1759,7 @@ fn test_single_encoding_strategy_fermiswap_weth_usdc() {
         token_out,
         BigUint::from_str("1_000000000000000000").unwrap(),
         BigUint::from(2_114_000_000_u64),
+        BigUint::from(2071720000u64),
         vec![swap],
     );
 
@@ -1656,6 +1783,69 @@ fn test_single_encoding_strategy_fermiswap_weth_usdc() {
     let hex_calldata = encode(&calldata);
     write_calldata_to_file(
         "test_single_encoding_strategy_fermiswap_weth_usdc",
+        hex_calldata.as_str(),
+    );
+}
+
+#[test]
+fn test_single_encoding_strategy_propamm_weth_usdc() {
+    // WETH -> (generic IPropAMM pAMM fed by the price level stream) -> USDC
+    let token_in = weth();
+    let token_out = usdc();
+
+    // The mock pAMM address used by the PropAMMRouterTest Foundry test.
+    let pamm = "1111111111111111111111111111111111111111";
+    let swap = Swap::new(
+        ProtocolComponent {
+            // The id the price level stream produces: pamm ++ token0 ++ token1.
+            id: format!(
+                "0x{pamm}a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"
+            ),
+            protocol_system: String::from("pricelevelstream:kipseli"),
+            static_attributes: HashMap::from([(
+                "pamm_address".to_string(),
+                Bytes::from_str(pamm).unwrap(),
+            )]),
+            ..Default::default()
+        },
+        default_token(token_in.clone()),
+        default_token(token_out.clone()),
+        BigUint::ZERO,
+    );
+
+    let encoder = get_tycho_router_encoder(Chain::Ethereum);
+    let solution = Solution::new(
+        alice_address(),
+        alice_address(),
+        token_in,
+        token_out,
+        BigUint::from_str("1_000000000000000000").unwrap(),
+        // The mock pAMM pays a fixed 2000 USDC per WETH.
+        BigUint::from(1_000_000_000_u64),
+        BigUint::from(1_000_000_000_u64),
+        vec![swap],
+    );
+
+    let encoded_solution = encoder
+        .encode_solutions(vec![solution.clone()])
+        .unwrap()[0]
+        .clone();
+
+    let calldata = encode_tycho_router_call(
+        eth_chain().id(),
+        encoded_solution,
+        &solution,
+        &eth(),
+        None,
+        0,
+        Bytes::zero(20),
+        BigUint::ZERO,
+    )
+    .unwrap()
+    .data;
+    let hex_calldata = encode(&calldata);
+    write_calldata_to_file(
+        "test_single_encoding_strategy_propamm_weth_usdc",
         hex_calldata.as_str(),
     );
 }
@@ -1692,6 +1882,7 @@ fn test_single_encoding_strategy_slipstreams() {
         token_out,
         BigUint::from_str("1_000000000000000000").unwrap(),
         BigUint::from_str("1000").unwrap(),
+        BigUint::from_str("980").unwrap(),
         vec![swap],
     );
 
@@ -1762,6 +1953,7 @@ fn test_sequential_encoding_strategy_slipstreams() {
         btc.clone(),
         BigUint::from_str("1_000000000000000000").unwrap(),
         BigUint::from_str("1000").unwrap(),
+        BigUint::from_str("980").unwrap(),
         vec![swap1, swap2],
     );
 
@@ -1812,6 +2004,7 @@ fn test_single_encoding_strategy_aerodrome_v1() {
         token_out,
         BigUint::from_str("10000000000000000").unwrap(),
         BigUint::from_str("1000").unwrap(),
+        BigUint::from_str("980").unwrap(),
         vec![swap],
     );
 
@@ -1874,6 +2067,7 @@ fn test_sequential_encoding_strategy_aerodrome_v1() {
         tbtc,
         BigUint::from_str("10000000000000000000").unwrap(),
         BigUint::from_str("1000").unwrap(),
+        BigUint::from_str("980").unwrap(),
         vec![swap1, swap2],
     );
 
@@ -1924,6 +2118,7 @@ fn test_single_encoding_strategy_erc4626() {
         token_out,
         BigUint::from_str("1_000000000000000000").unwrap(),
         BigUint::from_str("1000").unwrap(),
+        BigUint::from_str("980").unwrap(),
         vec![swap],
     );
 
@@ -1986,6 +2181,7 @@ fn test_sequential_encoding_strategy_erc4626() {
         susdc.clone(),
         BigUint::from_str("100_000_000").unwrap(),
         BigUint::from_str("90_000000000000000000").unwrap(),
+        BigUint::from_str("88200000000000000000").unwrap(),
         vec![swap1, swap2],
     );
 
@@ -2047,6 +2243,7 @@ fn test_single_swap_with_univ4_angstrom() {
         weth.clone(),
         BigUint::from_str("100000000").unwrap(), // 100 USDC (6 decimals)
         BigUint::from_str("99574171").unwrap(),
+        BigUint::from_str("97582687").unwrap(),
         vec![swap],
     );
 
@@ -2097,6 +2294,7 @@ fn test_single_encoding_strategy_weth_wrap() {
         token_out,
         BigUint::from(1_000_000_000_000_000_000_u128),
         BigUint::from(1_000_000_000_000_000_000_u128),
+        BigUint::from(980000000000000000u128),
         vec![swap],
     );
 
@@ -2143,6 +2341,7 @@ fn test_single_encoding_strategy_weth_unwrap() {
         token_out,
         BigUint::from(1_000_000_000_000_000_000_u128),
         BigUint::from(1_000_000_000_000_000_000_u128),
+        BigUint::from(980000000000000000u128),
         vec![swap],
     );
 
@@ -2165,55 +2364,6 @@ fn test_single_encoding_strategy_weth_unwrap() {
     .data;
     let hex_calldata = encode(&calldata);
     write_calldata_to_file("test_single_encoding_strategy_wrap_unwrapping", hex_calldata.as_str());
-}
-
-#[test]
-fn test_sequential_encoding_strategy_wrap_added() {
-    // The solution is initially a single swap. The wrapping step is inserted automatically.
-    // Final execution flow:
-    // ETH → (wrap to WETH) → WETH → (Uniswap V2 swap) → DAI
-
-    let swap_weth_dai = Swap::new(
-        ProtocolComponent {
-            id: "0xA478c2975Ab1Ea89e8196811F51A7B7Ade33eB11".to_string(),
-            protocol_system: "uniswap_v2".to_string(),
-            ..Default::default()
-        },
-        default_token(weth().clone()),
-        default_token(dai().clone()),
-        BigUint::ZERO,
-    );
-    let encoder = get_tycho_router_encoder(Chain::Ethereum);
-
-    let solution = Solution::new(
-        Bytes::from_str("0x9964bff29baa37b47604f3f3f51f3b3c5149d6de").unwrap(),
-        Bytes::from_str("0x9964bff29baa37b47604f3f3f51f3b3c5149d6de").unwrap(),
-        eth(),
-        dai(),
-        BigUint::from(1_000_000_000_000_000_000_u128),
-        BigUint::from(1_000_000_000_000_000_000_u128),
-        vec![swap_weth_dai],
-    );
-
-    let encoded_solution = encoder
-        .encode_solutions(vec![solution.clone()])
-        .unwrap()[0]
-        .clone();
-
-    let calldata = encode_tycho_router_call(
-        eth_chain().id(),
-        encoded_solution,
-        &solution,
-        &eth(),
-        None,
-        0,
-        Bytes::zero(20),
-        BigUint::ZERO,
-    )
-    .unwrap()
-    .data;
-    let hex_calldata = encode(&calldata);
-    write_calldata_to_file("test_sequential_encoding_strategy_wrap_added", hex_calldata.as_str());
 }
 
 #[test]
@@ -2253,6 +2403,7 @@ fn test_single_encoding_strategy_ekubo_v3() {
         token_out,
         BigUint::from_str("1_000000000000000000").unwrap(),
         BigUint::from_str("1000").unwrap(),
+        BigUint::from_str("980").unwrap(),
         vec![swap],
     );
 
@@ -2332,6 +2483,7 @@ fn test_single_ekubo_v3_grouped_swap() {
         eth(),
         BigUint::from_str("10000_000000").unwrap(),
         BigUint::from_str("1_000000000000000000").unwrap(),
+        BigUint::from_str("980000000000000000").unwrap(),
         vec![swap1, swap2],
     );
 
@@ -2393,6 +2545,7 @@ fn test_sequential_encoding_strategy_etherfi_unwrap_weeth() {
         eth(),
         BigUint::from_str("1000000000000000000").unwrap(),
         BigUint::from_str("1000000000000000000").unwrap(),
+        BigUint::from_str("980000000000000000").unwrap(),
         vec![swap1, swap2],
     );
 
@@ -2454,6 +2607,7 @@ fn test_sequential_encoding_strategy_etherfi_wrap_eeth() {
         weeth.clone(),
         BigUint::from_str("1000000000000000000").unwrap(),
         BigUint::from_str("900000000000000000").unwrap(),
+        BigUint::from_str("882000000000000000").unwrap(),
         vec![swap1, swap2],
     );
 
@@ -2524,6 +2678,8 @@ fn test_evm_single_encoding_strategy_usv4_twif_fee_token() {
         // TWIF is nearly worthless (~7.6e-10 USDC per TWIF).
         // Use a large amount so the swap produces >=1 USDC.
         BigUint::from_str("10000000000000000000000000000000000").unwrap(),
+        BigUint::from(1u64),
+        // Dummy 1-wei quote with a matching minAmountOut, so any output is accepted
         BigUint::from(1u64),
         vec![swap],
     )
@@ -2600,6 +2756,8 @@ fn test_evm_single_encoding_strategy_usv4_twif_fee_token_output() {
         usdc,
         twif,
         BigUint::from_str("100000000").unwrap(), // 100 USDC
+        BigUint::from(1u64),
+        // Dummy 1-wei quote with a matching minAmountOut, so any output is accepted
         BigUint::from(1u64),
         vec![swap],
     )
@@ -2681,6 +2839,7 @@ fn test_single_encoding_strategy_liquorice_settle_single() {
     );
 
     let liquorice_state = MockRFQState {
+        quote_amount_in: None,
         quote_amount_out,
         quote_data: HashMap::from([
             ("calldata".to_string(), liquorice_calldata),
@@ -2702,6 +2861,7 @@ fn test_single_encoding_strategy_liquorice_settle_single() {
                 ),
             ),
         ]),
+        ..Default::default()
     };
 
     let liquorice_component = ProtocolComponent {
@@ -2728,6 +2888,7 @@ fn test_single_encoding_strategy_liquorice_settle_single() {
         weth,
         BigUint::from_str("3000000000").unwrap(),
         BigUint::from_str("1000000000000000000").unwrap(),
+        BigUint::from_str("980000000000000000").unwrap(),
         vec![swap_usdc_weth],
     );
 
@@ -2795,6 +2956,7 @@ fn test_single_encoding_strategy_metric() {
         usdc_base,
         BigUint::from_str("1_000000000000000000").unwrap(),
         BigUint::from_str("1000").unwrap(),
+        BigUint::from_str("980").unwrap(),
         vec![swap],
     );
 
@@ -2882,6 +3044,8 @@ fn test_evm_two_hop_usv4_twif_intermediary() {
         usdc.clone(),
         usdc,
         BigUint::from_str("100000000").unwrap(), // 100 USDC
+        BigUint::from(1u64),
+        // Dummy 1-wei quote with a matching minAmountOut, so any output is accepted
         BigUint::from(1u64),
         vec![swap1, swap2],
     )
@@ -2978,6 +3142,7 @@ fn test_single_encoding_strategy_liquorice_settle() {
     );
 
     let liquorice_state = MockRFQState {
+        quote_amount_in: None,
         quote_amount_out,
         quote_data: HashMap::from([
             ("calldata".to_string(), liquorice_calldata),
@@ -2999,6 +3164,7 @@ fn test_single_encoding_strategy_liquorice_settle() {
                 ),
             ),
         ]),
+        ..Default::default()
     };
 
     let liquorice_component = ProtocolComponent {
@@ -3025,6 +3191,7 @@ fn test_single_encoding_strategy_liquorice_settle() {
         weth,
         BigUint::from_str("3000000000").unwrap(),
         BigUint::from_str("1000000000000000000").unwrap(),
+        BigUint::from_str("980000000000000000").unwrap(),
         vec![swap_usdc_weth],
     );
 
@@ -3080,6 +3247,7 @@ fn test_single_encoding_strategy_uniswap_v3_arbitrum() {
         token_out,
         BigUint::from_str("1_000000000000000000").unwrap(),
         BigUint::from_str("1000").unwrap(),
+        BigUint::from_str("980").unwrap(),
         vec![swap],
     );
 
@@ -3137,6 +3305,7 @@ fn test_single_encoding_strategy_uniswap_v3_polygon() {
         token_out,
         BigUint::from_str("1_000000000000000000").unwrap(),
         BigUint::from_str("1000").unwrap(),
+        BigUint::from_str("980").unwrap(),
         vec![swap],
     );
 
@@ -3194,6 +3363,7 @@ fn test_single_encoding_strategy_uniswap_v3_bsc() {
         token_out,
         BigUint::from_str("1_000000000000000000").unwrap(),
         BigUint::from_str("1000").unwrap(),
+        BigUint::from_str("980").unwrap(),
         vec![swap],
     );
 

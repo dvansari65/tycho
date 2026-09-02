@@ -39,7 +39,7 @@ pub enum Command {
     /// Starts a job to analyze stored tokens for tax and gas cost.
     AnalyzeTokens(AnalyzeTokenArgs),
     /// Starts Tycho RPC only. No extractors.
-    Rpc,
+    Rpc(RpcServerArgs),
 }
 
 #[derive(Parser, Debug, Clone, PartialEq)]
@@ -264,6 +264,17 @@ impl RunSpkgArgs {
     }
 }
 
+#[derive(Args, Debug, Clone, PartialEq)]
+pub struct RpcServerArgs {
+    /// The blockchain the database is dedicated to
+    #[clap(long, default_value = "ethereum")]
+    pub chain: String,
+
+    /// Custom chains configuration file
+    #[clap(long, env = "TYCHO_CHAINS_CONFIG", default_value = "./chains.yaml")]
+    pub chain_config: String,
+}
+
 #[derive(Args, Debug, Clone, PartialEq, Eq)]
 pub struct AnalyzeTokenArgs {
     /// Blockchain to execute analysis for.
@@ -283,6 +294,13 @@ pub struct AnalyzeTokenArgs {
     /// should be at least `concurrency * update_batch_size`.
     #[clap(long)]
     pub fetch_batch_size: usize,
+    /// Also re-analyze quality-5 tokens that traded within this many days. Quality 5 is
+    /// the analysis floor and is otherwise never revisited; a recently traded token gets
+    /// a recovery pass because its behavior may have changed after listing (e.g. launch
+    /// transfer restrictions lifted). Set to 0 to disable; a large value re-checks every
+    /// quality-5 token with active liquidity (backfill).
+    #[clap(long, default_value_t = 1)]
+    pub recovery_lookback_days: u32,
 }
 
 #[cfg(test)]

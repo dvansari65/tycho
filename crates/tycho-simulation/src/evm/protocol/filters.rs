@@ -63,7 +63,7 @@ pub fn uniswap_v4_angstrom_hook_pool_filter(component: &ComponentWithState) -> b
 /// authenticated with `ANGSTROM_API_KEY`. Without the key the swap fails at encoding time —
 /// after route selection — so consumers without the key should exclude these pools up front.
 /// [`ProtocolStreamBuilder`](crate::evm::stream::ProtocolStreamBuilder) applies this filter to
-/// `uniswap_v4_hooks` automatically when no filter function is provided and the key is unset.
+/// `uniswap_v4_hooks` whenever the key is unset, alongside any filter function the caller passes.
 pub fn uniswap_v4_non_angstrom_hook_pool_filter(component: &ComponentWithState) -> bool {
     !uniswap_v4_angstrom_hook_pool_filter(component)
 }
@@ -133,6 +133,24 @@ pub fn curve_filter(component: &ComponentWithState) -> bool {
             component.component.id
         );
         return false;
+    }
+    true
+}
+
+/// Filters out Killed LiquidityParty pools
+///
+/// The Substreams module sets a `killed` dynamic attribute (`0x01`) and this
+/// filter removes such components from the stream.
+/// Attempting a swap on a killed pool will revert.
+pub fn liquidityparty_killed_pools_filter(component: &ComponentWithState) -> bool {
+    if let Some(killed) = component.state.attributes.get("killed") {
+        if killed.to_vec() == [1u8] {
+            debug!(
+                "Filtering out LiquidityParty pool {} because it is killed",
+                component.component.id
+            );
+            return false;
+        }
     }
     true
 }
