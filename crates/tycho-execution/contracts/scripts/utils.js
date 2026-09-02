@@ -91,8 +91,12 @@ function getHardhatStandardJsonInput(contractsDir, contractFqn) {
 /**
  * Blockscout's verification endpoints answer HTTP 500 for any address it does
  * not hold as a contract, so check the two reasons that happens up front.
+ *
+ * @returns {boolean} whether Blockscout already holds the contract as verified.
+ *     Submitting again for such an address is rejected, and deploy scripts are
+ *     meant to be re-runnable.
  */
-async function assertVerifiable(config, address) {
+async function checkVerifiable(config, address) {
     if ((await ethers.provider.getCode(address)) === "0x") {
         throw new Error(
             `No contract deployed at ${address}. The address is derived from ` +
@@ -114,8 +118,18 @@ async function assertVerifiable(config, address) {
             "contract creation shows up."
         );
     }
+
+    return ok && body.is_verified === true;
 }
 
+/**
+ * Wait for the submitted verification to land.
+ *
+ * `is_verified` is the only signal available: Blockscout's v2 smart-contract
+ * response carries no verification status field, and it pushes the outcome of a
+ * submission over a websocket rather than over HTTP. A rejected verification is
+ * therefore indistinguishable from a slow queue, and surfaces as this timeout.
+ */
 async function pollBlockscoutVerification(config, address) {
     const url = `${config.apiBase}/smart-contracts/${address}`;
 
@@ -124,14 +138,13 @@ async function pollBlockscoutVerification(config, address) {
         if (ok && body.is_verified) {
             return;
         }
-        if (ok && body.verification_status === "failed") {
-            throw new Error(
-                "Blockscout verification failed: " + JSON.stringify(body)
-            );
-        }
         await new Promise(resolve => setTimeout(resolve, 5000));
     }
-    throw new Error("Timed out waiting for Blockscout verification");
+    throw new Error(
+        "Timed out waiting for Blockscout verification. It reports the reason " +
+        "for a rejected submission only in its UI: see " +
+        `${config.browserUrl}address/${address}#code`
+    );
 }
 
 /**
@@ -145,15 +158,18 @@ async function verifyOnBlockscout({network, address, contractFqn, constructorArg
         throw new Error(`No Blockscout config for network "${network}"`);
     }
 
+    console.log(`Verifying on Blockscout (chain ${config.chainId})...`);
+    if (await checkVerifiable(config, address)) {
+        console.log(`Already verified: ${config.browserUrl}address/${address}#code`);
+        return;
+    }
+
     const contractsDir = path.resolve(__dirname, "..");
     const constructorArgsHex = encodeConstructorArgs(
         contractsDir,
         contractFqn,
         constructorArgs
     );
-
-    console.log(`Verifying on Blockscout (chain ${config.chainId})...`);
-    await assertVerifiable(config, address);
 
     const {standardJson, compilerVersion} = getHardhatStandardJsonInput(
         contractsDir,
