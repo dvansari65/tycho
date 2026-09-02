@@ -1,3 +1,11 @@
+## [0.378.4](https://github.com/propeller-heads/tycho/compare/0.378.3...0.378.4) (2026-09-02)
+
+
+### Bug Fixes
+
+* **client:** increase Robinhood feed timeout ([bd932f5](https://github.com/propeller-heads/tycho/commit/bd932f52849b5ab8d1a27de4b4b84f290ab88740))
+* **client:** increase Robinhood feed timeout ([#1383](https://github.com/propeller-heads/tycho/issues/1383)) ([6648830](https://github.com/propeller-heads/tycho/commit/66488304e1fdd3c0304807be94013a82d5d1152b))
+
 ## [0.378.3](https://github.com/propeller-heads/tycho/compare/0.378.2...0.378.3) (2026-09-02)
 
 
