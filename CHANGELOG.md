@@ -1,3 +1,10 @@
+## [0.377.0](https://github.com/propeller-heads/tycho/compare/0.376.0...0.377.0) (2026-09-02)
+
+
+### Features
+
+* **sky:** add Sky (ex-MakerDAO) Ethereum integration ([#1321](https://github.com/propeller-heads/tycho/issues/1321)) ([229c834](https://github.com/propeller-heads/tycho/commit/229c83437b06f02bd3e5ad5649b6b719e7ded0bc))
+
 ## [0.376.0](https://github.com/propeller-heads/tycho/compare/0.375.0...0.376.0) (2026-09-01)
 
 
