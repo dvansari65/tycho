@@ -140,6 +140,9 @@ impl AerodromeSlipstreamsState {
     }
 
     /// Sets what quotes assume about the swap's position within its execution block.
+    ///
+    /// Kept out of [`Self::new`], which takes the pool's on-chain facts: this is a consumer-side
+    /// preference, not part of the decoded pool state.
     pub fn with_position_assumption(mut self, assumption: BlockPositionAssumption) -> Self {
         self.position_assumption = assumption;
         self
