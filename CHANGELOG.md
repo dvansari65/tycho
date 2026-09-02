@@ -1,3 +1,11 @@
+## [0.378.3](https://github.com/propeller-heads/tycho/compare/0.378.2...0.378.3) (2026-09-02)
+
+
+### Bug Fixes
+
+* retry substreams auth failures once credential is proven ([47bc26b](https://github.com/propeller-heads/tycho/commit/47bc26b2613571b8bf73f5c5cfc72c0056771285))
+* retry substreams auth failures once credential is proven ([#1382](https://github.com/propeller-heads/tycho/issues/1382)) ([a6a9155](https://github.com/propeller-heads/tycho/commit/a6a9155dfc84f9d003e915e9006d24c5ce063f97))
+
 ## [0.378.2](https://github.com/propeller-heads/tycho/compare/0.378.1...0.378.2) (2026-09-02)
 
 
