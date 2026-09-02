@@ -35,6 +35,7 @@ import {AerodromeV1Executor} from "../src/executors/AerodromeV1Executor.sol";
 import {MetricExecutor} from "../src/executors/MetricExecutor.sol";
 import {RingSwapV2Executor} from "../src/executors/RingSwapV2Executor.sol";
 import {NativeExecutor} from "../src/executors/NativeExecutor.sol";
+import {SkyExecutor} from "../src/executors/SkyExecutor.sol";
 // Test utilities and mocks
 import "./Constants.sol";
 import "./TestUtils.sol";
@@ -137,6 +138,7 @@ contract TychoRouterTestSetup is
     NativeExecutor public nativeExecutor;
     PropAMMExecutor public propAMMExecutor;
     PropAMMFallbackExecutor public propAMMFallbackExecutor;
+    SkyExecutor public skyExecutor;
 
     FeeCalculator feeCalculator;
     address routerFeeReceiver;
@@ -261,6 +263,16 @@ contract TychoRouterTestSetup is
             new RingSwapV2Executor(RING_FEW_FACTORY, RING_SWAP_FACTORY);
         propAMMExecutor = new PropAMMExecutor();
         propAMMFallbackExecutor = new PropAMMFallbackExecutor();
+        // The Sky venues exist only on mainnet, and the executor's constructor
+        // reads their token wiring, so it cannot deploy on forks where the
+        // venues have no code. It is deployed after the fixed executor set, so
+        // skipping it does not shift those executors' deterministic addresses.
+        bool skyDeployable = SKY_DAI_USDS_CONVERTER.code.length != 0;
+        if (skyDeployable) {
+            skyExecutor = new SkyExecutor(
+                SKY_LITE_PSM, SKY_USDS_PSM_WRAPPER, SKY_DAI_USDS_CONVERTER
+            );
+        }
 
         address nativeRouterV4 = getNativeRouterV4();
         bool supportsNative = nativeRouterV4 != address(0);
@@ -274,7 +286,9 @@ contract TychoRouterTestSetup is
             nativeExecutor = new NativeExecutor(nativeRouterV4);
         }
 
-        address[] memory executors = new address[](supportsNative ? 28 : 27);
+        address[] memory executors = new address[](
+            27 + (skyDeployable ? 1 : 0) + (supportsNative ? 1 : 0)
+        );
         executors[0] = address(usv2Executor);
         executors[1] = address(usv3Executor);
         executors[2] = address(pancakev3Executor);
@@ -302,7 +316,14 @@ contract TychoRouterTestSetup is
         executors[24] = address(ringSwapV2Executor);
         executors[25] = address(propAMMExecutor);
         executors[26] = address(propAMMFallbackExecutor);
-        if (supportsNative) executors[27] = address(nativeExecutor);
+        uint256 nextExecutorIndex = 27;
+        if (skyDeployable) {
+            executors[nextExecutorIndex] = address(skyExecutor);
+            nextExecutorIndex++;
+        }
+        if (supportsNative) {
+            executors[nextExecutorIndex] = address(nativeExecutor);
+        }
         return executors;
     }
 

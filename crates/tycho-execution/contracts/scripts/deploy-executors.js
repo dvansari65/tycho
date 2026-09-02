@@ -35,6 +35,7 @@ const deploy_protocols = {
         "pricelevelstream",
         "rfq:native",
         "propammfallback",
+        "sky",
     ],
     "base": [
         "uniswap_v2",
