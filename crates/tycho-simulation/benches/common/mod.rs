@@ -55,10 +55,8 @@ pub fn load_pools(fixture: &str) -> HashMap<String, Box<dyn ProtocolSim>> {
         .expect("Failed to build Tokio runtime");
 
     rt.block_on(async move {
-        let mut decoder = TychoStreamDecoder::<BlockHeader>::new();
-        // The fixtures are Ethereum mainnet snapshots; the decoder needs the chain to project a
-        // confirmed header onto the block a quote executes in.
-        decoder.set_chain(Chain::Ethereum);
+        // The fixtures are Ethereum mainnet snapshots.
+        let mut decoder = TychoStreamDecoder::<BlockHeader>::new(Chain::Ethereum);
         decoder.register_decoder::<EVMPoolState<PreCachedDB>>("vm:balancer_v2");
         decoder.register_decoder::<EVMPoolState<PreCachedDB>>("vm:curve");
 

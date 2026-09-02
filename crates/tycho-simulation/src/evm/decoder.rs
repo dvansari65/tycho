@@ -105,21 +105,9 @@ where
     /// its provider at creation time and reads fresh overrides on every simulation.
     override_providers: HashMap<String, Arc<dyn StateOverrideProvider>>,
     /// Seconds between blocks, used to project a confirmed block header onto the next block when
-    /// deriving the execution block for block-sensitive states. Resolved once in
-    /// [`Self::set_chain`] so an unregistered custom chain fails at construction, not mid-stream.
-    /// `None` until a chain is set: decoders that never see block headers (RFQ) don't need one,
-    /// and a decoder that does panics on its first block header rather than silently projecting
-    /// with a wrong default.
-    block_time_secs: Option<u64>,
-}
-
-impl<H> Default for TychoStreamDecoder<H>
-where
-    H: HeaderLike + Clone + Sync + Send + 'static + std::fmt::Debug,
-{
-    fn default() -> Self {
-        Self::new()
-    }
+    /// deriving the execution block for block-sensitive states. Resolved once in [`Self::new`],
+    /// so an unregistered custom chain fails at construction rather than mid-stream.
+    block_time_secs: u64,
 }
 
 /// Curve migrated from the generic VM adapter (`EVMPoolState`) to the native [`CurveState`]
@@ -135,7 +123,13 @@ impl<H> TychoStreamDecoder<H>
 where
     H: HeaderLike + Clone + Sync + Send + 'static + std::fmt::Debug,
 {
-    pub fn new() -> Self {
+    /// Creates a decoder for `chain`.
+    ///
+    /// # Panics
+    ///
+    /// Panics for a custom chain with no registered config, at construction rather than on the
+    /// first decoded block.
+    pub fn new(chain: Chain) -> Self {
         Self {
             state: Arc::new(RwLock::new(DecoderState::default())),
             skip_state_decode_failures: false,
@@ -143,21 +137,8 @@ where
             registry: HashMap::new(),
             inclusion_filters: HashMap::new(),
             override_providers: HashMap::new(),
-            block_time_secs: None,
+            block_time_secs: chain.block_time_secs(),
         }
-    }
-
-    /// Sets the chain whose block time is used to project a confirmed header onto the block a
-    /// quote will execute in. Required before decoding block-based streams;
-    /// [`ProtocolStreamBuilder`](crate::evm::stream::ProtocolStreamBuilder) sets it from its own
-    /// chain argument.
-    ///
-    /// # Panics
-    ///
-    /// Panics for a custom chain with no registered config — deliberately at construction time,
-    /// so a misconfigured consumer fails on startup instead of on the first decoded block.
-    pub fn set_chain(&mut self, chain: Chain) {
-        self.block_time_secs = Some(chain.block_time_secs());
     }
 
     /// The block a quote produced from `header` is expected to execute in.
@@ -168,11 +149,7 @@ where
         if header.partial_block_index.is_some() {
             BlockContext::new(header.number, header.timestamp)
         } else {
-            let block_time = self.block_time_secs.expect(
-                "TychoStreamDecoder received a block header but no chain was set; call \
-                 set_chain() before decoding block-based streams",
-            );
-            BlockContext::new(header.number + 1, header.timestamp + block_time)
+            BlockContext::new(header.number + 1, header.timestamp + self.block_time_secs)
         }
     }
 
@@ -1395,8 +1372,7 @@ mod tests {
 
     #[test]
     fn confirmed_header_targets_the_next_block() {
-        let mut decoder = TychoStreamDecoder::<BlockHeader>::new();
-        decoder.set_chain(Chain::Base);
+        let decoder = TychoStreamDecoder::<BlockHeader>::new(Chain::Ethereum);
 
         let execution_block = decoder.execution_block(&header_at(100, 1_000, None));
 
@@ -1406,8 +1382,7 @@ mod tests {
 
     #[test]
     fn partial_header_targets_the_block_that_is_still_open() {
-        let mut decoder = TychoStreamDecoder::<BlockHeader>::new();
-        decoder.set_chain(Chain::Base);
+        let decoder = TychoStreamDecoder::<BlockHeader>::new(Chain::Ethereum);
 
         let execution_block = decoder.execution_block(&header_at(100, 1_000, Some(3)));
 
@@ -1506,7 +1481,7 @@ mod tests {
     }
 
     async fn setup_decoder(set_tokens: bool) -> TychoStreamDecoder<BlockHeader> {
-        let mut decoder = TychoStreamDecoder::new();
+        let mut decoder = TychoStreamDecoder::new(Chain::Ethereum);
         decoder.register_decoder::<UniswapV2State>("uniswap_v2");
         if set_tokens {
             let tokens = [
@@ -1717,7 +1692,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_euler_hook_low_pool_manager_balance() {
-        let mut decoder = TychoStreamDecoder::new();
+        let mut decoder = TychoStreamDecoder::new(Chain::Ethereum);
 
         decoder.register_decoder_with_context::<crate::evm::protocol::uniswap_v4::state::UniswapV4State>(
             "uniswap_v4_hooks", DecoderContext::new().vm_traces(true)
