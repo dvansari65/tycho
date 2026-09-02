@@ -5,7 +5,11 @@ use std::{
 };
 
 use tycho_client::feed::{dto, BlockHeader, FeedMessage};
-use tycho_common::{models::token::Token, simulation::protocol_sim::ProtocolSim, Bytes};
+use tycho_common::{
+    models::{token::Token, Chain},
+    simulation::protocol_sim::ProtocolSim,
+    Bytes,
+};
 use tycho_simulation::evm::{
     decoder::TychoStreamDecoder, engine_db::tycho_db::PreCachedDB,
     protocol::vm::state::EVMPoolState,
@@ -52,6 +56,9 @@ pub fn load_pools(fixture: &str) -> HashMap<String, Box<dyn ProtocolSim>> {
 
     rt.block_on(async move {
         let mut decoder = TychoStreamDecoder::<BlockHeader>::new();
+        // The fixtures are Ethereum mainnet snapshots; the decoder needs the chain to project a
+        // confirmed header onto the block a quote executes in.
+        decoder.set_chain(Chain::Ethereum);
         decoder.register_decoder::<EVMPoolState<PreCachedDB>>("vm:balancer_v2");
         decoder.register_decoder::<EVMPoolState<PreCachedDB>>("vm:curve");
 
