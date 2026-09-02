@@ -1,5 +1,5 @@
 //! Conversion of trades and fee events into `DatabaseChanges` rows for substreams-sink-sql.
-use anyhow::Result;
+use anyhow::{bail, Result};
 use substreams::scalar::{BigDecimal, BigInt};
 use substreams_database_change::{
     pb::sf::substreams::sink::database::v1::DatabaseChanges, tables::Tables,
@@ -8,13 +8,28 @@ use substreams_database_change::{
 use super::hex_addr;
 use crate::pb::tycho::router::v1::{FeeConfigEvents, Trade, Trades};
 
-const ZERO_ADDRESS: [u8; 20] = [0u8; 20];
-
 #[substreams::handlers::map]
 pub fn db_out(trades: Trades, fee_events: FeeConfigEvents) -> Result<DatabaseChanges> {
     let mut tables = Tables::new();
     for trade in &trades.trades {
-        insert_trade(&mut tables, trade);
+        insert_trade(&mut tables, trade)?;
+    }
+    for error in &trades.errors {
+        let id = format!("{}:{}:{}", error.chain, hex_addr(&error.tx_hash), error.call_index);
+        tables
+            .create_row("router_call_errors", id)
+            .set("chain", &error.chain)
+            .set("block_number", error.block_number)
+            .set("block_time", rfc3339(error.block_timestamp))
+            .set("tx_hash", hex_addr(&error.tx_hash))
+            .set("tx_index", error.tx_index)
+            .set("call_index", error.call_index)
+            .set("router", hex_addr(&error.router))
+            .set("router_version", &error.router_version)
+            .set("stage", &error.stage)
+            .set("error", &error.error)
+            .set("tx_success", error.tx_success)
+            .set("call_success", error.call_success);
     }
     for ev in &fee_events.events {
         let id = format!("{}:{}:{}", ev.chain, hex_addr(&ev.tx_hash), ev.log_index);
@@ -39,19 +54,19 @@ pub fn db_out(trades: Trades, fee_events: FeeConfigEvents) -> Result<DatabaseCha
     Ok(tables.to_database_changes())
 }
 
-fn insert_trade(tables: &mut Tables, t: &Trade) {
+fn insert_trade(tables: &mut Tables, t: &Trade) -> Result<()> {
     let trade_id = format!("{}:{}:{}", t.chain, hex_addr(&t.tx_hash), t.call_index);
     let executors: Vec<String> = t
         .hops
         .iter()
         .map(|h| hex_addr(&h.executor))
         .collect();
-    let protocols: Vec<String> = t
+    let protocol_systems: Vec<String> = t
         .hops
         .iter()
-        .map(|h| h.protocol.clone())
+        .flat_map(|hop| hop.protocol_systems.iter().cloned())
         .collect();
-    let fee_split = split_fees(t);
+    let fee_split = split_fees(t)?;
 
     let row = tables.create_row("trades", trade_id.clone());
     row.set("chain", &t.chain)
@@ -64,7 +79,7 @@ fn insert_trade(tables: &mut Tables, t: &Trade) {
         .set("call_success", t.call_success)
         .set("router", hex_addr(&t.router))
         .set("router_version", &t.router_version)
-        .set("method", &t.method)
+        .set("strategy", &t.strategy)
         .set("funding", &t.funding)
         .set("eoa", hex_addr(&t.eoa))
         .set("msg_sender", hex_addr(&t.msg_sender))
@@ -80,7 +95,7 @@ fn insert_trade(tables: &mut Tables, t: &Trade) {
         .set("wrap_eth", t.wrap_eth)
         .set("unwrap_eth", t.unwrap_eth);
     row.set("executors", psql_text_array(&executors));
-    row.set("protocols", psql_text_array(&protocols));
+    row.set("protocol_systems", psql_text_array(&protocol_systems));
     if !t.expected_amount_out.is_empty() {
         row.set("expected_amount_out", &t.expected_amount_out);
         if let Some(bps) = slippage_tolerance_bps(&t.expected_amount_out, &t.min_amount_out) {
@@ -89,7 +104,8 @@ fn insert_trade(tables: &mut Tables, t: &Trade) {
     }
     if !t.amount_out.is_empty() {
         row.set("amount_out", &t.amount_out);
-        let gross = parse_bigint(&t.amount_out) + &fee_split.total;
+        let total_fees = &fee_split.router + &fee_split.client;
+        let gross = parse_bigint(&t.amount_out) + total_fees;
         row.set("gross_amount_out", gross.to_string());
         if !t.expected_amount_out.is_empty() {
             let surplus = gross - parse_bigint(&t.expected_amount_out);
@@ -135,10 +151,8 @@ fn insert_trade(tables: &mut Tables, t: &Trade) {
             .set("hop_index", hop.index)
             .set("executor", hex_addr(&hop.executor))
             .set("protocol_data", hex_addr(&hop.protocol_data));
-        if !hop.protocol.is_empty() {
-            row.set("protocol", &hop.protocol);
-        }
-        if t.method == "split" {
+        row.set("protocol_systems", psql_text_array(&hop.protocol_systems));
+        if t.strategy == "split" {
             row.set("token_in_index", hop.token_in_index)
                 .set("token_out_index", hop.token_out_index)
                 .set("split", hop.split);
@@ -152,38 +166,30 @@ fn insert_trade(tables: &mut Tables, t: &Trade) {
             .set("block_number", t.block_number)
             .set("token", hex_addr(&t.token_out))
             .set("recipient", hex_addr(&fee.recipient))
-            .set("amount", &fee.amount);
+            .set("amount", &fee.amount)
+            .set("role", &fee.role);
     }
+    Ok(())
 }
 
+#[derive(Debug)]
 struct FeeSplit {
     router: BigInt,
     client: BigInt,
-    total: BigInt,
 }
 
-/// Attributes `FeesTaken` recipients: the client fee receiver (or `tx.origin` when none was
-/// given, mirroring `FeeCalculator._resolveClient`) gets the client share, everything else is
-/// the router's.
-fn split_fees(t: &Trade) -> FeeSplit {
-    let client_receiver = t
-        .client_fee
-        .as_ref()
-        .map(|c| c.receiver.as_slice())
-        .filter(|r| *r != ZERO_ADDRESS)
-        .unwrap_or(&t.eoa);
-    let mut split =
-        FeeSplit { router: BigInt::zero(), client: BigInt::zero(), total: BigInt::zero() };
+/// Attributes fees from the contract's ordered `FeesTaken` array.
+fn split_fees(t: &Trade) -> Result<FeeSplit> {
+    let mut split = FeeSplit { router: BigInt::zero(), client: BigInt::zero() };
     for fee in &t.fees_taken {
         let amount = parse_bigint(&fee.amount);
-        split.total += &amount;
-        if fee.recipient == client_receiver {
-            split.client += amount;
-        } else {
-            split.router += amount;
+        match fee.role.as_str() {
+            "router" => split.router += amount,
+            "client" => split.client += amount,
+            role => bail!("unknown fee role {role:?} for trade {}", hex_addr(&t.tx_hash)),
         }
     }
-    split
+    Ok(split)
 }
 
 fn slippage_tolerance_bps(expected: &str, min: &str) -> Option<String> {
@@ -199,7 +205,7 @@ fn slippage_tolerance_bps(expected: &str, min: &str) -> Option<String> {
     ))
 }
 
-/// Strips insignificant trailing zeros (and a dangling ) from a decimal string.
+/// Strips insignificant trailing zeros and a dangling decimal point.
 fn trim_decimal(s: String) -> String {
     if !s.contains('.') {
         return s;
@@ -303,31 +309,48 @@ mod tests {
 
     #[test]
     fn splits_fees_between_router_and_client() {
-        use crate::pb::tycho::router::v1::{ClientFee, FeeTaken};
+        use crate::pb::tycho::router::v1::FeeTaken;
         let t = Trade {
-            eoa: vec![0xee; 20],
-            client_fee: Some(ClientFee { receiver: vec![0xcc; 20], ..Default::default() }),
             fees_taken: vec![
-                FeeTaken { recipient: vec![0xaa; 20], amount: "10".into() },
-                FeeTaken { recipient: vec![0xcc; 20], amount: "5".into() },
+                FeeTaken { recipient: vec![0xaa; 20], amount: "10".into(), role: "router".into() },
+                FeeTaken { recipient: vec![0xcc; 20], amount: "5".into(), role: "client".into() },
             ],
             ..Default::default()
         };
-        let s = split_fees(&t);
+        let s = split_fees(&t).unwrap();
         assert_eq!(s.router.to_string(), "10");
         assert_eq!(s.client.to_string(), "5");
-        assert_eq!(s.total.to_string(), "15");
     }
 
     #[test]
-    fn zero_client_falls_back_to_eoa() {
-        use crate::pb::tycho::router::v1::{ClientFee, FeeTaken};
+    fn same_recipient_keeps_contract_fee_roles() {
+        use crate::pb::tycho::router::v1::FeeTaken;
         let t = Trade {
-            eoa: vec![0xee; 20],
-            client_fee: Some(ClientFee { receiver: vec![0; 20], ..Default::default() }),
-            fees_taken: vec![FeeTaken { recipient: vec![0xee; 20], amount: "7".into() }],
+            fees_taken: vec![
+                FeeTaken { recipient: vec![0xee; 20], amount: "7".into(), role: "router".into() },
+                FeeTaken { recipient: vec![0xee; 20], amount: "3".into(), role: "client".into() },
+            ],
             ..Default::default()
         };
-        assert_eq!(split_fees(&t).client.to_string(), "7");
+        let split = split_fees(&t).unwrap();
+        assert_eq!(split.router.to_string(), "7");
+        assert_eq!(split.client.to_string(), "3");
+    }
+
+    #[test]
+    fn rejects_unknown_fee_role() {
+        use crate::pb::tycho::router::v1::FeeTaken;
+        let t = Trade {
+            fees_taken: vec![FeeTaken {
+                recipient: vec![0xee; 20],
+                amount: "7".into(),
+                role: "unknown".into(),
+            }],
+            ..Default::default()
+        };
+        assert!(split_fees(&t)
+            .unwrap_err()
+            .to_string()
+            .contains("unknown fee role"));
     }
 }

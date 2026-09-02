@@ -2,10 +2,9 @@ specVersion: v0.1.0
 package:
   name: tycho_router_trades
   version: v0.1.0
-  url: https://github.com/propeller-heads/tycho-indexer/tree/main/crates/tycho-execution/substreams
+  url: https://github.com/propeller-heads/tycho/tree/main/crates/tycho-execution/substreams
 
 imports:
-  sql: https://github.com/streamingfast/substreams-sink-sql/releases/download/protodefs-v1.0.7/substreams-sink-sql-protodefs-v1.0.7.spkg
   database_change: https://github.com/streamingfast/substreams-sink-database-changes/releases/download/v4.0.0/substreams-sink-database-changes-v4.0.0.spkg
 
 protobuf:
@@ -59,8 +58,8 @@ modules:
 network: robinhood
 
 params:
-  map_fee_config_events: chain=robinhood&routers=0x345e48768a65ae596ac6a2aee71202753c4866f5:v3_1&fee_calculators=0x345e48768a65ae596ac6a2aee71202753c4866f5:0xd16dbe64e5688c5771e52d530e0c21b32901f141
-  map_trades: chain=robinhood&routers=0x345e48768a65ae596ac6a2aee71202753c4866f5:v3_1&fee_calculators=0x345e48768a65ae596ac6a2aee71202753c4866f5:0xd16dbe64e5688c5771e52d530e0c21b32901f141
+  map_fee_config_events: chain=robinhood&routers=0x345e48768a65ae596ac6a2aee71202753c4866f5:v3_1,0x09215a470bd585e59eb3f4b612fbd2678131ff9e:v3_1&fee_calculators=0x345e48768a65ae596ac6a2aee71202753c4866f5:0xd16dbe64e5688c5771e52d530e0c21b32901f141,0x09215a470bd585e59eb3f4b612fbd2678131ff9e:0x0dd35e98aa40b4b75a8aa4950fd761b23de12854
+  map_trades: chain=robinhood&routers=0x345e48768a65ae596ac6a2aee71202753c4866f5:v3_1,0x09215a470bd585e59eb3f4b612fbd2678131ff9e:v3_1&fee_calculators=0x345e48768a65ae596ac6a2aee71202753c4866f5:0xd16dbe64e5688c5771e52d530e0c21b32901f141,0x09215a470bd585e59eb3f4b612fbd2678131ff9e:0x0dd35e98aa40b4b75a8aa4950fd761b23de12854
 
 sink:
   module: db_out

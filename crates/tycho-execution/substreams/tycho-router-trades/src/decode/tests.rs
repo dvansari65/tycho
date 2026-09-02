@@ -19,17 +19,47 @@ fn fixtures() -> Vec<(String, Vec<u8>)> {
         .collect()
 }
 
+const SWAP_FUNCTIONS: [&str; 9] = [
+    "singleSwap",
+    "singleSwapPermit2",
+    "singleSwapUsingVault",
+    "sequentialSwap",
+    "sequentialSwapPermit2",
+    "sequentialSwapUsingVault",
+    "splitSwap",
+    "splitSwapPermit2",
+    "splitSwapUsingVault",
+];
+
+fn contract(json: &str) -> ethabi::Contract {
+    ethabi::Contract::load(json.as_bytes()).expect("valid router ABI")
+}
+
+fn swap_selectors(json: &str, names: &[&str]) -> std::collections::HashSet<[u8; 4]> {
+    let contract = contract(json);
+    names
+        .iter()
+        .map(|name| {
+            contract
+                .function(name)
+                .unwrap()
+                .short_signature()
+        })
+        .collect()
+}
+
 #[test]
 fn decodes_every_encoder_fixture_as_v3_1() {
     let fixtures = fixtures();
     assert!(fixtures.len() > 50, "fixture file looks truncated");
+    let selectors = swap_selectors(include_str!("../../abi/TychoRouterV3_1.json"), &SWAP_FUNCTIONS);
     let mut failures = Vec::new();
     let mut router_calls = 0;
     for (name, input) in fixtures {
-        // Executor-level fixtures () bypass the router and carry executor
-        // selectors; only router entry points are in scope here.
-        if input.len() < 4 ||
-            decode_swap_call(RouterVersion::V3_1, &call_with_input(input.clone())).is_none()
+        // Executor-level fixtures bypass the router and carry executor selectors.
+        if input
+            .get(..4)
+            .is_none_or(|selector| !selectors.contains(selector))
         {
             continue;
         }
@@ -44,6 +74,84 @@ fn decodes_every_encoder_fixture_as_v3_1() {
         eprintln!("fixture failure: {failure}");
     }
     assert!(failures.is_empty());
+}
+
+fn token_for(kind: &ethabi::ParamType) -> ethabi::Token {
+    use ethabi::{ParamType, Token};
+    match kind {
+        ParamType::Address => Token::Address(ethabi::Address::repeat_byte(0x11)),
+        ParamType::Bytes => Token::Bytes(vec![0x22; 32]),
+        ParamType::Int(_) => Token::Int(1.into()),
+        ParamType::Uint(_) => Token::Uint(1.into()),
+        ParamType::Bool => Token::Bool(true),
+        ParamType::String => Token::String("value".to_string()),
+        ParamType::Array(inner) => Token::Array(vec![token_for(inner)]),
+        ParamType::FixedBytes(size) => Token::FixedBytes(vec![0x33; *size]),
+        ParamType::FixedArray(inner, size) => Token::FixedArray(
+            (0..*size)
+                .map(|_| token_for(inner))
+                .collect(),
+        ),
+        ParamType::Tuple(items) => Token::Tuple(items.iter().map(token_for).collect()),
+    }
+}
+
+fn expected_shape(name: &str) -> (Method, Funding) {
+    let method = if name.starts_with("single") {
+        Method::Single
+    } else if name.starts_with("sequential") {
+        Method::Sequential
+    } else {
+        Method::Split
+    };
+    let funding = if name.ends_with("Permit2") {
+        Funding::Permit2
+    } else if name.ends_with("UsingVault") {
+        Funding::Vault
+    } else {
+        Funding::TransferFrom
+    };
+    (method, funding)
+}
+
+fn assert_entry_points_decode(version: RouterVersion, json: &str, names: &[&str]) {
+    let contract = contract(json);
+    for name in names {
+        let function = contract.function(name).unwrap();
+        let tokens = function
+            .inputs
+            .iter()
+            .map(|input| token_for(&input.kind))
+            .collect::<Vec<_>>();
+        let input = function.encode_input(&tokens).unwrap();
+        let swap = decode_swap_call(version, &call_with_input(input))
+            .unwrap_or_else(|| panic!("{name} selector was not recognised"))
+            .unwrap_or_else(|error| panic!("{name} failed to decode: {error}"));
+        assert_eq!((swap.method, swap.funding), expected_shape(name), "{name}");
+    }
+}
+
+#[test]
+fn decodes_every_v2_entry_point() {
+    let names = SWAP_FUNCTIONS
+        .iter()
+        .copied()
+        .filter(|name| !name.ends_with("UsingVault"))
+        .collect::<Vec<_>>();
+    assert_entry_points_decode(
+        RouterVersion::V2,
+        include_str!("../../abi/TychoRouterV2.json"),
+        &names,
+    );
+}
+
+#[test]
+fn decodes_every_v3_0_entry_point() {
+    assert_entry_points_decode(
+        RouterVersion::V3_0,
+        include_str!("../../abi/TychoRouterV3_0.json"),
+        &SWAP_FUNCTIONS,
+    );
 }
 
 fn check_fixture(name: &str, input: Vec<u8>) -> Result<(), String> {

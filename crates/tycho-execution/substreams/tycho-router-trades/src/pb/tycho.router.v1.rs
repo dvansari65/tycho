@@ -6,6 +6,38 @@
 pub struct Trades {
     #[prost(message, repeated, tag="1")]
     pub trades: ::prost::alloc::vec::Vec<Trade>,
+    #[prost(message, repeated, tag="2")]
+    pub errors: ::prost::alloc::vec::Vec<RouterCallError>,
+}
+/// A selector-matched router call that could not be decoded safely.
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RouterCallError {
+    #[prost(string, tag="1")]
+    pub chain: ::prost::alloc::string::String,
+    #[prost(uint64, tag="2")]
+    pub block_number: u64,
+    #[prost(uint64, tag="3")]
+    pub block_timestamp: u64,
+    #[prost(bytes="vec", tag="4")]
+    pub tx_hash: ::prost::alloc::vec::Vec<u8>,
+    #[prost(uint32, tag="5")]
+    pub tx_index: u32,
+    #[prost(uint32, tag="6")]
+    pub call_index: u32,
+    #[prost(bytes="vec", tag="7")]
+    pub router: ::prost::alloc::vec::Vec<u8>,
+    #[prost(string, tag="8")]
+    pub router_version: ::prost::alloc::string::String,
+    /// Decode stage: "calldata", "amount_out" or "hops".
+    #[prost(string, tag="9")]
+    pub stage: ::prost::alloc::string::String,
+    #[prost(string, tag="10")]
+    pub error: ::prost::alloc::string::String,
+    #[prost(bool, tag="11")]
+    pub tx_success: bool,
+    #[prost(bool, tag="12")]
+    pub call_success: bool,
 }
 /// One call into a TychoRouter swap entry point (successful or reverted).
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -37,7 +69,7 @@ pub struct Trade {
     pub router_version: ::prost::alloc::string::String,
     /// "single", "sequential" or "split".
     #[prost(string, tag="11")]
-    pub method: ::prost::alloc::string::String,
+    pub strategy: ::prost::alloc::string::String,
     /// How user funds enter the router: "transfer_from", "permit2", "vault" or "none".
     #[prost(string, tag="12")]
     pub funding: ::prost::alloc::string::String,
@@ -97,9 +129,9 @@ pub struct Hop {
     pub index: u32,
     #[prost(bytes="vec", tag="2")]
     pub executor: ::prost::alloc::vec::Vec<u8>,
-    /// Protocol name resolved from the executor address; empty when unknown.
-    #[prost(string, tag="3")]
-    pub protocol: ::prost::alloc::string::String,
+    /// Protocol systems resolved from the executor address; empty when unknown.
+    #[prost(string, repeated, tag="3")]
+    pub protocol_systems: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
     /// Split swaps only: indices into the trade's token array and the raw uint24 split
     /// (0 means "remainder").
     #[prost(uint32, tag="4")]
@@ -155,6 +187,9 @@ pub struct FeeTaken {
     pub recipient: ::prost::alloc::vec::Vec<u8>,
     #[prost(string, tag="2")]
     pub amount: ::prost::alloc::string::String,
+    /// Contract array position: "router" first, then "client".
+    #[prost(string, tag="3")]
+    pub role: ::prost::alloc::string::String,
 }
 /// Fee configuration changes found in one block.
 #[allow(clippy::derive_partial_eq_without_eq)]

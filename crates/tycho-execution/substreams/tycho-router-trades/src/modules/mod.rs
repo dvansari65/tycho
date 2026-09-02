@@ -26,9 +26,6 @@ pub(crate) mod keys {
     pub fn positive_slippage(fc: &[u8]) -> String {
         format!("fc:{}:pos_slip", hex::encode(fc))
     }
-    pub fn fee_receiver(fc: &[u8]) -> String {
-        format!("fc:{}:receiver", hex::encode(fc))
-    }
 }
 
 /// Event names emitted in `FeeConfigEvent.event`.

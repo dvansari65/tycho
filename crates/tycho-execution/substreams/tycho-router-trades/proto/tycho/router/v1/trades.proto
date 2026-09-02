@@ -5,6 +5,24 @@ package tycho.router.v1;
 // All router trades found in one block.
 message Trades {
   repeated Trade trades = 1;
+  repeated RouterCallError errors = 2;
+}
+
+// A selector-matched router call that could not be decoded safely.
+message RouterCallError {
+  string chain = 1;
+  uint64 block_number = 2;
+  uint64 block_timestamp = 3;
+  bytes tx_hash = 4;
+  uint32 tx_index = 5;
+  uint32 call_index = 6;
+  bytes router = 7;
+  string router_version = 8;
+  // Decode stage: "calldata", "amount_out" or "hops".
+  string stage = 9;
+  string error = 10;
+  bool tx_success = 11;
+  bool call_success = 12;
 }
 
 // One call into a TychoRouter swap entry point (successful or reverted).
@@ -25,7 +43,7 @@ message Trade {
   // Router ABI generation: "v2", "v3_0" or "v3_1".
   string router_version = 10;
   // "single", "sequential" or "split".
-  string method = 11;
+  string strategy = 11;
   // How user funds enter the router: "transfer_from", "permit2", "vault" or "none".
   string funding = 12;
 
@@ -64,8 +82,8 @@ message Trade {
 message Hop {
   uint32 index = 1;
   bytes executor = 2;
-  // Protocol name resolved from the executor address; empty when unknown.
-  string protocol = 3;
+  // Protocol systems resolved from the executor address; empty when unknown.
+  repeated string protocol_systems = 3;
   // Split swaps only: indices into the trade's token array and the raw uint24 split
   // (0 means "remainder").
   uint32 token_in_index = 4;
@@ -100,6 +118,8 @@ message RouterFeeConfig {
 message FeeTaken {
   bytes recipient = 1;
   string amount = 2;
+  // Contract array position: "router" first, then "client".
+  string role = 3;
 }
 
 // Fee configuration changes found in one block.

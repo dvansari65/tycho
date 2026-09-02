@@ -9,7 +9,7 @@ DSN ?= psql://tycho:tycho@localhost:5433/router_trades?sslmode=disable
 START ?=
 STOP ?= +10
 
-.PHONY: build test lint fmt protogen pack run setup sink price-setup price-once price-loop
+.PHONY: build test test-pricing lint fmt protogen pack run setup sink price-once price-loop
 
 # --target-dir keeps the wasm where the manifests expect it even with a global CARGO_TARGET_DIR.
 build:
@@ -17,6 +17,9 @@ build:
 
 test:
 	cargo test --workspace
+
+test-pricing:
+	./scripts/test_pricing.sh
 
 lint:
 	cargo +nightly fmt -- --check
@@ -26,7 +29,7 @@ fmt:
 	cargo +nightly fmt
 
 protogen:
-	cd tycho-router-trades && substreams protogen chains/ethereum.yaml --output-path ../src/pb --exclude-paths="sf/substreams,google,sf/ethereum"
+	cd tycho-router-trades && substreams protogen chains/ethereum.yaml --output-path src/pb --exclude-paths="sf/substreams,google,sf/ethereum"
 
 pack: build
 	substreams pack $(MANIFEST) -o tycho-router-trades-$(CHAIN).spkg
@@ -45,11 +48,9 @@ sink: build
 # Pricing: fills price_*_eth / volume_eth on fresh trades from the Tycho token_price table.
 PSQL_DSN ?= postgres://tycho:tycho@localhost:5433/router_trades
 
-price-setup:
-	psql "$(PSQL_DSN)" -v ON_ERROR_STOP=1 -f pricing/current_token_prices.sql
-
 price-once:
-	psql "$(PSQL_DSN)" -v ON_ERROR_STOP=1 -v max_age='$(or $(MAX_AGE),1 hour)' -f pricing/price_trades.sql
+	psql "$(PSQL_DSN)" -v ON_ERROR_STOP=1 -v chain='$(CHAIN)' \
+		-v max_age='$(or $(MAX_AGE),1 hour)' -f pricing/price_trades.sql
 
 price-loop:
 	DSN="$(PSQL_DSN)" ./scripts/price_trades.sh

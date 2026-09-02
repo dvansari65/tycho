@@ -1,6 +1,6 @@
--- Minimal stand-in for one chain's Tycho tables used by current_token_prices, for local
+-- Minimal stand-in for one chain's Tycho price tables, for local
 -- development against the docker-compose database, in place of the foreign tables.
--- Insert rows into token_price / token / account yourself, then apply current_token_prices.sql.
+-- Insert rows into token_price / token / account yourself, then run price_trades.sql.
 --
 --   psql "$DSN" -v chain=ethereum -f pricing/dev_stub.sql
 \set schema 'tycho_' :chain
