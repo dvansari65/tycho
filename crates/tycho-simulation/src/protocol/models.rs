@@ -38,6 +38,20 @@ use tycho_common::{
 
 use crate::evm::override_stream::OverrideSnapshot;
 
+/// What a quote may assume about the swap's position within its execution block, for protocols
+/// that price the first swap of a block differently.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BlockPositionAssumption {
+    /// No assumption: quote the worse of the two fee branches, so the output is never
+    /// over-quoted. Loses fills where the swap would in fact have landed first.
+    #[default]
+    WorstCase,
+    /// Bet the swap lands before any other on the same pool. Better quotes where the protocol
+    /// discounts the first swap; a lost bet surfaces as reverts or negative slippage at
+    /// execution time. Enable only if the submission path can realistically win that race.
+    First,
+}
+
 /// Context struct containing attributes for decoders
 ///
 /// This struct can be extended to include additional attributes for other decoders in the future
@@ -45,14 +59,12 @@ use crate::evm::override_stream::OverrideSnapshot;
 pub struct DecoderContext {
     pub adapter_path: Option<String>,
     pub vm_traces: Option<bool>,
-    /// Quote as if the swap lands before any other on the same pool in its execution block.
+    /// What quotes may assume about the swap's position within its execution block.
     ///
     /// Only consumed by protocols that price the first swap of a block differently (currently
-    /// `aerodrome_slipstreams`). Off by default: position within the block is unknowable from a
-    /// local simulation, so the worse of the two fees is quoted and the output is never
-    /// over-quoted. Enable only if your submission path can realistically win that race —
-    /// a wrong bet surfaces as reverts or negative slippage at execution time.
-    pub assume_first_in_block: bool,
+    /// `aerodrome_slipstreams`). Once the pool has been touched in the execution block, position
+    /// is a known fact and the assumption has no effect.
+    pub block_position: BlockPositionAssumption,
     /// Live per-block VM state override channel, wired into the pool at construction time.
     ///
     /// Set internally by the decoder from its registered override providers; not part of the
@@ -65,13 +77,13 @@ impl DecoderContext {
         Self {
             adapter_path: None,
             vm_traces: None,
-            assume_first_in_block: false,
+            block_position: BlockPositionAssumption::default(),
             live_override: None,
         }
     }
 
-    pub fn assume_first_in_block(mut self, assume: bool) -> Self {
-        self.assume_first_in_block = assume;
+    pub fn block_position_assumption(mut self, assumption: BlockPositionAssumption) -> Self {
+        self.block_position = assumption;
         self
     }
 

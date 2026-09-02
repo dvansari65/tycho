@@ -15,27 +15,30 @@ use tycho_common::{
     Bytes,
 };
 
-use crate::evm::protocol::{
-    safe_math::{safe_add_u256, safe_sub_u256},
-    u256_num::u256_to_biguint,
-    utils::{
-        add_fee_markup,
-        slipstreams::{
-            dynamic_fee_module::{get_dynamic_fee, DynamicFeeConfig, ResolvedFee},
-            observations::{Observation, Observations},
-        },
-        uniswap::{
-            i24_be_bytes_to_i32, liquidity_math,
-            sqrt_price_math::{get_amount0_delta, get_amount1_delta, sqrt_price_q96_to_f64},
-            swap_math,
-            tick_list::{TickInfo, TickList, TickListErrorKind},
-            tick_math::{
-                get_sqrt_ratio_at_tick, get_tick_at_sqrt_ratio, MAX_SQRT_RATIO, MAX_TICK,
-                MIN_SQRT_RATIO, MIN_TICK,
+use crate::{
+    evm::protocol::{
+        safe_math::{safe_add_u256, safe_sub_u256},
+        u256_num::u256_to_biguint,
+        utils::{
+            add_fee_markup,
+            slipstreams::{
+                dynamic_fee_module::{get_dynamic_fee, DynamicFeeConfig, ResolvedFee},
+                observations::{Observation, Observations},
             },
-            StepComputation, SwapResults, SwapState,
+            uniswap::{
+                i24_be_bytes_to_i32, liquidity_math,
+                sqrt_price_math::{get_amount0_delta, get_amount1_delta, sqrt_price_q96_to_f64},
+                swap_math,
+                tick_list::{TickInfo, TickList, TickListErrorKind},
+                tick_math::{
+                    get_sqrt_ratio_at_tick, get_tick_at_sqrt_ratio, MAX_SQRT_RATIO, MAX_TICK,
+                    MIN_SQRT_RATIO, MIN_TICK,
+                },
+                StepComputation, SwapResults, SwapState,
+            },
         },
     },
+    protocol::models::BlockPositionAssumption,
 };
 
 // Cold-storage warmup on the first loop iteration:
@@ -81,10 +84,9 @@ pub struct AerodromeSlipstreamsState {
     ticks: TickList,
     observations: Observations,
     dfc: DynamicFeeConfig,
-    /// Quote as if the swap lands first in its execution block (see
-    /// [`DecoderContext::assume_first_in_block`]); off = the worse of the two fee branches.
-    #[serde(default)]
-    assume_first_in_block: bool,
+    /// What quotes may assume about the swap's position within its execution block; see
+    /// [`BlockPositionAssumption`].
+    position_assumption: BlockPositionAssumption,
 }
 
 impl AerodromeSlipstreamsState {
@@ -133,13 +135,13 @@ impl AerodromeSlipstreamsState {
             ticks: tick_list,
             observations: Observations::new(observations),
             dfc,
-            assume_first_in_block: false,
+            position_assumption: BlockPositionAssumption::default(),
         })
     }
 
-    /// Sets whether quotes assume the swap lands first in its execution block.
-    pub fn with_first_in_block_assumption(mut self, assume: bool) -> Self {
-        self.assume_first_in_block = assume;
+    /// Sets what quotes assume about the swap's position within its execution block.
+    pub fn with_position_assumption(mut self, assumption: BlockPositionAssumption) -> Self {
+        self.position_assumption = assumption;
         self
     }
 
@@ -153,7 +155,7 @@ impl AerodromeSlipstreamsState {
             self.observation_cardinality,
             &self.observations,
             self.execution_block_timestamp as u32,
-            self.assume_first_in_block,
+            self.position_assumption == BlockPositionAssumption::First,
         )
     }
 
@@ -750,7 +752,7 @@ mod tests {
     fn initial_fee_pool(last_observation_ts: u32) -> AerodromeSlipstreamsState {
         let mut pool = create_basic_test_pool();
         pool.dfc = DynamicFeeConfig::new(2700, 30_000, 0, true, 750);
-        pool.assume_first_in_block = true;
+        pool.position_assumption = BlockPositionAssumption::First;
         pool.observations = Observations::new(vec![Observation {
             block_timestamp: last_observation_ts,
             initialized: true,
@@ -806,7 +808,7 @@ mod tests {
         )
         .expect("state should build")
         // The replayed swap was in fact the block's first: the optimistic mode reproduces it.
-        .with_first_in_block_assumption(true);
+        .with_position_assumption(BlockPositionAssumption::First);
 
         // The quotes execute in block 50166683 (ts 1_787_122_713).
         assert!(pool.apply_block(&BlockContext::new(50_166_683, 1_787_122_713)));
@@ -889,7 +891,7 @@ mod tests {
         // before the pool is touched in the execution block, the worse of the two branches
         // (here the 2700 dynamic fee) applies — which is also the pre-fix behavior.
         let mut pool = initial_fee_pool(1_000);
-        pool.assume_first_in_block = false;
+        pool.position_assumption = BlockPositionAssumption::WorstCase;
         pool.apply_block(&BlockContext::new(101, 1_002));
 
         assert_eq!(
@@ -906,7 +908,7 @@ mod tests {
         // must be max(initial, dynamic), not "the dynamic fee".
         let mut pool = initial_fee_pool(1_000);
         pool.dfc = DynamicFeeConfig::new(500, 30_000, 0, true, 4_000);
-        pool.assume_first_in_block = false;
+        pool.position_assumption = BlockPositionAssumption::WorstCase;
         pool.apply_block(&BlockContext::new(101, 1_002));
 
         assert_eq!(
@@ -922,7 +924,7 @@ mod tests {
         // With scaling 0 the worst-case fee is constant, so apply_block must never request a
         // re-emission: the default mode adds no per-block load for such pools.
         let mut pool = initial_fee_pool(1_000);
-        pool.assume_first_in_block = false;
+        pool.position_assumption = BlockPositionAssumption::WorstCase;
         pool.apply_block(&BlockContext::new(100, 1_000));
 
         assert!(!pool.apply_block(&BlockContext::new(101, 1_002)));

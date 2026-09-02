@@ -78,9 +78,10 @@ pub struct Context {
 }
 
 impl Context {
-    /// Creates a context targeting `block`.
-    pub fn at_block(block: BlockContext) -> Self {
-        Self { block: Some(block) }
+    /// Targets the quote at `block`.
+    pub fn with_block(mut self, block: BlockContext) -> Self {
+        self.block = Some(block);
+        self
     }
 
     /// The block a quote is expected to execute in, if the caller stated one.

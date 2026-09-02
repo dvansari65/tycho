@@ -214,7 +214,7 @@ impl TryFromWithBlock<ComponentWithState, BlockHeader> for AerodromeSlipstreamsS
             observations,
             dynamic_fee_config,
         )
-        .map(|state| state.with_first_in_block_assumption(decoder_context.assume_first_in_block))
+        .map(|state| state.with_position_assumption(decoder_context.block_position))
         .map_err(|err| InvalidSnapshotError::ValueError(err.to_string()))
     }
 }

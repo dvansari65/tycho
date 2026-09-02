@@ -107,7 +107,10 @@ where
     /// Seconds between blocks, used to project a confirmed block header onto the next block when
     /// deriving the execution block for block-sensitive states. Resolved once in
     /// [`Self::set_chain`] so an unregistered custom chain fails at construction, not mid-stream.
-    block_time_secs: u64,
+    /// `None` until a chain is set: decoders that never see block headers (RFQ) don't need one,
+    /// and a decoder that does panics on its first block header rather than silently projecting
+    /// with a wrong default.
+    block_time_secs: Option<u64>,
 }
 
 impl<H> Default for TychoStreamDecoder<H>
@@ -140,19 +143,21 @@ where
             registry: HashMap::new(),
             inclusion_filters: HashMap::new(),
             override_providers: HashMap::new(),
-            block_time_secs: Chain::Ethereum.block_time_secs(),
+            block_time_secs: None,
         }
     }
 
     /// Sets the chain whose block time is used to project a confirmed header onto the block a
-    /// quote will execute in. Defaults to [`Chain::Ethereum`]'s block time.
+    /// quote will execute in. Required before decoding block-based streams;
+    /// [`ProtocolStreamBuilder`](crate::evm::stream::ProtocolStreamBuilder) sets it from its own
+    /// chain argument.
     ///
     /// # Panics
     ///
     /// Panics for a custom chain with no registered config — deliberately at construction time,
     /// so a misconfigured consumer fails on startup instead of on the first decoded block.
     pub fn set_chain(&mut self, chain: Chain) {
-        self.block_time_secs = chain.block_time_secs();
+        self.block_time_secs = Some(chain.block_time_secs());
     }
 
     /// The block a quote produced from `header` is expected to execute in.
@@ -163,7 +168,11 @@ where
         if header.partial_block_index.is_some() {
             BlockContext::new(header.number, header.timestamp)
         } else {
-            BlockContext::new(header.number + 1, header.timestamp + self.block_time_secs)
+            let block_time = self.block_time_secs.expect(
+                "TychoStreamDecoder received a block header but no chain was set; call \
+                 set_chain() before decoding block-based streams",
+            );
+            BlockContext::new(header.number + 1, header.timestamp + block_time)
         }
     }
 
@@ -1380,7 +1389,7 @@ mod tests {
             .expect("state should build")
             // These fixtures exercise the fee-flip path, which needs the optimistic mode:
             // under the worst-case default a flat-fee pool never flips.
-            .with_first_in_block_assumption(true),
+            .with_position_assumption(crate::protocol::models::BlockPositionAssumption::First),
         )
     }
 
