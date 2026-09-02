@@ -1,3 +1,24 @@
+## [0.378.0](https://github.com/propeller-heads/tycho/compare/0.377.0...0.378.0) (2026-09-02)
+
+
+### Features
+
+* add extractor supervisor with fault tolerance and exponential backoff ([c4a02c5](https://github.com/propeller-heads/tycho/commit/c4a02c5f83f41e96d9cfc48436e4f42966e7617c))
+* add extractor supervisor with fault tolerance and exponential backoff ([#1026](https://github.com/propeller-heads/tycho/issues/1026)) ([f459efd](https://github.com/propeller-heads/tycho/commit/f459efdd291e35b070e8e942340f82194a79e734))
+
+
+### Bug Fixes
+
+* honor control messages during restart backoff ([ab7e252](https://github.com/propeller-heads/tycho/commit/ab7e252dd7d3955fa66ce68ec79d0868b445434f))
+* propagate errors in download_file_from_s3 instead of panicking ([8a1e715](https://github.com/propeller-heads/tycho/commit/8a1e7156a3c968fa40b98eabf741d305325dad48))
+* raise extractor restart backoff floor to 60s ([69e1ce2](https://github.com/propeller-heads/tycho/commit/69e1ce249a4d19c9e623d148d864cff94d60e6df))
+* reset restart backoff after a healthy extractor run ([8071f50](https://github.com/propeller-heads/tycho/commit/8071f5055736c9f71504d335c6529592cc8f08c9))
+* restore calldata.txt test fixture to main's version ([7262aaa](https://github.com/propeller-heads/tycho/commit/7262aaaa509804cf70b39bb47de3b82783b3083b))
+* send SubscriptionEnded to WS clients when an extractor channel closes ([a076ecf](https://github.com/propeller-heads/tycho/commit/a076ecf182acdbfbb70deb978ae587ee8781630f))
+* shut the process down when a supervisor exits with an error ([9ac033d](https://github.com/propeller-heads/tycho/commit/9ac033dd6ba3327a544bdcaff38da309f0dda104))
+* start extractor restart backoff at 1s ([0487153](https://github.com/propeller-heads/tycho/commit/0487153131957ad97a0603303b53d800cd9a03b9))
+* **storage:** init flushed_block_height in new_instance ([ff79da7](https://github.com/propeller-heads/tycho/commit/ff79da7df7d2179d7381c33e9a9f210aa10c9338))
+
 ## [0.377.0](https://github.com/propeller-heads/tycho/compare/0.376.0...0.377.0) (2026-09-02)
 
 
