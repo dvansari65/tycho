@@ -1,6 +1,3 @@
-use std::str::FromStr;
-
-use alloy::primitives::{address, Address};
 use serde::{Deserialize, Serialize};
 use tycho_common::{models::Chain, Bytes};
 
@@ -56,25 +53,6 @@ where
     })
 }
 
-const NATIVE_TOKEN_ALIAS: Address = address!("EeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE");
-
-pub(super) fn normalize_native_address(address: Address) -> Address {
-    if address == NATIVE_TOKEN_ALIAS {
-        Address::ZERO
-    } else {
-        address
-    }
-}
-
-fn deserialize_address<'de, D>(deserializer: D) -> Result<Bytes, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let address = String::deserialize(deserializer)?;
-    let address = Address::from_str(&address).map_err(serde::de::Error::custom)?;
-    Ok(Bytes::from(normalize_native_address(address).as_slice()))
-}
-
 fn deserialize_non_negative_f64<'de, D>(deserializer: D) -> Result<f64, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -88,9 +66,7 @@ where
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct NativeOrderbookEntry {
-    #[serde(deserialize_with = "deserialize_address")]
     pub base_address: Bytes,
-    #[serde(deserialize_with = "deserialize_address")]
     pub quote_address: Bytes,
     /// Minimum base-token amount in atomic units.
     ///
@@ -112,13 +88,9 @@ pub struct NativePriceData {
     pub minimum_in_base: f64,
     /// Atomic quote-token minimum input when selling quote into asks.
     pub minimum_in_quote: f64,
-    /// Atomic base-token minimum output when selling quote into asks. Defaults to zero for
-    /// snapshots written before output minimums were tracked.
-    #[serde(default)]
+    /// Atomic base-token minimum output when selling quote into asks.
     pub minimum_out_base: f64,
-    /// Atomic quote-token minimum output when selling base into bids. Defaults to zero for
-    /// snapshots written before output minimums were tracked.
-    #[serde(default)]
+    /// Atomic quote-token minimum output when selling base into bids.
     pub minimum_out_quote: f64,
     pub bids: Vec<NativePriceLevel>,
     pub asks: Vec<NativePriceLevel>,
@@ -344,6 +316,8 @@ impl NativeSupportedChain {
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
+
     use super::*;
 
     fn addr(address: &str) -> Bytes {
@@ -395,33 +369,6 @@ mod tests {
 
             assert!(result.is_err(), "level {level:?} should be rejected");
         }
-    }
-
-    #[test]
-    fn defaults_output_minimums_when_deserializing_legacy_price_data() {
-        let price_data = NativePriceData {
-            base_address: addr("0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"),
-            quote_address: addr("0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"),
-            minimum_in_base: 1.0,
-            minimum_in_quote: 2.0,
-            minimum_out_base: 3.0,
-            minimum_out_quote: 4.0,
-            bids: vec![],
-            asks: vec![],
-        };
-        let mut value = serde_json::to_value(price_data).unwrap();
-        let object = value
-            .as_object_mut()
-            .expect("NativePriceData serializes as an object");
-        object.remove("minimum_out_base");
-        object.remove("minimum_out_quote");
-
-        let decoded: NativePriceData = serde_json::from_value(value).unwrap();
-
-        assert_eq!(decoded.minimum_in_base, 1.0);
-        assert_eq!(decoded.minimum_in_quote, 2.0);
-        assert_eq!(decoded.minimum_out_base, 0.0);
-        assert_eq!(decoded.minimum_out_quote, 0.0);
     }
 
     #[test]

@@ -146,10 +146,9 @@ contract NativeExecutor is IExecutor {
             )
         }
 
-        // Native's firm-quote calldata leaves both unsigned override arguments
-        // at zero. Tycho owns these fields during execution: accepting a pre-set
-        // seller amount could bypass amountIn, while a pre-set minimum would
-        // disable Native's automatic slippage adjustment.
+        // actualSellerAmount and actualMinOutputAmount are the only tradeRFQT
+        // arguments not covered by the maker's signature, so require both to be
+        // zero in the encoded payload.
         if (actualSellerAmount != 0 || actualMinOutputAmount != 0) {
             revert NativeExecutor__UnexpectedOverride();
         }

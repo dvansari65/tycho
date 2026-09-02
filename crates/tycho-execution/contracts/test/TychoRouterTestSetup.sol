@@ -328,7 +328,7 @@ contract TychoRouterTestSetup is
     }
 
     function getNativeRouterV4() internal view returns (address) {
-        if (block.chainid == 1) return NATIVE_ROUTER_V4;
+        if (block.chainid == 1) return NATIVE_ROUTER_V4_ETHEREUM;
         if (block.chainid == 8453) return NATIVE_ROUTER_V4_BASE;
         if (block.chainid == 42161) return NATIVE_ROUTER_V4_ARBITRUM;
         if (block.chainid == 56) return NATIVE_ROUTER_V4_BSC;

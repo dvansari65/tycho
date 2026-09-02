@@ -359,7 +359,7 @@ contract NativeExecutorForkTest is Test, Constants {
 
     function setUp() public {
         vm.createSelectFork(vm.rpcUrl("mainnet"), FORK_BLOCK);
-        nativeExecutor = new NativeExecutor(NATIVE_ROUTER_V4);
+        nativeExecutor = new NativeExecutor(NATIVE_ROUTER_V4_ETHEREUM);
     }
 
     function _recordedQuotePayload()
@@ -381,7 +381,7 @@ contract NativeExecutorForkTest is Test, Constants {
         return abi.encodePacked(
             bytes20(USDC_ADDR),
             bytes20(WETH_ADDR),
-            bytes20(NATIVE_ROUTER_V4),
+            bytes20(NATIVE_ROUTER_V4_ETHEREUM),
             bytes32(SIGNED_AMOUNT_IN),
             payload
         );
@@ -400,7 +400,7 @@ contract NativeExecutorForkTest is Test, Constants {
     function _fundAndApprove(uint256 amountIn) private {
         deal(USDC_ADDR, address(nativeExecutor), amountIn);
         vm.prank(address(nativeExecutor));
-        IERC20(USDC_ADDR).approve(NATIVE_ROUTER_V4, amountIn);
+        IERC20(USDC_ADDR).approve(NATIVE_ROUTER_V4_ETHEREUM, amountIn);
     }
 
     function _executeRecordedQuote(uint256 actualAmountIn)

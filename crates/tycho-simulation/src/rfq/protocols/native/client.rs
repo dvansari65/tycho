@@ -19,10 +19,7 @@ use tycho_common::{
     Bytes,
 };
 
-use super::models::{
-    normalize_native_address, NativeOrderbookEntry, NativeOrderbookSide, NativePriceData,
-    NativePriceLevel,
-};
+use super::models::{NativeOrderbookEntry, NativeOrderbookSide, NativePriceData, NativePriceLevel};
 use crate::{
     rfq::{
         client::RFQClient,
@@ -78,24 +75,20 @@ impl AggregatedLevels {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct NativeClient {
-    pub chain: Chain,
-    pub endpoint: String,
+    chain: Chain,
+    endpoint: String,
     #[serde(skip_serializing, default)]
-    pub api_key: String,
-    pub tokens: HashSet<Bytes>,
-    pub tvl: f64,
-    pub quote_tokens: HashSet<Bytes>,
-    pub poll_time: Duration,
-    pub quote_timeout: Duration,
+    api_key: String,
+    tokens: HashSet<Bytes>,
+    tvl: f64,
+    quote_tokens: HashSet<Bytes>,
+    poll_time: Duration,
+    quote_timeout: Duration,
 }
 
 impl NativeClient {
     pub const PROTOCOL_SYSTEM: &'static str = "rfq:native";
     pub const DEFAULT_ENDPOINT: &'static str = "https://v2.api.native.org/swap-api-v2/v1";
-
-    fn http_client(&self) -> &Client {
-        &NATIVE_HTTP_CLIENT
-    }
 
     // Native API error codes:
     // <https://docs.native.org/native-dev/build-with-native/swap-aggregators/firmquote-swap-apis/miscellaneous/error-handling#error-codes>
@@ -139,7 +132,11 @@ impl NativeClient {
         quote_timeout: Duration,
     ) -> Result<Self, RFQError> {
         NativeSupportedChain::try_from(chain).map_err(RFQError::InvalidInput)?;
-        Self::validate_poll_time(poll_time)?;
+        if poll_time.is_zero() {
+            return Err(RFQError::InvalidInput(
+                "Native polling interval must be greater than zero".to_string(),
+            ))
+        }
         Ok(Self {
             chain,
             endpoint: Self::DEFAULT_ENDPOINT.to_string(),
@@ -150,15 +147,6 @@ impl NativeClient {
             poll_time,
             quote_timeout,
         })
-    }
-
-    fn validate_poll_time(poll_time: Duration) -> Result<(), RFQError> {
-        if poll_time.is_zero() {
-            return Err(RFQError::InvalidInput(
-                "Native polling interval must be greater than zero".to_string(),
-            ))
-        }
-        Ok(())
     }
 
     fn select_tvl_conversion_book<'a>(
@@ -230,8 +218,7 @@ impl NativeClient {
 
     async fn fetch_orderbook(&self) -> Result<Vec<NativeOrderbookEntry>, RFQError> {
         let chain = NativeSupportedChain::try_from(self.chain).map_err(RFQError::InvalidInput)?;
-        let response = self
-            .http_client()
+        let response = NATIVE_HTTP_CLIENT
             .get(format!("{}/orderbook", self.endpoint))
             // `showNative` is not boolean: its value selects the address used for native-token
             // books. Request address(0) so the response matches Tycho's internal representation.
@@ -403,24 +390,17 @@ impl NativeClient {
             })?;
 
         // Prevents silently accepting a mismatched/malicious quote.
-        let seller_token = normalize_native_address(bytes_to_address(&params.token_in)?);
-        let buyer_token = normalize_native_address(bytes_to_address(&params.token_out)?);
-        let order_seller_token = Address::from_str(&order.seller_token)
-            .map(normalize_native_address)
-            .map_err(|e| {
-                RFQError::ParsingError(format!(
-                    "Invalid Native seller token {}: {e}",
-                    order.seller_token
-                ))
-            })?;
-        let order_buyer_token = Address::from_str(&order.buyer_token)
-            .map(normalize_native_address)
-            .map_err(|e| {
-                RFQError::ParsingError(format!(
-                    "Invalid Native buyer token {}: {e}",
-                    order.buyer_token
-                ))
-            })?;
+        let seller_token = bytes_to_address(&params.token_in)?;
+        let buyer_token = bytes_to_address(&params.token_out)?;
+        let order_seller_token = Address::from_str(&order.seller_token).map_err(|e| {
+            RFQError::ParsingError(format!(
+                "Invalid Native seller token {}: {e}",
+                order.seller_token
+            ))
+        })?;
+        let order_buyer_token = Address::from_str(&order.buyer_token).map_err(|e| {
+            RFQError::ParsingError(format!("Invalid Native buyer token {}: {e}", order.buyer_token))
+        })?;
         if order_seller_token != seller_token || order_buyer_token != buyer_token {
             return Err(RFQError::ParsingError(format!(
                 "Native Relay quote token mismatch: expected {}/{}, got {}/{}",
@@ -610,8 +590,7 @@ impl NativeClient {
         request_data: &FirmQuoteRequest,
         params: &GetAmountOutParams,
     ) -> Result<SignedQuote, QuoteAttemptError> {
-        let response = self
-            .http_client()
+        let response = NATIVE_HTTP_CLIENT
             .get(format!("{}/firm-quote", self.endpoint))
             .query(request_data)
             .header("apikey", &self.api_key)
@@ -678,12 +657,6 @@ impl RFQClient for NativeClient {
         let client = self.clone();
 
         Box::pin(async_stream::stream! {
-            // `NativeClient` is deserializable and its fields are public, so construction-time
-            // validation alone cannot guarantee this invariant at the Tokio boundary.
-            if let Err(error) = Self::validate_poll_time(client.poll_time) {
-                yield Err(error);
-                return;
-            }
             let mut current_components: HashMap<String, ComponentWithState> = HashMap::new();
             let mut ticker = interval(client.poll_time);
 
@@ -992,29 +965,6 @@ mod tests {
         let result = NativeClientBuilder::new(Chain::Ethereum, "test-api-key".to_string())
             .poll_time(Duration::ZERO)
             .build();
-
-        assert!(matches!(
-            result,
-            Err(RFQError::InvalidInput(message))
-                if message == "Native polling interval must be greater than zero"
-        ));
-    }
-
-    #[tokio::test]
-    async fn stream_rejects_zero_poll_time_if_construction_is_bypassed() {
-        let mut client = NativeClient::new(
-            Chain::Ethereum,
-            "test-api-key".to_string(),
-            HashSet::new(),
-            0.0,
-            HashSet::new(),
-            Duration::from_secs(1),
-            Duration::from_secs(5),
-        )
-        .unwrap();
-        client.poll_time = Duration::ZERO;
-
-        let result = client.stream().next().await.unwrap();
 
         assert!(matches!(
             result,
@@ -1575,11 +1525,11 @@ mod tests {
     }
 
     #[test]
-    fn accepts_native_eth_response_using_e_address_alias() {
+    fn accepts_native_eth_response_using_zero_address() {
         let mut params = create_test_quote_params();
         params.token_in = Bytes::zero(20);
         let mut response = successful_quote_response(&params.amount_in.to_string());
-        response.orders[0].seller_token = "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE".to_string();
+        response.orders[0].seller_token = "0x0000000000000000000000000000000000000000".to_string();
         response.tx_request.value = params.amount_in.to_string();
 
         let quote = NativeClient::process_quote_response(response, &params).unwrap();
@@ -1632,7 +1582,7 @@ mod tests {
     }
 
     #[test]
-    fn accepts_native_eth_orderbook_using_e_address_alias() {
+    fn accepts_native_eth_orderbook_using_zero_address() {
         let tycho_native_eth = Bytes::zero(20);
         let usdc = Bytes::from_str("0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48").unwrap();
         let client = NativeClient::new(
@@ -1647,7 +1597,7 @@ mod tests {
         .unwrap();
 
         let entry: NativeOrderbookEntry = serde_json::from_value(serde_json::json!({
-            "base_address": "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE",
+            "base_address": tycho_native_eth.to_string(),
             "quote_address": usdc.to_string(),
             "minimum_in_base": 1.0,
             "side": "bid",

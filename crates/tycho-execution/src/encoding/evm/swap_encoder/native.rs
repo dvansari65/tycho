@@ -314,6 +314,7 @@ mod test {
             quote_amount_in: None,
             quote_amount_out,
             quote_data: native_quote_data.into_iter().collect(),
+            ..Default::default()
         };
 
         let token_in = Bytes::from("0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48");
@@ -374,6 +375,7 @@ mod test {
                 ("calldata".to_string(), calldata),
                 ("deadline_timestamp".to_string(), Bytes::from(0u64.to_be_bytes().to_vec())),
             ]),
+            ..Default::default()
         };
         let token_in = Bytes::from("0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48");
         let token_out = Bytes::from("0xc02aaa39b223fe8d0a0e5C4F27eAD9083C756Cc2");
@@ -417,6 +419,7 @@ mod test {
                 ("target".to_string(), target_bytes),
                 ("calldata".to_string(), Bytes::from(vec![0x09, 0x47, 0xc2, 0xd9])),
             ]),
+            ..Default::default()
         };
         let token_in = Bytes::from("0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48");
         let token_out = Bytes::from("0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2");

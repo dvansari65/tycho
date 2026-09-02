@@ -88,7 +88,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::rfq::protocols::native::{client::NativeClient, models::NativePriceLevel};
+    use crate::rfq::protocols::native::models::NativePriceLevel;
 
     fn weth() -> Token {
         Token::new(
@@ -192,8 +192,6 @@ mod tests {
         assert_eq!(result.book.asks.len(), 1);
         assert_eq!(result.book.bids[0].price, 3000.0);
         assert_eq!(result.book.bids[0].quantity, 1.5);
-        assert_eq!(result.client.endpoint, NativeClient::DEFAULT_ENDPOINT);
-        assert_eq!(result.client.api_key, "test-api-key");
     }
 
     #[tokio::test]
