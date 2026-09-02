@@ -1767,7 +1767,7 @@ mod tests {
     fn test_admits_requires_every_registered_filter() {
         // Two filters on one exchange both apply: the second registration does not replace the
         // first, and a component must pass both. An exchange without filters admits everything.
-        let mut decoder = TychoStreamDecoder::<BlockHeader>::new();
+        let mut decoder = TychoStreamDecoder::<BlockHeader>::new(Chain::Ethereum);
         decoder.register_filter("x", rejects_a);
         decoder.register_filter("x", rejects_b);
 
