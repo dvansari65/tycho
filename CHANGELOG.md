@@ -1,3 +1,11 @@
+## [0.378.2](https://github.com/propeller-heads/tycho/compare/0.378.1...0.378.2) (2026-09-02)
+
+
+### Bug Fixes
+
+* **integration:** collect pAMM overrides for every venue Titan serves ([f1d8661](https://github.com/propeller-heads/tycho/commit/f1d86619f9b5b0e4da8e010730f800e94e055015))
+* **integration:** replace a pAMM's overrides per block, not merge them ([a00e816](https://github.com/propeller-heads/tycho/commit/a00e81618fa04fc2c41981a1d684b6b968ba2c06))
+
 ## [0.378.1](https://github.com/propeller-heads/tycho/compare/0.378.0...0.378.1) (2026-09-02)
 
 
