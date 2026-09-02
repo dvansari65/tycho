@@ -1,3 +1,11 @@
+## [0.378.1](https://github.com/propeller-heads/tycho/compare/0.378.0...0.378.1) (2026-09-02)
+
+
+### Bug Fixes
+
+* share one protocol cache across all extractors ([114a576](https://github.com/propeller-heads/tycho/commit/114a576c87ed351eef171276f02f120f45d1f101))
+* share one protocol cache across all extractors ([#1381](https://github.com/propeller-heads/tycho/issues/1381)) ([452a7d1](https://github.com/propeller-heads/tycho/commit/452a7d1fab328e2521c18a800b3dc754c1f1939b))
+
 ## [0.378.0](https://github.com/propeller-heads/tycho/compare/0.377.0...0.378.0) (2026-09-02)
 
 
