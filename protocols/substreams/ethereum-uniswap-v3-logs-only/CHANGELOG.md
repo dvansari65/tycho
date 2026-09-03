@@ -11,6 +11,11 @@
   `tycho/evm/v1/entity.proto`, which is why they could not name the right type; it is now imported.
   The wire data was always `BlockEntityChanges` — only the declaration was wrong, and
   `map_protocol_changes`, the module the indexer consumes, was unaffected.
+- Add the Robinhood Chain SushiSwap V3 manifest, `robinhood-sushiswap-v3.yaml` (factory
+  `0xe51960f1b45f1c9fb6d166e6a884f866fc70433b`, first pool at block `6606213`). The deployment is
+  canonical Uniswap V3: same factory and pool event layouts, immutable per-pool fee, and the
+  `uniswapV3SwapCallback` family. The wasm is unchanged, so this manifest ships on the v0.1.4 build
+  and needs its `protocol_type_name` parameter; components are emitted as `sushiswap_v3_pool`.
 
 ## v0.1.3
 
