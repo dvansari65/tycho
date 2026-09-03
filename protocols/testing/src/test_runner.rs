@@ -1330,8 +1330,7 @@ impl TestRunner {
         let rpc_tools = RPCTools::new(self.rpc_provider.url.as_ref(), &chain_model).await?;
 
         // Prepare router overwrites data
-        let router_overwrites_data =
-            Some(execution::create_router_overwrites_data(protocol_system)?);
+        let router_overwrites_data = execution::create_router_overwrites_data(protocol_system)?;
 
         info!("Executing {} simulations in batches ...", filtered_execution_data.len());
 
@@ -1362,6 +1361,7 @@ impl TestRunner {
                 batch.clone(),
                 block,
                 router_overwrites_data.clone(),
+                None,
             )
             .await;
 
