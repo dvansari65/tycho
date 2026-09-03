@@ -1,3 +1,25 @@
+## [0.381.0](https://github.com/propeller-heads/tycho/compare/0.380.0...0.381.0) (2026-09-03)
+
+
+### Features
+
+* **integration-test:** bypass the executor activation timelock in execution simulations ([#1324](https://github.com/propeller-heads/tycho/issues/1324)) ([8d731b7](https://github.com/propeller-heads/tycho/commit/8d731b7cf04d64a974e505b5d0d581dba9c841ab))
+
+## [0.380.0](https://github.com/propeller-heads/tycho/compare/0.379.2...0.380.0) (2026-09-03)
+
+
+### Features
+
+* **substreams:** parameterize uniswap-v3-logs-only protocol type ([2f5181a](https://github.com/propeller-heads/tycho/commit/2f5181a53a1254a5a497afca15bd4497b3fd0141))
+* **substreams:** parameterize uniswap-v3-logs-only protocol type ([#1388](https://github.com/propeller-heads/tycho/issues/1388)) ([36f54c1](https://github.com/propeller-heads/tycho/commit/36f54c1ccb7f1e8b343f9f8803a8f44de47db3ed))
+* **testing:** add the Robinhood Substreams endpoint ([d010a04](https://github.com/propeller-heads/tycho/commit/d010a0461e26e448cc7216e3f8a1a7c1e763d5a4))
+* **testing:** add the Robinhood Substreams endpoint ([#1392](https://github.com/propeller-heads/tycho/issues/1392)) ([b096ba5](https://github.com/propeller-heads/tycho/commit/b096ba5a3fca46cb624eeac586acd851d704b593))
+
+
+### Bug Fixes
+
+* **substreams:** declare the right map_pools_created output type ([36d7385](https://github.com/propeller-heads/tycho/commit/36d7385448cdcc81232e98d845059be450a13ef6))
+
 ## [0.379.2](https://github.com/propeller-heads/tycho/compare/0.379.1...0.379.2) (2026-09-03)
 
 
