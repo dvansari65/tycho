@@ -94,6 +94,60 @@ release `router-trades-db` there (namespace `dev-tycho`) is a Postgres 16 Statef
 writing to `router-trades-db:5432`. Grafana reaches the database through the same service with
 the read-only `grafana` role.
 
+## Updating a deployed sink
+
+Two properties of `substreams-sink-sql` decide what an update costs, and both bite silently.
+
+**The cursor is keyed by the output module hash.** That hash covers every module definition —
+including `initialBlock` and `params` — and the compiled wasm. The sinks run with the default
+`--on-module-hash-mismatch=error`, so when the hash changes the container exits at startup with a
+mismatch against the row in `cursors_<chain>`, and it keeps crashlooping until that row is
+deleted. What changed decides the blast radius:
+
+| change | new hash for |
+|---|---|
+| one chain's manifest (`initialBlock`, router `params`) | that chain only |
+| anything under `src/`, `Cargo.lock`, the wasm build | **every chain** |
+
+A local `cargo build` is not byte-identical to the Docker build, so production hashes cannot be
+precomputed on a laptop; CI builds of the same source are stable, so an image rebuild without a
+source change keeps every cursor valid.
+
+**The sink does not upsert.** `db_out` uses `create_row`, which is `OPERATION_CREATE`, and the
+postgres dialect turns that into a plain `INSERT` with no `ON CONFLICT`. Any block the sink reads
+a second time fails on the `TEXT PRIMARY KEY` and takes the container down. So whenever a chain
+restarts below its previous cursor, delete that chain's rows in the range that will be re-read —
+in practice, all of them.
+
+### Procedure
+
+1. Merge the change and let the release build the image; `promote-to-dev` writes the tag into
+   `helmwave/dev/versions.yml` and the dev deployment rolls the pod.
+2. Chains whose hash changed exit on the mismatch; the others resume from their cursors. This is
+   expected, and it is contained: the sinks have no readiness probe and Postgres is a separate
+   release.
+3. Clear the state of each affected chain, now that its sink is down and not flushing:
+
+   ```sql
+   DELETE FROM cursors_<chain>;
+   DELETE FROM substreams_history_<chain>;
+   -- only when the chain will re-read blocks it has already written
+   DELETE FROM trades             WHERE chain = '<chain>';
+   DELETE FROM trade_hops         WHERE chain = '<chain>';
+   DELETE FROM fees_taken         WHERE chain = '<chain>';
+   DELETE FROM fee_config_events  WHERE chain = '<chain>';
+   DELETE FROM router_call_errors WHERE chain = '<chain>';
+   ```
+
+4. The container recovers on its next backoff restart. Confirm the new range in its log:
+   `restarting_at: None` together with the expected `resolved_start_block`.
+
+Never reach for `--on-module-hash-mismatch=ignore` to skip step 3: it resumes from the highest
+cursor in the table, which is block 0 for a chain that has never produced data.
+
+`cursors_<chain>` holds one bookmark row and `substreams_history_<chain>` is the reorg-undo
+journal. Neither holds trade data, so clearing them loses no trade.
+
 ## Module graph
 
 ```
