@@ -1,3 +1,10 @@
+## [0.381.0](https://github.com/propeller-heads/tycho/compare/0.380.0...0.381.0) (2026-09-03)
+
+
+### Features
+
+* **integration-test:** bypass the executor activation timelock in execution simulations ([#1324](https://github.com/propeller-heads/tycho/issues/1324)) ([8d731b7](https://github.com/propeller-heads/tycho/commit/8d731b7cf04d64a974e505b5d0d581dba9c841ab))
+
 ## [0.380.0](https://github.com/propeller-heads/tycho/compare/0.379.2...0.380.0) (2026-09-03)
 
 
