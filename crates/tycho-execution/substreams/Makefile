@@ -9,7 +9,7 @@ DSN ?= psql://tycho:tycho@localhost:5433/router_trades?sslmode=disable
 START ?=
 STOP ?= +10
 
-.PHONY: build test test-pricing test-executors test-views lint fmt protogen pack run setup executors views sink price-once price-loop
+.PHONY: build test test-pricing test-executors test-views check-manifests lint fmt protogen pack run setup executors views sink price-once price-loop
 
 # --target-dir keeps the wasm where the manifests expect it even with a global CARGO_TARGET_DIR.
 build:
@@ -27,7 +27,10 @@ test-executors:
 test-views:
 	./scripts/test_views.sh
 
-lint:
+check-manifests:
+	python3 scripts/check_manifests.py
+
+lint: check-manifests
 	cargo +nightly fmt -- --check
 	cargo +nightly clippy --all --all-features --all-targets -- -D warnings
 

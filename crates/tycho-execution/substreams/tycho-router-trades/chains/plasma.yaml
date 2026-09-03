@@ -19,9 +19,21 @@ binaries:
     file: ../../target/wasm32-unknown-unknown/release/tycho_router_trades.wasm
 
 modules:
+  - name: index_router_activity
+    kind: blockIndex
+    initialBlock: 27191979
+    inputs:
+      - source: sf.ethereum.type.v2.Block
+    output:
+      type: proto:sf.substreams.index.v1.Keys
+
   - name: map_fee_config_events
     kind: map
     initialBlock: 27191979
+    blockFilter:
+      module: index_router_activity
+      query:
+        string: "fee_cfg"
     inputs:
       - params: string
       - source: sf.ethereum.type.v2.Block
@@ -39,6 +51,10 @@ modules:
   - name: map_trades
     kind: map
     initialBlock: 27191979
+    blockFilter:
+      module: index_router_activity
+      query:
+        string: "addr:0x8f9b3b0451efff0ae8100428aee35fa3cbc0b769 || addr:0xa7df4a8eeca477c8a869fb5a6578a3d39abe9a18 || addr:0x0953c7e23b44259e5e5630e9b97c31d7278c4c85"
     inputs:
       - params: string
       - source: sf.ethereum.type.v2.Block

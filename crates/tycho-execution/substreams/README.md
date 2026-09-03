@@ -332,6 +332,9 @@ Six places, and the deployment fails quietly if any of the last three is missed.
    The chain must serve Extended (Firehose) blocks. Trades are recovered from call traces, so a
    chain without them yields nothing at all rather than an error.
 
+   Put the same routers in the `blockFilter` of `map_trades`, and `fee_cfg` in the one of
+   `map_fee_config_events`. Run `make check-manifests` to confirm.
+
 4. **Pin the pricing tokens** in `pricing/preferred_tokens.sql`: the native sentinel row for the
    chain with its native symbol and price band, at least one stablecoin, and the majors. Without a
    pinned stablecoin the chain has no USD anchor and every trade stays unpriced. Verify each
@@ -356,9 +359,29 @@ Nothing has to be cleared in the database: a chain with no cursor row starts at 
 ## Module graph
 
 ```
-map_fee_config_events ─▶ store_fee_config ─▶ map_trades ─▶ db_out (DatabaseChanges)
-        └──────────────────────────────────────────────────▶
+index_router_activity ─┬─▶ map_fee_config_events ─▶ store_fee_config ─▶ map_trades ─▶ db_out
+                       └────────────────────────────────────────────▶            └──▶
 ```
+
+### Block index
+
+`index_router_activity` writes two kinds of key per block: `addr:0x<address>` for every call
+frame, and `fee_cfg` for a block that carries a log the fee-config decoders recognise.
+`map_trades` and `map_fee_config_events` carry a `blockFilter` over them, so the server skips a
+block that has neither, which is more than 999 blocks in 1000. Everything downstream of a
+filtered module, `store_fee_config` included, only sees the blocks that pass.
+
+`map_trades` filters on the routers of its params. Its filter has to name the same addresses,
+because a filter that is too narrow drops trades and reports nothing;
+`scripts/check_manifests.py` compares the two and runs in CI.
+
+`map_fee_config_events` filters on `fee_cfg` alone. It decodes a FeeCalculator event from any
+emitter, and a list of addresses would not hold: nearly half of the fee-config events stored so
+far come from an emitter no manifest configures. The index sets the key with the same two
+decoders the module uses, so the two cannot drift.
+
+The index takes no params and knows no router, so a new router changes the filter of the
+consumer and leaves the index alone. An index that is already built stays valid.
 
 ## Running locally
 

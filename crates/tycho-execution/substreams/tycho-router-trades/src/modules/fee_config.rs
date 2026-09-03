@@ -62,6 +62,14 @@ pub fn map_fee_config_events(params: String, block: Block) -> Result<FeeConfigEv
 
 type Decoded = (&'static str, Vec<u8>, String, String);
 
+/// Whether the log is one the fee-config decoders recognise, from any emitter.
+///
+/// The block index uses this to keep the blocks `map_fee_config_events` needs. It knows no
+/// router, so it tries both decoders.
+pub(crate) fn is_fee_config_log(log: &Log) -> bool {
+    decode_router_event(log).is_some() || decode_fee_calculator_event(log).is_some()
+}
+
 fn decode_router_event(log: &Log) -> Option<Decoded> {
     if let Some(ev) = router_v3_1::FeeCalculatorActivated::match_and_decode(log) {
         return Some((

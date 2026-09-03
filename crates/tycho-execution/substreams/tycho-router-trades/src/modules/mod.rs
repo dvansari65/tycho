@@ -1,9 +1,11 @@
 mod db_out;
 mod fee_config;
+mod index;
 mod trades;
 
 pub use db_out::db_out;
 pub use fee_config::{map_fee_config_events, store_fee_config};
+pub use index::index_router_activity;
 pub use trades::map_trades;
 
 /// Store key prefixes shared between the fee-config store writer and the trades reader.
