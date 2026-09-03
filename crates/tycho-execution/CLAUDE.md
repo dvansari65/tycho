@@ -302,6 +302,29 @@ chain's native token, so pricing anchors through the stablecoins pinned in
 `substreams/pricing/preferred_tokens.sql` and values a trade from one trusted side, implying the
 other side's price from the trade. See `substreams/README.md`.
 
+**Adding a chain** touches six places, and the last three fail silently when missed — follow
+"Adding a chain" in `substreams/README.md`:
+
+1. `substreams/tycho-router-trades/chains/<chain>.yaml` — new manifest: `network`, the router and
+   fee-calculator `params`, and `initialBlock` on all four modules.
+2. `initialBlock` set from the deployment block of the earliest router on that chain (binary
+   search `eth_getCode`), never a round number: the whole module graph is built from there.
+3. The chain must serve Extended (Firehose) blocks; trades come from call traces, so a chain
+   without them yields nothing rather than an error.
+4. `substreams/pricing/preferred_tokens.sql` — the native sentinel row plus at least one pinned
+   stablecoin, or the chain has no USD anchor and every trade stays unpriced. Pin by address and
+   verify the implied price; symbols are duplicated by fake tokens.
+5. `substreams/scripts/gen_tables.py` re-run, so `src/executors_table.rs` names the new chain's
+   executors.
+6. `substreams/docker-compose.yaml` and, in `helm-configuration`, the `$chains` list plus a
+   `TYCHO_<CHAIN>_DATABASE_URL` entry in
+   `helmwave/dev/values/tycho/router-trades/router-trades.yml`.
+
+**Changing a manifest or the Rust source changes the module hash**, which the sink cursors are
+keyed by; the affected containers then exit until their `cursors_<chain>` row is cleared, and
+because the sink writes plain `INSERT`s, any chain that re-reads written blocks needs its rows
+deleted too. See "Updating a deployed sink" in `substreams/README.md`.
+
 ## Build & Test
 
 ### Solidity (Foundry)

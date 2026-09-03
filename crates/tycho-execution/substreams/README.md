@@ -174,6 +174,55 @@ cursor in the table, which is block 0 for a chain that has never produced data.
 `cursors_<chain>` holds one bookmark row and `substreams_history_<chain>` is the reorg-undo
 journal. Neither holds trade data, so clearing them loses no trade.
 
+## Adding a chain
+
+Six places, and the deployment fails quietly if any of the last three is missed.
+
+1. **Collect the routers.** Every TychoRouter deployed on the chain, the ABI generation of each
+   (`v2`, `v3_0`, `v3_1`), and the FeeCalculator each router was constructed with. The constructor
+   emits no event, so that pairing is a manifest parameter; later rotations are replayed from
+   `FeeCalculatorActivated` / `FeeCalculatorUpdated`.
+
+2. **Find the deployment block of the earliest router**, with a binary search over `eth_getCode`
+   against the chain's node. This is `initialBlock`, and it goes on all four modules. Everything in
+   the graph, `store_fee_config` included, is built from there before the first row appears, so a
+   round number below the real block is pure cost — bsc started at 50,000,000 against a first
+   router at 98,458,505 and produced nothing for hours. A `START_BLOCK` on the container is not a
+   substitute: an existing cursor overrides the requested start block, and the store still builds
+   from its own `initialBlock`.
+
+3. **Write the manifest**, `tycho-router-trades/chains/<chain>.yaml`, copied from an existing one.
+   Set `network:` to the Substreams network name, the four `initialBlock` values, and the `params:`
+   of `map_fee_config_events` and `map_trades`:
+
+   ```
+   chain=<chain>&routers=<router>:<generation>,...&fee_calculators=<router>:<calculator>,...
+   ```
+
+   The chain must serve Extended (Firehose) blocks. Trades are recovered from call traces, so a
+   chain without them yields nothing at all rather than an error.
+
+4. **Pin the pricing tokens** in `pricing/preferred_tokens.sql`: the native sentinel row for the
+   chain with its native symbol and price band, at least one stablecoin, and the majors. Without a
+   pinned stablecoin the chain has no USD anchor and every trade stays unpriced. Verify each
+   address before trusting it — `price / 10^decimals` of each pinned stablecoin should agree with
+   the others, and that agreed value is the USD price of the native token. Never pick a token by
+   symbol: Tycho holds about 40 tokens called `cbBTC` on base alone.
+
+5. **Regenerate the lookup tables** with `scripts/gen_tables.py`, so `src/executors_table.rs`
+   covers the new chain's executors. Without it a hop carries the executor address but no protocol
+   name.
+
+6. **Wire the deployment.** Add a `sink-<chain>` service to `docker-compose.yaml` for local runs.
+   In `helm-configuration`, add the chain to the `$chains` list of
+   `helmwave/dev/values/tycho/router-trades/router-trades.yml`, which gives it a sink container, a
+   metrics port and a scrape entry, and add a `TYCHO_<CHAIN>_DATABASE_URL` entry pointing at that
+   chain's Tycho database so the pricer can reach its prices. The image bakes the packed `.spkg`
+   files, so the chain only runs after a release rebuilds it.
+
+Nothing has to be cleared in the database: a chain with no cursor row starts at its
+`initialBlock`.
+
 ## Module graph
 
 ```
