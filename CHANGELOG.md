@@ -1,3 +1,11 @@
+## [0.379.1](https://github.com/propeller-heads/tycho/compare/0.379.0...0.379.1) (2026-09-03)
+
+
+### Bug Fixes
+
+* **router-trades:** default Kaniko architecture ([d7ef9c1](https://github.com/propeller-heads/tycho/commit/d7ef9c1f29365483203ef854e801246503ea7920))
+* **router-trades:** unblock release CI ([#1385](https://github.com/propeller-heads/tycho/issues/1385)) ([c3c1fd6](https://github.com/propeller-heads/tycho/commit/c3c1fd6e6c81246bbc1f92ba0769db2f56381569))
+
 ## [0.379.0](https://github.com/propeller-heads/tycho/compare/0.378.4...0.379.0) (2026-09-03)
 
 
