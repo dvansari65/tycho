@@ -1,3 +1,11 @@
+## [0.379.2](https://github.com/propeller-heads/tycho/compare/0.379.1...0.379.2) (2026-09-03)
+
+
+### Bug Fixes
+
+* **router-trades:** isolate sink state by chain ([060f5fc](https://github.com/propeller-heads/tycho/commit/060f5fc2cee473bcae297cd26b532c0abf798f81))
+* **router-trades:** isolate sink state by chain ([#1387](https://github.com/propeller-heads/tycho/issues/1387)) ([bcc4c62](https://github.com/propeller-heads/tycho/commit/bcc4c6240ecc3ca9e7baa302160f01b0b348e75f))
+
 ## [0.379.1](https://github.com/propeller-heads/tycho/compare/0.379.0...0.379.1) (2026-09-03)
 
 
