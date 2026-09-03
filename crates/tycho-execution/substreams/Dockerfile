@@ -6,7 +6,7 @@ ARG SINK_SQL_VERSION=v4.13.1
 
 FROM rust:1.91-bookworm AS build
 ARG SUBSTREAMS_VERSION
-ARG TARGETARCH
+ARG TARGETARCH=amd64
 RUN case "$TARGETARCH" in amd64) ARCH=x86_64 ;; arm64) ARCH=arm64 ;; *) echo "unsupported arch $TARGETARCH" && exit 1 ;; esac \
     && curl -fsSL --retry 5 --retry-all-errors -o /tmp/substreams.tgz \
        "https://github.com/streamingfast/substreams/releases/download/${SUBSTREAMS_VERSION}/substreams_linux_${ARCH}.tar.gz" \
@@ -23,7 +23,7 @@ RUN mkdir -p /spkg && for manifest in tycho-router-trades/chains/*.yaml; do \
 
 FROM debian:bookworm-slim
 ARG SINK_SQL_VERSION
-ARG TARGETARCH
+ARG TARGETARCH=amd64
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl postgresql-client \
     && apt-get clean \
     && case "$TARGETARCH" in amd64) ARCH=x86_64 ;; arm64) ARCH=arm64 ;; esac \
