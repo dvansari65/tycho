@@ -16,6 +16,14 @@
   canonical Uniswap V3: same factory and pool event layouts, immutable per-pool fee, and the
   `uniswapV3SwapCallback` family. The wasm is unchanged, so this manifest ships on the v0.1.4 build
   and needs its `protocol_type_name` parameter; components are emitted as `sushiswap_v3_pool`.
+- Add the Robinhood Chain RobinSwap V3 manifest, `robinhood-robinswap-v3.yaml` (factory
+  `0xea561e058313b96011e5070ca7d0f027a44e3748`, first pool at block `6066330`). The deployment uses
+  canonical Uniswap V3 events and swap mathematics. Pools initialize `feeProtocol` to
+  `7 + (7 << 4)`, which splits the configured swap fee differently between LPs and the protocol but
+  leaves the trader's amount out and the event-derived balances unchanged. The wasm is unchanged,
+  so this manifest ships on the v0.1.4 build and needs its `protocol_type_name` parameter;
+  components are emitted as `robinswap_v3_pool`.
+
 
 ## v0.1.3
 
