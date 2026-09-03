@@ -146,7 +146,7 @@ impl SwapEncoderRegistry {
             "vm:balancer_v2" => {
                 Ok(Box::new(BalancerV2SwapEncoder::new(executor_address, self.chain, config)?))
             }
-            "uniswap_v3" | "pancakeswap_v3" => {
+            "uniswap_v3" | "pancakeswap_v3" | "sushiswap_v3" => {
                 Ok(Box::new(UniswapV3SwapEncoder::new(executor_address, self.chain, config)?))
             }
             "uniswap_v4" => {
