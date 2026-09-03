@@ -30,12 +30,17 @@ sink)
 		echo "no package for chain '$CHAIN'" >&2
 		exit 1
 	}
+	system_table_args=(
+		--cursors-table "cursors_${CHAIN}"
+		--history-table "substreams_history_${CHAIN}"
+	)
 	args=("$DSN" "$spkg")
 	[ -n "${START_BLOCK:-}${STOP_BLOCK:-}" ] && args+=("${START_BLOCK:-}:${STOP_BLOCK:-}")
 	[ -n "${SUBSTREAMS_ENDPOINT:-}" ] && args+=(-e "$SUBSTREAMS_ENDPOINT")
 	wait_for_db "$DSN"
-	substreams-sink-sql setup "$DSN" "$spkg"
+	substreams-sink-sql setup "$DSN" "$spkg" "${system_table_args[@]}"
 	exec substreams-sink-sql run "${args[@]}" \
+		"${system_table_args[@]}" \
 		--batch-block-flush-interval "${FLUSH_INTERVAL:-100}" \
 		--metrics-listen-addr "${METRICS_ADDR:-:9102}"
 	;;
