@@ -1,3 +1,11 @@
+## [0.384.0](https://github.com/propeller-heads/tycho/compare/0.383.0...0.384.0) (2026-09-03)
+
+
+### Features
+
+* **substreams:** index Ramses V3 on Robinhood Chain ([ad835a0](https://github.com/propeller-heads/tycho/commit/ad835a08d69e0cc37eb92e505e316e4994f41518))
+* **substreams:** index Ramses V3 on Robinhood Chain ([#1391](https://github.com/propeller-heads/tycho/issues/1391)) ([ad3a756](https://github.com/propeller-heads/tycho/commit/ad3a756cc36d69790cb8f7c59131873c49a840e7))
+
 ## [0.383.0](https://github.com/propeller-heads/tycho/compare/0.382.0...0.383.0) (2026-09-03)
 
 
