@@ -1,3 +1,11 @@
+## [0.382.0](https://github.com/propeller-heads/tycho/compare/0.381.0...0.382.0) (2026-09-03)
+
+
+### Features
+
+* **substreams:** index SushiSwap V3 on Robinhood Chain ([24a6041](https://github.com/propeller-heads/tycho/commit/24a60418c018d4cbc6c2be7b9c87b7d6e216bbd6))
+* **substreams:** index SushiSwap V3 on Robinhood Chain ([#1389](https://github.com/propeller-heads/tycho/issues/1389)) ([ca54e44](https://github.com/propeller-heads/tycho/commit/ca54e4400849f9b4a99c16fcec76e2570154c758))
+
 ## [0.381.0](https://github.com/propeller-heads/tycho/compare/0.380.0...0.381.0) (2026-09-03)
 
 
