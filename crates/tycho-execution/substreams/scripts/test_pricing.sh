@@ -18,8 +18,11 @@ trap cleanup EXIT
 wait_for_postgres() {
 	local container="$1"
 	local database="$2"
+	local logs
 	for _ in {1..30}; do
-		if docker exec "$container" pg_isready -q -U tycho -d "$database"; then
+		logs="$(docker logs "$container" 2>&1)"
+		if [[ "$logs" == *"PostgreSQL init process complete; ready for start up."* ]] &&
+			docker exec "$container" pg_isready -q -U tycho -d "$database"; then
 			return
 		fi
 		sleep 1
