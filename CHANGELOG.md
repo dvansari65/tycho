@@ -1,3 +1,16 @@
+## [0.385.0](https://github.com/propeller-heads/tycho/compare/0.384.0...0.385.0) (2026-09-03)
+
+
+### Features
+
+* **router-trades:** value trades in USD from preferred tokens ([230eb98](https://github.com/propeller-heads/tycho/commit/230eb98f3abb0f6297f1647cab486f3e9925b019))
+* **router-trades:** value trades in USD from preferred tokens ([#1398](https://github.com/propeller-heads/tycho/issues/1398)) ([232479e](https://github.com/propeller-heads/tycho/commit/232479e8f19857bf68f79bb25dad2e196e1ad8c2))
+
+
+### Bug Fixes
+
+* **router-trades:** correct the bsc and robinhood start blocks ([99f811f](https://github.com/propeller-heads/tycho/commit/99f811f38825aa9628b62babeb7628f205e3541d))
+
 ## [0.384.0](https://github.com/propeller-heads/tycho/compare/0.383.0...0.384.0) (2026-09-03)
 
 
