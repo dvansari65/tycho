@@ -1,3 +1,19 @@
+## [0.379.0](https://github.com/propeller-heads/tycho/compare/0.378.4...0.379.0) (2026-09-03)
+
+
+### Features
+
+* build and deploy the router-trades image ([6642fc8](https://github.com/propeller-heads/tycho/commit/6642fc8bbb5b134416b0bb7ed59ee225ee67f203))
+* **execution:** add TychoRouter trades substreams ([9c7d36f](https://github.com/propeller-heads/tycho/commit/9c7d36f825f19b42a76d526d3bdb973609e34be0))
+* **execution:** add TychoRouter trades substreams ([#1355](https://github.com/propeller-heads/tycho/issues/1355)) ([b9a1bfc](https://github.com/propeller-heads/tycho/commit/b9a1bfc8c919b8761f2630fc694278da0f71fcb8))
+* **router-trades:** add new router and fee calculator addresses ([770bb8a](https://github.com/propeller-heads/tycho/commit/770bb8a860b48716a8a7bf8a513072838f1a5413))
+
+
+### Bug Fixes
+
+* **router-trades:** correct indexed trade semantics and per-chain pricing ([#1376](https://github.com/propeller-heads/tycho/issues/1376)) ([2fdd734](https://github.com/propeller-heads/tycho/commit/2fdd73468ecae22d464b71550bfccb4794129612))
+* **router-trades:** isolate pricing failures by chain ([cd3d0e3](https://github.com/propeller-heads/tycho/commit/cd3d0e39fe72daf819fa12ef2a555ca368ac005d))
+
 ## [0.378.4](https://github.com/propeller-heads/tycho/compare/0.378.3...0.378.4) (2026-09-02)
 
 
