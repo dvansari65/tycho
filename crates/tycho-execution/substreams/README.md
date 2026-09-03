@@ -117,8 +117,9 @@ make run   CHAIN=ethereum START=25654569 STOP=+50      # print decoded trades
 make sink  CHAIN=ethereum                              # stream into Postgres
 ```
 
-Run one `make sink` per chain against the same database; the `chain` column is part of every
-primary key and params make each chain's module hash (and therefore sink cursor) distinct.
+Run one `make sink` per chain against the same database. The `chain` column is part of every
+business-table primary key. Deployed sinks use per-chain cursor and history tables so their block
+positions and reorg bookkeeping remain independent.
 
 `make sink` passes `--batch-block-flush-interval 100`: with the default (1000) the sink
 v4.13.1 did not flush the trailing partial batch when a bounded run reached its stop block.
