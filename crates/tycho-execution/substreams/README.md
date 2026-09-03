@@ -36,15 +36,37 @@ manifests under `tycho-router-trades/chains/`. The FeeCalculator constructor emi
 the initial pairing is a parameter; rotations (`FeeCalculatorActivated` / `FeeCalculatorUpdated`)
 and all fee-rate changes are replayed from events into `store_fee_config`.
 
-### Volume in ETH
+### Volume in USD
 
-Pricing is a post-ingestion step, not part of the substreams. The Tycho indexer database keeps
-the raw token units equivalent to 1 ETH in `token_price`, overwritten roughly hourly. Pricing
-converts that value into ETH per whole token using the token decimals.
-`pricing/price_trades.sql` stamps each *fresh* trade (`block_time > now() - 1 hour`,
-configurable) with the current `price_in_eth` / `price_out_eth`, token decimals and the resulting
-`volume_eth`. Older unpriced rows stay `NULL` rather than getting a wrong price, so a lagging sink
-or a backfill never pollutes the data.
+Pricing is a post-ingestion step, not part of the substreams. Tycho prices every token in the
+**native token of its chain**, so nothing is comparable across chains until it passes through a
+USD anchor. On bsc that native token is BNB and on polygon POL, which is why an ETH-denominated
+column was not merely mislabelled there but wrong.
+
+`pricing/preferred_tokens.sql` pins a short list of liquid tokens per chain, by address:
+
+* the rows marked `is_stable` carry the anchor. `price / 10^decimals` of a stablecoin is the USD
+  price of the native token, and the median over several stables survives one thin or stale row.
+* any pinned row makes its side of a trade usable for pricing.
+
+`pricing/price_trades.sql` values a trade from one side only, preferring a side that holds a
+pinned token (lowest `priority` first: stablecoins, then the native token and its wrapper, then
+BTC wrappers) and otherwise any side Tycho happens to price. The unit price of the token on the
+other side is then implied from the trade itself. That is what gives the long tail a price at all:
+Tycho prices 7852 tokens on ethereum but only 29 on unichain and 126 on arbitrum, while nearly
+every trade has a stablecoin, WETH or the native token on one side.
+
+Pinning is by address, never by symbol. Tycho holds many tokens with a copied symbol — base has
+about 40 `cbBTC` rows and ethereum a second 18-decimal `USDC` — and their prices are nonsense.
+`min_usd`/`max_usd` bound the resulting unit price so a pinned row that has drifted is dropped
+instead of trusted, and `decimals` is kept in the list rather than read from Tycho, whose token
+rows carry 18 for anything it has not analysed.
+
+Age is the reason `price_source` exists. Tycho keeps one current price per token, not a history.
+A stablecoin is worth 1 USD whenever the trade happened, so a stable-anchored trade is valued at
+any age and a backfill can be priced correctly. Every other basis would stamp today's price on an
+old trade, so those are limited to trades younger than `MAX_AGE`. `price_source` records the basis
+as `<in|out>_<stable|preferred|tycho>`; filter on it before summing `volume_usd`.
 
 The trades live in their own database (all chains in one table). Each chain has its own Tycho
 database, reached through `postgres_fdw`: one server and one `tycho_<chain>` schema per chain,
@@ -55,9 +77,13 @@ for chain in ethereum base ...; do                              # once per chain
   psql "$DSN" -v chain=$chain -v tycho_host=... -v tycho_port=5432 -v tycho_db=... \
        -v tycho_user=... -v tycho_password=... -f pricing/tycho_foreign_tables.sql
 done
+make price-setup                # migration + preferred-token list
 make price-once CHAIN=ethereum  # one chain; MAX_AGE='2 hours' widens the window
 make price-loop                 # every chain, independently, every 60 seconds
 ```
+
+The `price` container does `price-setup` itself on every start, so the list in the repository is
+the list in the database.
 
 For the local docker database, `psql "$DSN" -v chain=ethereum -f pricing/dev_stub.sql` creates
 stand-in tables in `tycho_ethereum` instead of the foreign tables.

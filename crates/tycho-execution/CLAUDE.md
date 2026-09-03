@@ -295,7 +295,12 @@ the deployed TychoRouter contracts. Trades are recovered from EVM call traces â€
 no swap event â€” decoded per ABI generation (`v2`, `v3_0`, `v3_1`), enriched with hop/executor
 data, `FeesTaken` amounts and the router fee configuration replayed from FeeCalculator events,
 then emitted as `DatabaseChanges` for `substreams-sink-sql` (`schema.sql`). Per-chain manifests
-live in `substreams/tycho-router-trades/chains/`. See `substreams/README.md`.
+live in `substreams/tycho-router-trades/chains/`.
+
+Trades are valued in USD after ingestion, not in the substreams. Tycho prices tokens in each
+chain's native token, so pricing anchors through the stablecoins pinned in
+`substreams/pricing/preferred_tokens.sql` and values a trade from one trusted side, implying the
+other side's price from the trade. See `substreams/README.md`.
 
 ## Build & Test
 
