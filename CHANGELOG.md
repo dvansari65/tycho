@@ -1,3 +1,11 @@
+## [0.387.0](https://github.com/propeller-heads/tycho/compare/0.386.1...0.387.0) (2026-09-04)
+
+
+### Features
+
+* add sky executor ([af20b85](https://github.com/propeller-heads/tycho/commit/af20b852919b532e4a4508a9c7e846e46da43d8c))
+* add sky executor ([#1393](https://github.com/propeller-heads/tycho/issues/1393)) ([856f3c1](https://github.com/propeller-heads/tycho/commit/856f3c1131921ccc6896c715856ada578ba3d8e1))
+
 ## [0.386.1](https://github.com/propeller-heads/tycho/compare/0.386.0...0.386.1) (2026-09-04)
 
 
