@@ -107,6 +107,29 @@ SELECT chain, executor, count(*) FROM trade_hop_protocols
 WHERE protocol_systems = ARRAY[]::TEXT[] GROUP BY 1, 2 ORDER BY 3 DESC;
 ```
 
+### Positive slippage
+
+A v3_1 trade carries `expected_amount_out`, so `positive_slippage` is the surplus the swaps
+produced above it. Who keeps that surplus takes two flags:
+
+| `positive_slippage_enabled` | `positive_slippage_exempt` | who keeps the surplus |
+| --- | --- | --- |
+| false | — | the receiver |
+| true | false | the router, as part of `router_fee_amount` |
+| true | true | the receiver |
+
+The exemption is FeeCalculator state, a `mapping(address => bool)` set by
+`setPositiveSlippageExempt` under `ROUTER_FEE_SETTER_ROLE`, and it emits
+`PositiveSlippageExemptionSet(address indexed client, bool exempt)`. `store_fee_config` keys it by
+calculator and client, so an exemption on one calculator does not follow a rotation to another.
+
+The client is the one the FeeCalculator resolves: the signed `client_fee_receiver`, or `eoa`
+(`tx.origin`) when that is zero. Only the calculator generation that has the exemption emits the
+event, so a trade on an older calculator resolves to `false`.
+
+`positive_slippage` is what the swaps produced, not what was taken. Read `router_fee_amount`,
+which comes from the `FeesTaken` event, for what the router actually collected.
+
 ### Router generations
 
 | Version | ABI | Deployments |
@@ -427,8 +450,10 @@ make test-pricing  # disposable two-chain PostgreSQL/FDW integration test
 Re-run it after adding an ABI. The executor table is not generated: `executors.sql` is kept by
 hand. ABIs come from the verified sources on Sourcify
 (`TychoRouterV2` = `0xfD0b31d2…`, `TychoRouterV3_0` = `0x1f8dB310…`, `TychoRouterV3_1` =
-`0xea290cE3…`, `FeeCalculator` = `0xA236E1F0…`); `FeeCalculatorV3_0.json` holds the `uint16`
-event signatures of the earlier FeeCalculator.
+`0xea290cE3…`, `FeeCalculator` = `0xA236E1F0…`). Two ABI files hold events that deployment does not have:
+`FeeCalculatorV3_0.json` the `uint16` event signatures of the earlier FeeCalculator, and
+`FeeCalculatorExemption.json` the `PositiveSlippageExemptionSet` of the later one. Each is
+events-only, and the decoders try them in turn.
 
 Regenerate protobuf bindings after editing `proto/` with `make protogen`. The abigen output under
 `src/abi/` is not committed; `build.rs` regenerates it from the minified JSON ABIs on every build.

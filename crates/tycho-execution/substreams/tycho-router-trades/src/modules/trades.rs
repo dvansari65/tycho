@@ -291,6 +291,12 @@ fn resolve_fee_config(
             .get_at(ordinal, keys::positive_slippage(&fee_calculator))
             .map(|v| v == "1")
             .unwrap_or(false);
+    // Only the calculator generation that has the exemption emits the event that sets this, so a
+    // trade on an older calculator resolves to false.
+    let positive_slippage_exempt = store
+        .get_at(ordinal, keys::positive_slippage_exempt(&fee_calculator, client))
+        .map(|v| v == "1")
+        .unwrap_or(false);
     Some(RouterFeeConfig {
         fee_calculator,
         fee_on_output_bps,
@@ -298,6 +304,7 @@ fn resolve_fee_config(
         custom_fee_on_output: custom_output.is_some(),
         custom_fee_on_client_fee: custom_client.is_some(),
         positive_slippage_enabled,
+        positive_slippage_exempt,
         bps_scale,
     })
 }

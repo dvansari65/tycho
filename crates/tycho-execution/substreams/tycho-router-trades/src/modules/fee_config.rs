@@ -12,8 +12,9 @@ use substreams_ethereum::{
 use super::{block_timestamp, events, hex_addr, keys};
 use crate::{
     abi::{
-        fee_calculator::events as fc, fee_calculator_v3_0::events as fc_v3_0,
-        tycho_router_v3_0::events as router_v3_0, tycho_router_v3_1::events as router_v3_1,
+        fee_calculator::events as fc, fee_calculator_exemption::events as fc_exempt,
+        fee_calculator_v3_0::events as fc_v3_0, tycho_router_v3_0::events as router_v3_0,
+        tycho_router_v3_1::events as router_v3_1,
     },
     params::Params,
     pb::tycho::router::v1::{FeeConfigEvent, FeeConfigEvents},
@@ -168,6 +169,14 @@ fn decode_fee_calculator_event(log: &Log) -> Option<Decoded> {
     );
     receiver_event!(fc::RouterFeeReceiverUpdated);
     receiver_event!(fc_v3_0::RouterFeeReceiverUpdated);
+    if let Some(ev) = fc_exempt::PositiveSlippageExemptionSet::match_and_decode(log) {
+        return Some((
+            events::POSITIVE_SLIPPAGE_EXEMPTION_SET,
+            ev.client,
+            String::new(),
+            if ev.exempt { "1".to_string() } else { "0".to_string() },
+        ));
+    }
     if let Some(ev) = fc::PositiveSlippageToggled::match_and_decode(log) {
         return Some((
             events::POSITIVE_SLIPPAGE_TOGGLED,
@@ -215,6 +224,9 @@ fn store_action(ev: &FeeConfigEvent) -> StoreAction {
             StoreAction::DeletePrefix(keys::custom_fee_on_client_fee(fc, &ev.client))
         }
         events::POSITIVE_SLIPPAGE_TOGGLED => set(keys::positive_slippage(fc)),
+        events::POSITIVE_SLIPPAGE_EXEMPTION_SET => {
+            set(keys::positive_slippage_exempt(fc, &ev.client))
+        }
         events::FEE_CALCULATOR_ACTIVATED | events::FEE_CALCULATOR_UPDATED => {
             set(keys::router_fee_calculator(fc))
         }
@@ -253,6 +265,53 @@ mod tests {
                 value: "42".to_string(),
             }
         );
+    }
+
+    #[test]
+    fn plans_positive_slippage_exemption() {
+        assert_eq!(
+            store_action(&event(events::POSITIVE_SLIPPAGE_EXEMPTION_SET)),
+            StoreAction::Set {
+                key: keys::positive_slippage_exempt(&[0xaa; 20], &[0xbb; 20]),
+                value: "42".to_string(),
+            }
+        );
+    }
+
+    /// keccak256("PositiveSlippageExemptionSet(address,bool)").
+    const EXEMPTION_TOPIC: &str =
+        "a6baebb00b4a9c84cac5db0f46f5d661a368efaf0577353494dd33083ec5979a";
+
+    fn exemption_log(client: [u8; 20], exempt: bool) -> Log {
+        let mut client_topic = vec![0u8; 12];
+        client_topic.extend_from_slice(&client);
+        let mut data = vec![0u8; 32];
+        data[31] = u8::from(exempt);
+        Log {
+            topics: vec![hex::decode(EXEMPTION_TOPIC).unwrap(), client_topic],
+            data,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn decodes_positive_slippage_exemption() {
+        let decoded = decode_fee_calculator_event(&exemption_log([0xcc; 20], true));
+        assert_eq!(
+            decoded,
+            Some((
+                events::POSITIVE_SLIPPAGE_EXEMPTION_SET,
+                vec![0xcc; 20],
+                String::new(),
+                "1".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn decodes_positive_slippage_exemption_removal() {
+        let decoded = decode_fee_calculator_event(&exemption_log([0xcc; 20], false));
+        assert_eq!(decoded.map(|d| d.3), Some("0".to_string()));
     }
 
     #[test]

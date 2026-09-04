@@ -35,6 +35,9 @@ CREATE TABLE IF NOT EXISTS trades (
     amount_out                 NUMERIC(78, 0),
     -- amount_out + total fees taken, i.e. what the swaps produced before fee deduction.
     gross_amount_out           NUMERIC(78, 0),
+    -- gross_amount_out - expected_amount_out, floored at zero: the surplus the swaps produced.
+    -- The router captured it only when positive_slippage_enabled AND NOT positive_slippage_exempt;
+    -- otherwise the receiver kept it. Read router_fee_amount for what was actually taken.
     positive_slippage          NUMERIC(78, 0),
     native_value               NUMERIC(78, 0) NOT NULL,
     gas_used                   BIGINT NOT NULL,
@@ -51,6 +54,10 @@ CREATE TABLE IF NOT EXISTS trades (
     custom_fee_on_output       BOOLEAN,
     custom_fee_on_client_fee   BOOLEAN,
     positive_slippage_enabled  BOOLEAN,
+    -- Whether this trade's client is exempt from positive slippage capture. The client is the
+    -- signed client_fee_receiver, or eoa (tx.origin) when that is zero. NULL on a row indexed
+    -- before this column existed.
+    positive_slippage_exempt   BOOLEAN,
     fee_bps_scale              BIGINT,
     router_fee_amount          NUMERIC(78, 0),
     client_fee_amount          NUMERIC(78, 0),

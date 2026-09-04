@@ -28,6 +28,9 @@ pub(crate) mod keys {
     pub fn positive_slippage(fc: &[u8]) -> String {
         format!("fc:{}:pos_slip", hex::encode(fc))
     }
+    pub fn positive_slippage_exempt(fc: &[u8], client: &[u8]) -> String {
+        format!("fc:{}:ps_exempt:{}", hex::encode(fc), hex::encode(client))
+    }
 }
 
 /// Event names emitted in `FeeConfigEvent.event`.
@@ -40,6 +43,7 @@ pub(crate) mod events {
     pub const CUSTOM_FEE_ON_CLIENT_FEE_REMOVED: &str = "CustomRouterFeeOnClientFeeRemoved";
     pub const ROUTER_FEE_RECEIVER_UPDATED: &str = "RouterFeeReceiverUpdated";
     pub const POSITIVE_SLIPPAGE_TOGGLED: &str = "PositiveSlippageToggled";
+    pub const POSITIVE_SLIPPAGE_EXEMPTION_SET: &str = "PositiveSlippageExemptionSet";
     pub const FEE_CALCULATOR_SET: &str = "FeeCalculatorSet";
     pub const FEE_CALCULATOR_ACTIVATED: &str = "FeeCalculatorActivated";
     pub const FEE_CALCULATOR_UPDATED: &str = "FeeCalculatorUpdated";
