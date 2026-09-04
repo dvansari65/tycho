@@ -1,3 +1,11 @@
+## [0.388.0](https://github.com/propeller-heads/tycho/compare/0.387.0...0.388.0) (2026-09-04)
+
+
+### Features
+
+* **router-trades:** release the spkg packages apart from the image ([18e7d07](https://github.com/propeller-heads/tycho/commit/18e7d07762992b4dcb92469546b8c815b0857cdb))
+* **router-trades:** release the spkg packages apart from the image ([#1401](https://github.com/propeller-heads/tycho/issues/1401)) ([4586a6a](https://github.com/propeller-heads/tycho/commit/4586a6a96dfb1b6ec22587f40b7c8e3068e249d8))
+
 ## [0.387.0](https://github.com/propeller-heads/tycho/compare/0.386.1...0.387.0) (2026-09-04)
 
 
