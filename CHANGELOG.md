@@ -1,3 +1,19 @@
+## [0.389.0](https://github.com/propeller-heads/tycho/compare/0.388.0...0.389.0) (2026-09-04)
+
+
+### Features
+
+* **router-trades:** index the per-client positive slippage exemption ([5b7b6b6](https://github.com/propeller-heads/tycho/commit/5b7b6b68fff035996d607629946cfb11ea924951)), closes [#1371](https://github.com/propeller-heads/tycho/issues/1371)
+* **router-trades:** index the vault balances that hold router fees ([ac98632](https://github.com/propeller-heads/tycho/commit/ac98632983954459eb45efe8bcc56d7b2ca79c90))
+* **router-trades:** name executors from a table and settle on one flag ([dad1739](https://github.com/propeller-heads/tycho/commit/dad173906c71caaff92f69321a8b420e9382b2d6))
+* **router-trades:** skip a block that touched no router, with a block index ([88ec891](https://github.com/propeller-heads/tycho/commit/88ec891992f0daa609bd27ccf16eea15344520b6))
+
+
+### Bug Fixes
+
+* **router-trades:** read the fee bps scale off the calculator ([e7dd0a3](https://github.com/propeller-heads/tycho/commit/e7dd0a3f9751207abfb889f93d226ca6a4478224))
+* **router-trades:** read the fee bps scale off the calculator ([#1412](https://github.com/propeller-heads/tycho/issues/1412)) ([a37407e](https://github.com/propeller-heads/tycho/commit/a37407e3d6e8915990c501dfeb818b2aa7205466))
+
 ## [0.388.0](https://github.com/propeller-heads/tycho/compare/0.387.0...0.388.0) (2026-09-04)
 
 
