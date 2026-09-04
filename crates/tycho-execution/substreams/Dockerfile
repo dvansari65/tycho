@@ -20,7 +20,7 @@ RUN apt-get update \
        "https://github.com/streamingfast/substreams-sink-sql/releases/download/${SINK_SQL_VERSION}/substreams-sink-sql_linux_${ARCH}.tar.gz" \
     && tar -xzf /tmp/sink.tgz -C /usr/local/bin substreams-sink-sql && rm /tmp/sink.tgz
 WORKDIR /opt/router-trades
-COPY crates/tycho-execution/substreams/schema.sql ./
+COPY crates/tycho-execution/substreams/schema.sql crates/tycho-execution/substreams/executors.sql crates/tycho-execution/substreams/views.sql ./
 COPY crates/tycho-execution/substreams/pricing ./pricing
 COPY crates/tycho-execution/substreams/scripts/price_trades.sh crates/tycho-execution/substreams/scripts/fdw_setup.sh ./scripts/
 COPY crates/tycho-execution/substreams/docker/entrypoint.sh /usr/local/bin/entrypoint
