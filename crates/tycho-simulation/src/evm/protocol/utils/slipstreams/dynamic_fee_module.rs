@@ -184,9 +184,9 @@ pub(crate) fn get_dynamic_fee(
             // First in block: the module returns before touching the oracle.
             return Ok(ResolvedFee::flat(initial));
         }
-        // Position unknown: quote the worse of the two branches. `max`, not "the dynamic fee" —
-        // nothing stops a pool from configuring `initialFee` above its dynamic fee. Gas stays
-        // conservative too: the oracle read is charged whenever the dynamic branch evaluated it.
+        // Position unknown: quote the worse of the two branches, since nothing stops a pool from
+        // configuring `initialFee` above its dynamic fee. Gas stays conservative too: the oracle
+        // read is charged whenever the dynamic branch evaluated it.
         let dynamic = resolve_dynamic_fee(
             dfc,
             base_fee,
@@ -473,10 +473,8 @@ mod tests {
 
     #[test]
     fn zero_scaling_still_pays_for_the_observe() {
-        // The module runs the TWAP computation even when the scaling factor is zero — the factor
-        // only multiplies the deviation away. Verified with debug_traceCall of fee() on
-        // 0xdFe5F275… (scaling 0): the observe subcall burns ~50k gas. Only the cardinality
-        // guard skips the oracle.
+        // A zero scaling factor only multiplies the deviation away; the oracle is still read, so
+        // the observe gas is still paid. Only the cardinality guard skips the oracle.
         let dfc = DynamicFeeConfig::new(2700, 0, 0, false, 0);
         let observations = Observations::new(vec![
             Observation {

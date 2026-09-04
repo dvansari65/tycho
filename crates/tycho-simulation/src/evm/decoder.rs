@@ -105,8 +105,7 @@ where
     /// its provider at creation time and reads fresh overrides on every simulation.
     override_providers: HashMap<String, Arc<dyn StateOverrideProvider>>,
     /// Seconds between blocks, used to project a confirmed block header onto the next block when
-    /// deriving the execution block for block-sensitive states. Resolved once in [`Self::new`],
-    /// so an unregistered custom chain fails at construction rather than mid-stream.
+    /// deriving the execution block for block-sensitive states.
     block_time_secs: u64,
 }
 
@@ -127,8 +126,7 @@ where
     ///
     /// # Panics
     ///
-    /// Panics for a custom chain with no registered config, at construction rather than on the
-    /// first decoded block.
+    /// Panics if `chain` is a custom chain with no registered config.
     pub fn new(chain: Chain) -> Self {
         Self {
             state: Arc::new(RwLock::new(DecoderState::default())),

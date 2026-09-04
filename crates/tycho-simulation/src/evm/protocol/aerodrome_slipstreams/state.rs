@@ -69,7 +69,7 @@ pub struct AerodromeSlipstreamsState {
     id: String,
     /// Timestamp of the block a quote against this state is expected to execute in.
     ///
-    /// Maintained by the stream decoder via [`ProtocolSim::set_execution_block`], not decoded from
+    /// Maintained by the stream decoder via [`ProtocolSim::apply_block`], not decoded from
     /// the pool: the fee module's initial-vs-dynamic branch keys on the *execution* block, which
     /// is the next block for a confirmed update and the still-open block for a flashblock
     /// update.
@@ -141,8 +141,7 @@ impl AerodromeSlipstreamsState {
 
     /// Sets what quotes assume about the swap's position within its execution block.
     ///
-    /// Kept out of [`Self::new`], which takes the pool's on-chain facts: this is a consumer-side
-    /// preference, not part of the decoded pool state.
+    /// A consumer-side preference, independent of the pool's on-chain state.
     pub fn with_position_assumption(mut self, assumption: BlockPositionAssumption) -> Self {
         self.position_assumption = assumption;
         self
@@ -751,7 +750,7 @@ mod tests {
     /// enabled (750 pips) and a dynamic component on top of a 2700 pip base.
     ///
     /// Built with the first-in-block assumption on: most tests here exercise the optimistic
-    /// path. The worst-case-default tests flip `assume_first_in_block` back off.
+    /// path. The worst-case-default tests switch it back to `BlockPositionAssumption::WorstCase`.
     fn initial_fee_pool(last_observation_ts: u32) -> AerodromeSlipstreamsState {
         let mut pool = create_basic_test_pool();
         pool.dfc = DynamicFeeConfig::new(2700, 30_000, 0, true, 750);
@@ -907,8 +906,8 @@ mod tests {
 
     #[test]
     fn worst_case_picks_the_initial_fee_when_it_is_the_higher_one() {
-        // Nothing stops a pool from configuring initialFee above its dynamic fee: worst case
-        // must be max(initial, dynamic), not "the dynamic fee".
+        // Nothing stops a pool from configuring initialFee above its dynamic fee, so the worst
+        // case is max(initial, dynamic).
         let mut pool = initial_fee_pool(1_000);
         pool.dfc = DynamicFeeConfig::new(500, 30_000, 0, true, 4_000);
         pool.position_assumption = BlockPositionAssumption::WorstCase;
