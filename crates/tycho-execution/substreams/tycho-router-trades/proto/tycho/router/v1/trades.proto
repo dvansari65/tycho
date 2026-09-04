@@ -23,6 +23,8 @@ message RouterCallError {
   string error = 10;
   bool tx_success = 11;
   bool call_success = 12;
+  // Whether the chain kept the state changes of the call. See Trade.state_committed.
+  bool state_committed = 13;
 }
 
 // One call into a TychoRouter swap entry point (successful or reverted).
@@ -76,14 +78,22 @@ message Trade {
   // V2 only.
   bool wrap_eth = 32;
   bool unwrap_eth = 33;
+  // Whether the chain kept the state changes of the call.
+  //
+  // A call can return normally and still have every state change it made thrown away, because
+  // an ancestor call reverted afterwards. A caller quoting the router on chain does exactly
+  // that: it calls the router, reads the return value, then reverts. Such a call carries
+  // tx_success and call_success like a fill, so this is the only field that separates the two.
+  bool state_committed = 34;
 }
 
 // One executor invocation inside a trade.
 message Hop {
   uint32 index = 1;
   bytes executor = 2;
-  // Protocol systems resolved from the executor address; empty when unknown.
-  repeated string protocol_systems = 3;
+  // 3 was protocol_systems, which the `executors` table now resolves from the address at query
+  // time. See executors.sql.
+  reserved 3;
   // Split swaps only: indices into the trade's token array and the raw uint24 split
   // (0 means "remainder").
   uint32 token_in_index = 4;

@@ -38,6 +38,9 @@ pub struct RouterCallError {
     pub tx_success: bool,
     #[prost(bool, tag="12")]
     pub call_success: bool,
+    /// Whether the chain kept the state changes of the call. See Trade.state_committed.
+    #[prost(bool, tag="13")]
+    pub state_committed: bool,
 }
 /// One call into a TychoRouter swap entry point (successful or reverted).
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -120,6 +123,14 @@ pub struct Trade {
     pub wrap_eth: bool,
     #[prost(bool, tag="33")]
     pub unwrap_eth: bool,
+    /// Whether the chain kept the state changes of the call.
+    ///
+    /// A call can return normally and still have every state change it made thrown away, because
+    /// an ancestor call reverted afterwards. A caller quoting the router on chain does exactly
+    /// that: it calls the router, reads the return value, then reverts. Such a call carries
+    /// tx_success and call_success like a fill, so this is the only field that separates the two.
+    #[prost(bool, tag="34")]
+    pub state_committed: bool,
 }
 /// One executor invocation inside a trade.
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -129,9 +140,6 @@ pub struct Hop {
     pub index: u32,
     #[prost(bytes="vec", tag="2")]
     pub executor: ::prost::alloc::vec::Vec<u8>,
-    /// Protocol systems resolved from the executor address; empty when unknown.
-    #[prost(string, repeated, tag="3")]
-    pub protocol_systems: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
     /// Split swaps only: indices into the trade's token array and the raw uint24 split
     /// (0 means "remainder").
     #[prost(uint32, tag="4")]

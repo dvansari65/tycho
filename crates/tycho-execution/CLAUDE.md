@@ -319,8 +319,8 @@ other side's price from the trade. See `substreams/README.md`.
 4. `substreams/pricing/preferred_tokens.sql` — the native sentinel row plus at least one pinned
    stablecoin, or the chain has no USD anchor and every trade stays unpriced. Pin by address and
    verify the implied price; symbols are duplicated by fake tokens.
-5. `substreams/scripts/gen_tables.py` re-run, so `src/executors_table.rs` names the new chain's
-   executors.
+5. `substreams/executors.sql` — a row per executor on the new chain, so a hop carries a protocol
+   name and not only an address. Kept by hand; needs no release.
 6. `substreams/docker-compose.yaml`, a released `.spkg` for the chain, and in
    `helm-configuration` the `$chains` list plus the `spkgs` pin and a `TYCHO_<CHAIN>_DATABASE_URL`
    entry in `helmwave/dev/values/tycho/router-trades/router-trades.yml`.

@@ -29,7 +29,8 @@ pub fn db_out(trades: Trades, fee_events: FeeConfigEvents) -> Result<DatabaseCha
             .set("stage", &error.stage)
             .set("error", &error.error)
             .set("tx_success", error.tx_success)
-            .set("call_success", error.call_success);
+            .set("call_success", error.call_success)
+            .set("state_committed", error.state_committed);
     }
     for ev in &fee_events.events {
         let id = format!("{}:{}:{}", ev.chain, hex_addr(&ev.tx_hash), ev.log_index);
@@ -61,11 +62,6 @@ fn insert_trade(tables: &mut Tables, t: &Trade) -> Result<()> {
         .iter()
         .map(|h| hex_addr(&h.executor))
         .collect();
-    let protocol_systems: Vec<String> = t
-        .hops
-        .iter()
-        .flat_map(|hop| hop.protocol_systems.iter().cloned())
-        .collect();
     let fee_split = split_fees(t)?;
 
     let row = tables.create_row("trades", trade_id.clone());
@@ -77,6 +73,7 @@ fn insert_trade(tables: &mut Tables, t: &Trade) -> Result<()> {
         .set("call_index", t.call_index)
         .set("tx_success", t.tx_success)
         .set("call_success", t.call_success)
+        .set("state_committed", t.state_committed)
         .set("router", hex_addr(&t.router))
         .set("router_version", &t.router_version)
         .set("strategy", &t.strategy)
@@ -95,7 +92,6 @@ fn insert_trade(tables: &mut Tables, t: &Trade) -> Result<()> {
         .set("wrap_eth", t.wrap_eth)
         .set("unwrap_eth", t.unwrap_eth);
     row.set("executors", psql_text_array(&executors));
-    row.set("protocol_systems", psql_text_array(&protocol_systems));
     if !t.expected_amount_out.is_empty() {
         row.set("expected_amount_out", &t.expected_amount_out);
         if let Some(bps) = slippage_tolerance_bps(&t.expected_amount_out, &t.min_amount_out) {
@@ -151,7 +147,6 @@ fn insert_trade(tables: &mut Tables, t: &Trade) -> Result<()> {
             .set("hop_index", hop.index)
             .set("executor", hex_addr(&hop.executor))
             .set("protocol_data", hex_addr(&hop.protocol_data));
-        row.set("protocol_systems", psql_text_array(&hop.protocol_systems));
         if t.strategy == "split" {
             row.set("token_in_index", hop.token_in_index)
                 .set("token_out_index", hop.token_out_index)

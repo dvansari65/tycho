@@ -10,7 +10,14 @@ CREATE TABLE IF NOT EXISTS trades (
     tx_index                   INTEGER NOT NULL,
     call_index                 INTEGER NOT NULL,
     tx_success                 BOOLEAN NOT NULL,
+    -- Whether the router call returned normally. Not whether the chain kept the result: a caller
+    -- quoting the router on chain calls it, reads the return value, then reverts, and that call
+    -- returns normally. Read state_committed for that.
     call_success               BOOLEAN NOT NULL,
+    -- Whether the chain kept the state changes of the call. NULL on a row indexed before this
+    -- column existed, and trades_settled leaves such a row out. Sum volume over that view.
+    -- A discarded call is still priced, so quote activity can be read in USD as well.
+    state_committed            BOOLEAN,
     router                     TEXT NOT NULL,
     router_version             TEXT NOT NULL,
     strategy                   TEXT NOT NULL,
@@ -49,8 +56,9 @@ CREATE TABLE IF NOT EXISTS trades (
     client_fee_amount          NUMERIC(78, 0),
     n_tokens                   INTEGER NOT NULL,
     n_hops                     INTEGER NOT NULL,
+    -- Hop executor addresses. Their protocol names come from the `executors` table at query
+    -- time: read the `trade_protocol_systems` view, see executors.sql.
     executors                  TEXT[] NOT NULL,
-    protocol_systems           TEXT[] NOT NULL,
     watermark                  TEXT,
     wrap_eth                   BOOLEAN NOT NULL,
     unwrap_eth                 BOOLEAN NOT NULL,
@@ -86,8 +94,9 @@ CREATE TABLE IF NOT EXISTS trade_hops (
     chain           TEXT NOT NULL,
     block_number    BIGINT NOT NULL,
     hop_index       INTEGER NOT NULL,
+    -- Protocol names come from the `executors` table at query time: read the
+    -- `trade_hop_protocols` view, see executors.sql.
     executor        TEXT NOT NULL,
-    protocol_systems TEXT[] NOT NULL,
     token_in_index  INTEGER,
     token_out_index INTEGER,
     -- Raw uint24 split share; 0 means "all remaining input".
@@ -95,7 +104,6 @@ CREATE TABLE IF NOT EXISTS trade_hops (
     protocol_data   TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS trade_hops_trade_idx ON trade_hops (trade_id);
-CREATE INDEX IF NOT EXISTS trade_hops_protocol_idx ON trade_hops USING GIN (protocol_systems);
 
 CREATE TABLE IF NOT EXISTS fees_taken (
     id           TEXT PRIMARY KEY, -- {trade_id}:{index}
@@ -123,7 +131,8 @@ CREATE TABLE IF NOT EXISTS router_call_errors (
     stage          TEXT NOT NULL,
     error          TEXT NOT NULL,
     tx_success     BOOLEAN NOT NULL,
-    call_success   BOOLEAN NOT NULL
+    call_success   BOOLEAN NOT NULL,
+    state_committed BOOLEAN
 );
 CREATE INDEX IF NOT EXISTS router_call_errors_chain_block_idx
     ON router_call_errors (chain, block_number);

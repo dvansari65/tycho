@@ -16,12 +16,96 @@ funding mode (`transfer_from`/`permit2`/`vault`/`none`), EOA (`tx.from`), `msg.s
 token in/out, amount in, expected/min amount out and the implied slippage tolerance, settled
 amount out (decoded from the call return value), gross amount out and positive slippage,
 `ClientFeeParams`, the router fee configuration in effect, fees actually taken (`FeesTaken`),
-executors and protocol systems per hop, splits, watermark (trailing calldata), revert selector,
-decoded reason, and gas used.
+executors per hop, splits, watermark (trailing calldata), revert selector, decoded reason, and
+gas used.
 
 Related tables: `trade_hops` (one row per executor hop), `fees_taken` (one row per fee
 recipient), `fee_config_events` (FeeCalculator admin events and fee-calculator rotations), and
 `router_call_errors` (selector-matched calls that could not be decoded safely).
+
+### Discarded calls
+
+A caller can quote the router on chain: call it, read the return value, then revert to throw the
+result away, and only afterwards execute the route it liked. The router call of such a probe
+returns normally, so `call_success` is true on it exactly as on a fill. On robinhood about 9% of
+the stored trades are probes and they hold 15.6% of the USD volume; on ethereum 0.22% of the rows
+and 2.0% of the volume.
+
+`state_committed` separates the two. It is `state_reverted` on the call, inverted: whether the
+chain kept the state changes the call made. `call_success` still says whether the call returned
+normally, which is what decides where `amount_out` comes from, and it stays true on a probe.
+
+**Sum volume over `trades_settled`, not over `trades`.** The view carries every column of
+`trades` and keeps a row on `tx_success AND call_success AND state_committed`:
+
+```sql
+SELECT chain, sum(volume_usd) FROM trades_settled
+WHERE price_source LIKE '%_stable' OR block_time > now() - interval '1 hour'
+GROUP BY 1;
+```
+
+A row indexed before the flag existed carries NULL, and the view leaves it out: nothing in it
+says the chain kept the call, and guessing in either direction is worse than saying so. Every
+chain is re-indexed in the release that adds the column, which settles those rows one way or the
+other.
+
+The other two filters look redundant next to the flag, because a reverted call discards its own
+state and a failed transaction discards all of it. They stay because the view does not lean on
+that: nothing in the Firehose contract promises a call cannot report `status_reverted` with its
+state kept.
+
+### Executor names
+
+The package writes the executor address of a hop and nothing else. The protocol names of that
+address live in the `executors` table, keyed by `(chain, address)` and seeded from `executors.sql`,
+which every container applies on start. Two views do the join:
+
+| View                     | One row per | Columns                                                    |
+| ------------------------ | ----------- | ---------------------------------------------------------- |
+| `trade_hop_protocols`    | hop         | `trade_id`, `chain`, `hop_index`, `executor`, `protocol_systems` |
+| `trade_protocol_systems` | trade       | `trade_id`, `chain`, `protocol_systems`                     |
+
+`trade_hop_protocols` keeps a hop whose executor is unknown and gives it an empty array;
+`trade_protocol_systems` drops a trade whose executors are all unknown.
+
+The row of the hop's own chain wins. An executor is deployed at the same address on several
+chains and the docs list it under one of them, so an address with no row for the hop's chain
+falls back to the names it carries on the chains that do have one. Insert a row for the chain to
+override that.
+
+**After you deploy a new executor, add a row to `executors.sql`.** That file is the list, kept
+by hand, and every container applies it on start. No package, module hash or cursor is touched,
+and the name appears on every trade already stored.
+
+```sql
+    ('base', '0x...', ARRAY['uniswap_v4']),
+```
+
+To name one in a running database without waiting for a deploy, insert it there as well; the file
+will not fight it.
+
+```sql
+INSERT INTO executors (chain, address, protocol_systems)
+VALUES ('base', '0x...', ARRAY['uniswap_v4'])
+ON CONFLICT (chain, address) DO NOTHING;
+```
+
+The INSERT in `executors.sql` also ends in `ON CONFLICT DO NOTHING`, which has one consequence
+worth knowing: **editing a row in the file does not change the database.** The file adds rows, it
+does not define them. To correct a name, delete the row and apply the file again:
+
+```sql
+DELETE FROM executors WHERE chain = 'base' AND address = '0x...';
+```
+
+Ten addresses on the live data are in no row: they appear in neither the executor docs nor
+`config/executor_addresses.json`. Their hops carry the address and an empty name array. Find them
+with
+
+```sql
+SELECT chain, executor, count(*) FROM trade_hop_protocols
+WHERE protocol_systems = ARRAY[]::TEXT[] GROUP BY 1, 2 ORDER BY 3 DESC;
+```
 
 ### Router generations
 
@@ -66,7 +150,13 @@ Age is the reason `price_source` exists. Tycho keeps one current price per token
 A stablecoin is worth 1 USD whenever the trade happened, so a stable-anchored trade is valued at
 any age and a backfill can be priced correctly. Every other basis would stamp today's price on an
 old trade, so those are limited to trades younger than `MAX_AGE`. `price_source` records the basis
-as `<in|out>_<stable|preferred|tycho>`; filter on it before summing `volume_usd`.
+as `<in|out>_<stable|preferred|tycho>`; filter on it before summing `volume_usd`, and sum over
+`trades_settled` rather than `trades` so a discarded quote probe is not counted (see [Discarded
+calls](#discarded-calls)).
+
+A probe is priced like any other call that returned, on purpose: the quote it read is real market
+activity and worth reading in USD. Leaving it out of a volume figure is the view's job, not the
+pricer's.
 
 The trades live in their own database (all chains in one table). Each chain has its own Tycho
 database, reached through `postgres_fdw`: one server and one `tycho_<chain>` schema per chain,
@@ -249,9 +339,9 @@ Six places, and the deployment fails quietly if any of the last three is missed.
    the others, and that agreed value is the USD price of the native token. Never pick a token by
    symbol: Tycho holds about 40 tokens called `cbBTC` on base alone.
 
-5. **Regenerate the lookup tables** with `scripts/gen_tables.py`, so `src/executors_table.rs`
-   covers the new chain's executors. Without it a hop carries the executor address but no protocol
-   name.
+5. **Add the chain's executors** to `executors.sql`, in chain order, and apply it with
+   `psql "$DSN" -f executors.sql`. Without them a hop carries the executor address but no
+   protocol name. This needs no release.
 
 6. **Wire the deployment.** Add a `sink-<chain>` service to `docker-compose.yaml` for local runs.
    Release the chain's package (see "Releasing a package"). In `helm-configuration`, add the chain
@@ -310,9 +400,9 @@ make test-pricing  # disposable two-chain PostgreSQL/FDW integration test
 ./scripts/test_pricing.sh --outage-check  # verifies one failed source does not block another
 ```
 
-Lookup tables (`src/executors_table.rs`, `src/decode/error_table.rs`) are generated by
-`scripts/gen_tables.py` from the docs/config git history and the ABIs under `abi/`; re-run it
-after new executor deployments. ABIs come from the verified sources on Sourcify
+`scripts/gen_error_table.py` rebuilds `src/decode/error_table.rs` from the ABIs under `abi/`.
+Re-run it after adding an ABI. The executor table is not generated: `executors.sql` is kept by
+hand. ABIs come from the verified sources on Sourcify
 (`TychoRouterV2` = `0xfD0b31d2…`, `TychoRouterV3_0` = `0x1f8dB310…`, `TychoRouterV3_1` =
 `0xea290cE3…`, `FeeCalculator` = `0xA236E1F0…`); `FeeCalculatorV3_0.json` holds the `uint16`
 event signatures of the earlier FeeCalculator.

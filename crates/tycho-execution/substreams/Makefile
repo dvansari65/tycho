@@ -9,7 +9,7 @@ DSN ?= psql://tycho:tycho@localhost:5433/router_trades?sslmode=disable
 START ?=
 STOP ?= +10
 
-.PHONY: build test test-pricing lint fmt protogen pack run setup sink price-once price-loop
+.PHONY: build test test-pricing test-executors test-views lint fmt protogen pack run setup executors views sink price-once price-loop
 
 # --target-dir keeps the wasm where the manifests expect it even with a global CARGO_TARGET_DIR.
 build:
@@ -21,6 +21,12 @@ test:
 test-pricing:
 	./scripts/test_pricing.sh
 
+test-executors:
+	./scripts/test_executors.sh
+
+test-views:
+	./scripts/test_views.sh
+
 lint:
 	cargo +nightly fmt -- --check
 	cargo +nightly clippy --all --all-features --all-targets -- -D warnings
@@ -29,7 +35,7 @@ fmt:
 	cargo +nightly fmt
 
 protogen:
-	cd tycho-router-trades && substreams protogen chains/ethereum.yaml --output-path src/pb --exclude-paths="sf/substreams,google,sf/ethereum"
+	cd tycho-router-trades && substreams protogen chains/ethereum.yaml --output-path src/pb --exclude-paths="sf/substreams,sf/firehose,google,sf/ethereum"
 
 # Packs into target/spkg/, where docker-compose mounts it for the local sinks. release.sh does the
 # same for the published packages.
@@ -51,6 +57,8 @@ run: build
 
 setup:
 	substreams-sink-sql setup "$(DSN)" $(MANIFEST)
+	psql "$(PSQL_DSN)" -v ON_ERROR_STOP=1 -f executors.sql
+	psql "$(PSQL_DSN)" -v ON_ERROR_STOP=1 -f views.sql
 
 sink: build
 	substreams-sink-sql run "$(DSN)" $(MANIFEST) $(if $(START),$(START):,) --batch-block-flush-interval 100
@@ -64,6 +72,15 @@ PSQL_DSN ?= postgres://tycho:tycho@localhost:5433/router_trades
 price-setup:
 	psql "$(PSQL_DSN)" -v ON_ERROR_STOP=1 -f pricing/migrate_usd.sql
 	psql "$(PSQL_DSN)" -v ON_ERROR_STOP=1 -f pricing/preferred_tokens.sql
+
+# Executor address -> protocol names, and the views that resolve a hop. Re-apply after adding a
+# row to executors.sql.
+executors:
+	psql "$(PSQL_DSN)" -v ON_ERROR_STOP=1 -f executors.sql
+
+# Views over trades, trades_settled included.
+views:
+	psql "$(PSQL_DSN)" -v ON_ERROR_STOP=1 -f views.sql
 
 price-once:
 	psql "$(PSQL_DSN)" -v ON_ERROR_STOP=1 -v chain='$(CHAIN)' \

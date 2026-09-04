@@ -9,7 +9,8 @@
 #
 # Both modes wait for the database first, so the container can start together with Postgres.
 # `sink` applies schema.sql with `substreams-sink-sql setup`; `price` registers the postgres_fdw
-# servers (scripts/fdw_setup.sh). Both steps are idempotent.
+# servers (scripts/fdw_setup.sh). Both apply executors.sql and views.sql, which take an advisory
+# lock so the containers do not race. Every step is idempotent.
 set -euo pipefail
 
 # SPKG is a local path when that file exists, otherwise a key in the release bucket. Same rule as
@@ -30,12 +31,20 @@ resolve_spkg() {
 	printf '%s' "$dest"
 }
 
+# substreams-sink-sql takes psql:// URIs, libpq does not, and both are used below.
+pg_uri() {
+	printf '%s' "${1/psql:\/\//postgres://}"
+}
+
 wait_for_db() {
-	local uri="${1/psql:\/\//postgres://}"
-	until pg_isready -q -d "$uri"; do
+	until pg_isready -q -d "$(pg_uri "$1")"; do
 		echo "waiting for database" >&2
 		sleep 2
 	done
+}
+
+apply_sql() {
+	psql "$(pg_uri "$DSN")" -q -v ON_ERROR_STOP=1 "$@"
 }
 
 mode="${1:-sink}"
@@ -55,6 +64,8 @@ sink)
 	[ -n "${SUBSTREAMS_ENDPOINT:-}" ] && args+=(-e "$SUBSTREAMS_ENDPOINT")
 	wait_for_db "$DSN"
 	substreams-sink-sql setup "$DSN" "$spkg" "${system_table_args[@]}"
+	apply_sql -f /opt/router-trades/executors.sql
+	apply_sql -f /opt/router-trades/views.sql
 	exec substreams-sink-sql run "${args[@]}" \
 		"${system_table_args[@]}" \
 		--batch-block-flush-interval "${FLUSH_INTERVAL:-100}" \
@@ -64,13 +75,14 @@ price)
 	: "${DSN:?set DSN}"
 	wait_for_db "$DSN"
 	if [ "${LOCAL_PRICING:-0}" = 1 ]; then
-		psql "$DSN" -q -v ON_ERROR_STOP=1 -v chain=ethereum \
-			-f /opt/router-trades/pricing/dev_stub.sql
+		apply_sql -v chain=ethereum -f /opt/router-trades/pricing/dev_stub.sql
 	else
 		/opt/router-trades/scripts/fdw_setup.sh
 	fi
-	psql "$DSN" -q -v ON_ERROR_STOP=1 -f /opt/router-trades/pricing/migrate_usd.sql
-	psql "$DSN" -q -v ON_ERROR_STOP=1 -f /opt/router-trades/pricing/preferred_tokens.sql
+	apply_sql -f /opt/router-trades/pricing/migrate_usd.sql
+	apply_sql -f /opt/router-trades/pricing/preferred_tokens.sql
+	apply_sql -f /opt/router-trades/executors.sql
+	apply_sql -f /opt/router-trades/views.sql
 	exec /opt/router-trades/scripts/price_trades.sh "${INTERVAL:-60}"
 	;;
 *)

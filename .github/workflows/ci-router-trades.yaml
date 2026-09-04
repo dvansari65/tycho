@@ -55,6 +55,12 @@ jobs:
       - name: WASM build
         run: make build
 
+      - name: Executor table integration
+        run: make test-executors
+
+      - name: Views integration
+        run: make test-views
+
       - name: Pricing integration and outage isolation
         run: |
           make test-pricing

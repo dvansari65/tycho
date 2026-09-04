@@ -10,7 +10,6 @@ use super::{block_timestamp, keys};
 use crate::{
     abi::tycho_router_v3_1::events::FeesTaken,
     decode::{self, revert::decode_revert, swaps::decode_hops, SwapCall},
-    executors,
     params::{Params, RouterConfig, RouterVersion},
     pb::tycho::router::v1::{
         ClientFee, FeeTaken, Hop, RouterCallError, RouterFeeConfig, Trade, Trades,
@@ -107,6 +106,7 @@ fn call_error(
         error,
         tx_success: tx.status == 1,
         call_success: !call.status_failed && !call.status_reverted,
+        state_committed: !call.state_reverted,
     }
 }
 
@@ -121,6 +121,8 @@ fn build_trade(
     swap: SwapCall,
     fee_store: &StoreGetString,
 ) -> std::result::Result<Trade, TradeDecodeError> {
+    // Whether the call returned normally, which decides where the amount out comes from. It is
+    // not whether the chain kept the result: see `Trade.state_committed`.
     let call_success = !call.status_failed && !call.status_reverted;
     let (amount_out, revert) = if call_success {
         match decode::decode_amount_out(&call.return_data) {
@@ -156,7 +158,6 @@ fn build_trade(
         .enumerate()
         .map(|(i, hop)| Hop {
             index: i as u32,
-            protocol_systems: executors::protocol_systems_for(&hop.executor),
             executor: hop.executor,
             token_in_index: hop
                 .token_in_index
@@ -218,6 +219,7 @@ fn build_trade(
         call_index: call.index,
         tx_success: tx.status == 1,
         call_success,
+        state_committed: !call.state_reverted,
         router: router.address.clone(),
         router_version: router.version.as_str().to_string(),
         strategy: swap.method.as_str().to_string(),
