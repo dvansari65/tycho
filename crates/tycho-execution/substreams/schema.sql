@@ -112,11 +112,14 @@ CREATE TABLE IF NOT EXISTS trade_hops (
 );
 CREATE INDEX IF NOT EXISTS trade_hops_trade_idx ON trade_hops (trade_id);
 
+-- One recipient of a FeesTaken event. The router pays a fee into its own vault instead of
+-- transferring it, so a row here is a vault credit; read `vault_balances` for the balance.
 CREATE TABLE IF NOT EXISTS fees_taken (
     id           TEXT PRIMARY KEY, -- {trade_id}:{index}
     trade_id     TEXT NOT NULL,
     chain        TEXT NOT NULL,
     block_number BIGINT NOT NULL,
+    -- From the event, so it is the token the router credited, not the decoded tokenOut.
     token        TEXT NOT NULL,
     recipient    TEXT NOT NULL,
     amount       NUMERIC(78, 0) NOT NULL,
@@ -158,3 +161,31 @@ CREATE TABLE IF NOT EXISTS fee_config_events (
     new_value    TEXT
 );
 CREATE INDEX IF NOT EXISTS fee_config_events_emitter_idx ON fee_config_events (chain, emitter, block_number);
+
+-- ERC-6909 vault balance movements on a router.
+--
+-- Fee credits are absent by design: the router mints those without an event and reports them
+-- through FeesTaken, so they arrive in `fees_taken`. Read the `vault_balances` view, which
+-- takes both sources; a sum over this table alone runs negative.
+CREATE TABLE IF NOT EXISTS vault_transfers (
+    id           TEXT PRIMARY KEY, -- {chain}:{tx_hash}:{log_index}
+    chain        TEXT NOT NULL,
+    block_number BIGINT NOT NULL,
+    block_time   TIMESTAMPTZ NOT NULL,
+    tx_hash      TEXT NOT NULL,
+    log_index    INTEGER NOT NULL,
+    -- Each router holds its own vault, so an owner has one balance per router.
+    router       TEXT NOT NULL,
+    -- msg.sender of the call that moved the balance, which an operator-driven move needs.
+    caller       TEXT NOT NULL,
+    -- Debited owner, or the zero address on a credit.
+    sender       TEXT NOT NULL,
+    -- Credited owner, or the zero address on a debit.
+    receiver     TEXT NOT NULL,
+    token        TEXT NOT NULL,
+    amount       NUMERIC(78, 0) NOT NULL,
+    kind         TEXT NOT NULL CHECK (kind IN ('credit', 'debit', 'transfer'))
+);
+CREATE INDEX IF NOT EXISTS vault_transfers_owner_idx
+    ON vault_transfers (chain, router, token);
+CREATE INDEX IF NOT EXISTS vault_transfers_block_idx ON vault_transfers (chain, block_number);

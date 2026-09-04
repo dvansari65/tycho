@@ -203,6 +203,10 @@ pub struct FeeTaken {
     /// Contract array position: "router" first, then "client".
     #[prost(string, tag="3")]
     pub role: ::prost::alloc::string::String,
+    /// The credited token, from the event rather than the calldata, so a vault balance built on
+    /// this does not depend on the swap decoder.
+    #[prost(bytes="vec", tag="4")]
+    pub token: ::prost::alloc::vec::Vec<u8>,
 }
 /// Fee configuration changes found in one block.
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -240,5 +244,53 @@ pub struct FeeConfigEvent {
     pub old_value: ::prost::alloc::string::String,
     #[prost(string, tag="11")]
     pub new_value: ::prost::alloc::string::String,
+}
+/// Every ERC-6909 Transfer a router emitted in one block.
+///
+/// The router keeps a vault of internal token balances. It credits a fee recipient there instead
+/// of transferring, so router revenue accrues as a vault balance until someone withdraws it.
+///
+/// Fee credits are NOT in here: the router mints those without an event to save gas, and reports
+/// them through FeesTaken instead (see FeeTaken). A balance therefore needs both sources.
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct VaultTransfers {
+    #[prost(message, repeated, tag="1")]
+    pub transfers: ::prost::alloc::vec::Vec<VaultTransfer>,
+}
+/// One ERC-6909 Transfer: a deposit, a withdrawal, or a move between two owners.
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct VaultTransfer {
+    #[prost(string, tag="1")]
+    pub chain: ::prost::alloc::string::String,
+    #[prost(uint64, tag="2")]
+    pub block_number: u64,
+    #[prost(uint64, tag="3")]
+    pub block_timestamp: u64,
+    #[prost(bytes="vec", tag="4")]
+    pub tx_hash: ::prost::alloc::vec::Vec<u8>,
+    #[prost(uint32, tag="5")]
+    pub log_index: u32,
+    /// The router holding the vault. Each router has its own, so a balance is per router.
+    #[prost(bytes="vec", tag="6")]
+    pub router: ::prost::alloc::vec::Vec<u8>,
+    /// msg.sender of the call that moved the balance. The owner of an operator-driven move.
+    #[prost(bytes="vec", tag="7")]
+    pub caller: ::prost::alloc::vec::Vec<u8>,
+    /// Debited owner; empty on a credit (mint).
+    #[prost(bytes="vec", tag="8")]
+    pub sender: ::prost::alloc::vec::Vec<u8>,
+    /// Credited owner; empty on a debit (burn).
+    #[prost(bytes="vec", tag="9")]
+    pub receiver: ::prost::alloc::vec::Vec<u8>,
+    /// The ERC-6909 id, which the router derives from the token address.
+    #[prost(bytes="vec", tag="10")]
+    pub token: ::prost::alloc::vec::Vec<u8>,
+    #[prost(string, tag="11")]
+    pub amount: ::prost::alloc::string::String,
+    /// "credit" (minted), "debit" (burned) or "transfer" (between two owners).
+    #[prost(string, tag="12")]
+    pub kind: ::prost::alloc::string::String,
 }
 // @@protoc_insertion_point(module)

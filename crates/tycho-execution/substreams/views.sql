@@ -46,4 +46,66 @@ BEGIN
       AND t.state_committed;
 END $$;
 
+DO $$
+BEGIN
+    IF to_regclass('public.vault_transfers') IS NULL OR to_regclass('public.trades') IS NULL THEN
+        RAISE NOTICE 'vault_transfers or trades does not exist yet, skipping the vault views';
+        RETURN;
+    END IF;
+
+    -- Every movement of a vault balance, one row per owner and side.
+    --
+    -- The router keeps token balances of its own (ERC-6909) and credits a fee recipient there
+    -- instead of transferring, so router revenue accrues in the vault until someone withdraws
+    -- it. Two sources are needed to see a balance, because the two kinds of movement report
+    -- themselves differently:
+    --   * `vault_transfers` holds what the ERC-6909 Transfer event carries: deposits,
+    --     withdrawals, moves between owners, and the balance a swap funded from or paid into
+    --     the vault.
+    --   * the fee credit emits no Transfer, on purpose. `Vault._creditVaultForFees` mints
+    --     without an event to save gas, and `_takeFees` emits FeesTaken instead, which lands in
+    --     `fees_taken`. Those rows are the `fee` source below.
+    DROP VIEW IF EXISTS vault_balances;
+    DROP VIEW IF EXISTS vault_flows;
+    CREATE VIEW vault_flows AS
+    SELECT v.chain, v.router, v.receiver AS owner, v.token, v.block_number, v.block_time,
+           v.tx_hash, v.amount AS delta, v.kind AS source
+    FROM vault_transfers v
+    WHERE v.kind IN ('credit', 'transfer')
+    UNION ALL
+    SELECT v.chain, v.router, v.sender, v.token, v.block_number, v.block_time,
+           v.tx_hash, -v.amount, v.kind
+    FROM vault_transfers v
+    WHERE v.kind IN ('debit', 'transfer')
+    UNION ALL
+    SELECT f.chain, t.router, f.recipient, f.token, f.block_number, t.block_time,
+           t.tx_hash, f.amount, 'fee'
+    FROM fees_taken f
+    JOIN trades t ON t.id = f.trade_id
+    WHERE f.amount > 0
+      AND t.tx_success
+      AND t.call_success
+      AND t.state_committed;
+
+    -- What each owner holds in each router's vault, and how much of it fees put there.
+    --
+    -- A balance of zero means the owner withdrew everything, and stays in so the fees an owner
+    -- collected over time remain visible. `balance` is what the router's balanceOf returns, so
+    -- it can be checked against the chain.
+    --
+    -- A negative balance is impossible on chain and means rows are missing here. Expect one on
+    -- a chain still holding trades indexed before `state_committed` existed: the withdrawal is
+    -- in `vault_transfers`, and the fee credit that paid for it is on a trade this view cannot
+    -- count. Re-indexing the chain clears it.
+    CREATE VIEW vault_balances AS
+    SELECT chain, router, owner, token,
+           sum(delta) AS balance,
+           sum(delta) FILTER (WHERE source = 'fee') AS credited_as_fees,
+           count(*) AS n_flows,
+           max(block_number) AS last_block,
+           max(block_time) AS last_change
+    FROM vault_flows
+    GROUP BY 1, 2, 3, 4;
+END $$;
+
 COMMIT;

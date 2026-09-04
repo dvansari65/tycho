@@ -2,9 +2,10 @@
 """Check that every chain manifest filters on the addresses its params configure.
 
 `map_trades` selects on the routers in its params, and its block filter has to name the same
-addresses. `map_fee_config_events` decodes from any emitter, so it filters on `fee_cfg`, a key
-the index sets from the same decoders. A filter that is too narrow drops rows without an error,
-so this runs in CI.
+addresses. `map_vault_transfers` reads logs from the same routers, so it carries the same params
+and the same filter. `map_fee_config_events` decodes from any emitter, so it filters on
+`fee_cfg`, a key the index sets from the same decoders. A filter that is too narrow drops rows
+without an error, so this runs in CI.
 
 Run from anywhere: python3 crates/tycho-execution/substreams/scripts/check_manifests.py
 """
@@ -48,6 +49,17 @@ def main() -> int:
         if actual != routers:
             failures.append(
                 f"{path.name} map_trades: filter has {sorted(actual)}, params say {sorted(routers)}"
+            )
+        vault_params = re.search(r"^  map_vault_transfers: (.+)$", manifest, re.M)
+        if vault_params is None:
+            failures.append(f"{path.name}: no map_vault_transfers params")
+        elif vault_params.group(1) != params:
+            failures.append(f"{path.name} map_vault_transfers: params differ from map_trades")
+        vault_filter = filtered(manifest, "map_vault_transfers")
+        if vault_filter != routers:
+            failures.append(
+                f"{path.name} map_vault_transfers: filter has {sorted(vault_filter)}, "
+                f"params say {sorted(routers)}"
             )
         fee_query = query(manifest, "map_fee_config_events")
         if fee_query != "fee_cfg":

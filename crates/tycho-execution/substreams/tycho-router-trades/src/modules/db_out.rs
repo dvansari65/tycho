@@ -6,10 +6,14 @@ use substreams_database_change::{
 };
 
 use super::hex_addr;
-use crate::pb::tycho::router::v1::{FeeConfigEvents, Trade, Trades};
+use crate::pb::tycho::router::v1::{FeeConfigEvents, Trade, Trades, VaultTransfers};
 
 #[substreams::handlers::map]
-pub fn db_out(trades: Trades, fee_events: FeeConfigEvents) -> Result<DatabaseChanges> {
+pub fn db_out(
+    trades: Trades,
+    fee_events: FeeConfigEvents,
+    vault: VaultTransfers,
+) -> Result<DatabaseChanges> {
     let mut tables = Tables::new();
     for trade in &trades.trades {
         insert_trade(&mut tables, trade)?;
@@ -51,6 +55,23 @@ pub fn db_out(trades: Trades, fee_events: FeeConfigEvents) -> Result<DatabaseCha
         if !ev.new_value.is_empty() {
             row.set("new_value", &ev.new_value);
         }
+    }
+    for t in &vault.transfers {
+        let id = format!("{}:{}:{}", t.chain, hex_addr(&t.tx_hash), t.log_index);
+        tables
+            .create_row("vault_transfers", id)
+            .set("chain", &t.chain)
+            .set("block_number", t.block_number)
+            .set("block_time", rfc3339(t.block_timestamp))
+            .set("tx_hash", hex_addr(&t.tx_hash))
+            .set("log_index", t.log_index)
+            .set("router", hex_addr(&t.router))
+            .set("caller", hex_addr(&t.caller))
+            .set("sender", hex_addr(&t.sender))
+            .set("receiver", hex_addr(&t.receiver))
+            .set("token", hex_addr(&t.token))
+            .set("amount", &t.amount)
+            .set("kind", &t.kind);
     }
     Ok(tables.to_database_changes())
 }
@@ -160,7 +181,7 @@ fn insert_trade(tables: &mut Tables, t: &Trade) -> Result<()> {
         row.set("trade_id", &trade_id)
             .set("chain", &t.chain)
             .set("block_number", t.block_number)
-            .set("token", hex_addr(&t.token_out))
+            .set("token", hex_addr(&fee.token))
             .set("recipient", hex_addr(&fee.recipient))
             .set("amount", &fee.amount)
             .set("role", &fee.role);
@@ -308,8 +329,18 @@ mod tests {
         use crate::pb::tycho::router::v1::FeeTaken;
         let t = Trade {
             fees_taken: vec![
-                FeeTaken { recipient: vec![0xaa; 20], amount: "10".into(), role: "router".into() },
-                FeeTaken { recipient: vec![0xcc; 20], amount: "5".into(), role: "client".into() },
+                FeeTaken {
+                    recipient: vec![0xaa; 20],
+                    amount: "10".into(),
+                    role: "router".into(),
+                    token: vec![0x11; 20],
+                },
+                FeeTaken {
+                    recipient: vec![0xcc; 20],
+                    amount: "5".into(),
+                    role: "client".into(),
+                    token: vec![0x11; 20],
+                },
             ],
             ..Default::default()
         };
@@ -323,8 +354,18 @@ mod tests {
         use crate::pb::tycho::router::v1::FeeTaken;
         let t = Trade {
             fees_taken: vec![
-                FeeTaken { recipient: vec![0xee; 20], amount: "7".into(), role: "router".into() },
-                FeeTaken { recipient: vec![0xee; 20], amount: "3".into(), role: "client".into() },
+                FeeTaken {
+                    recipient: vec![0xee; 20],
+                    amount: "7".into(),
+                    role: "router".into(),
+                    token: vec![0x11; 20],
+                },
+                FeeTaken {
+                    recipient: vec![0xee; 20],
+                    amount: "3".into(),
+                    role: "client".into(),
+                    token: vec![0x11; 20],
+                },
             ],
             ..Default::default()
         };
@@ -341,6 +382,7 @@ mod tests {
                 recipient: vec![0xee; 20],
                 amount: "7".into(),
                 role: "unknown".into(),
+                token: vec![0x11; 20],
             }],
             ..Default::default()
         };

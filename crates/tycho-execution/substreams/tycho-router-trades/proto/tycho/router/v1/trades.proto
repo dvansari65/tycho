@@ -134,6 +134,9 @@ message FeeTaken {
   string amount = 2;
   // Contract array position: "router" first, then "client".
   string role = 3;
+  // The credited token, from the event rather than the calldata, so a vault balance built on
+  // this does not depend on the swap decoder.
+  bytes token = 4;
 }
 
 // Fee configuration changes found in one block.
@@ -157,4 +160,37 @@ message FeeConfigEvent {
   // Decimal / hex string representation of the old and new values.
   string old_value = 10;
   string new_value = 11;
+}
+
+// Every ERC-6909 Transfer a router emitted in one block.
+//
+// The router keeps a vault of internal token balances. It credits a fee recipient there instead
+// of transferring, so router revenue accrues as a vault balance until someone withdraws it.
+//
+// Fee credits are NOT in here: the router mints those without an event to save gas, and reports
+// them through FeesTaken instead (see FeeTaken). A balance therefore needs both sources.
+message VaultTransfers {
+  repeated VaultTransfer transfers = 1;
+}
+
+// One ERC-6909 Transfer: a deposit, a withdrawal, or a move between two owners.
+message VaultTransfer {
+  string chain = 1;
+  uint64 block_number = 2;
+  uint64 block_timestamp = 3;
+  bytes tx_hash = 4;
+  uint32 log_index = 5;
+  // The router holding the vault. Each router has its own, so a balance is per router.
+  bytes router = 6;
+  // msg.sender of the call that moved the balance. The owner of an operator-driven move.
+  bytes caller = 7;
+  // Debited owner; empty on a credit (mint).
+  bytes sender = 8;
+  // Credited owner; empty on a debit (burn).
+  bytes receiver = 9;
+  // The ERC-6909 id, which the router derives from the token address.
+  bytes token = 10;
+  string amount = 11;
+  // "credit" (minted), "debit" (burned) or "transfer" (between two owners).
+  string kind = 12;
 }

@@ -176,9 +176,14 @@ fn build_trade(
         .logs
         .iter()
         .filter_map(FeesTaken::match_and_decode)
-        .flat_map(|ev| ev.fees.into_iter())
+        .flat_map(|ev| {
+            let token = ev.token;
+            ev.fees
+                .into_iter()
+                .map(move |fee| (token.clone(), fee))
+        })
         .enumerate()
-        .map(|(index, (recipient, amount))| FeeTaken {
+        .map(|(index, (token, (recipient, amount)))| FeeTaken {
             recipient,
             amount: amount.to_string(),
             role: match index {
@@ -187,6 +192,7 @@ fn build_trade(
                 _ => "unknown",
             }
             .to_string(),
+            token,
         })
         .collect();
 

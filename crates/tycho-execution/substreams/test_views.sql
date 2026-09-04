@@ -70,5 +70,101 @@ BEGIN
     END IF;
 END $$;
 
+-- Vault balances come from two sources, so the fixtures below feed both: `fees_taken` for the
+-- credit the router mints without an event, `vault_transfers` for everything that logs one.
+CREATE OR REPLACE FUNCTION add_fee(
+    p_trade TEXT, p_token TEXT, p_recipient TEXT, p_amount NUMERIC, p_role TEXT DEFAULT 'router'
+) RETURNS VOID AS $$
+    INSERT INTO fees_taken (id, trade_id, chain, block_number, token, recipient, amount, role)
+    VALUES (p_trade || ':' || p_recipient || ':' || p_token, p_trade, 'robinhood', 1,
+            p_token, p_recipient, p_amount, p_role);
+$$ LANGUAGE sql;
+
+CREATE OR REPLACE FUNCTION add_vault(
+    p_id TEXT, p_sender TEXT, p_receiver TEXT, p_token TEXT, p_amount NUMERIC, p_kind TEXT
+) RETURNS VOID AS $$
+    INSERT INTO vault_transfers (
+        id, chain, block_number, block_time, tx_hash, log_index, router, caller, sender,
+        receiver, token, amount, kind
+    ) VALUES (
+        p_id, 'robinhood', 2, '2026-09-01T00:00:00Z', '0x' || p_id, 0, '0xr', '0xcaller',
+        p_sender, p_receiver, p_token, p_amount, p_kind
+    );
+$$ LANGUAGE sql;
+
+DO $$
+DECLARE
+    zero TEXT := '0x0000000000000000000000000000000000000000';
+BEGIN
+    -- Fees on two calls the chain kept.
+    PERFORM add_fee('committed', '0xusdc', '0xfeetaker', 300);
+    PERFORM add_fee('fill', '0xusdc', '0xfeetaker', 200);
+
+    -- A fee on a call the chain threw away. The credit never happened on chain.
+    PERFORM add_fee('discarded', '0xusdc', '0xfeetaker', 999);
+    -- A fee on a reverted call and on a failed transaction. Neither reached the vault, and both
+    -- of those trades carry the flag, so only tx_success and call_success keep them out.
+    PERFORM add_fee('reverted', '0xusdc', '0xfeetaker', 888);
+    PERFORM add_fee('tx-failed', '0xusdc', '0xfeetaker', 777);
+
+    -- A fee on a row indexed before the flag existed. Nothing says the chain kept the call.
+    PERFORM add_fee('legacy', '0xusdc', '0xfeetaker', 666);
+
+    -- A client on zero bps. The row exists but moved nothing, so no owner appears for it.
+    PERFORM add_fee('committed', '0xusdc', '0xclient', 0, 'client');
+
+    -- The fee taker withdraws 120 of the 500 it holds.
+    PERFORM add_vault('w1', '0xfeetaker', zero, '0xusdc', 120, 'debit');
+
+    -- Someone deposits, moves it on, and the second owner takes it all out again.
+    PERFORM add_vault('d1', zero, '0xalice', '0xweth', 70, 'credit');
+    PERFORM add_vault('t1', '0xalice', '0xbob', '0xweth', 70, 'transfer');
+    PERFORM add_vault('w2', '0xbob', zero, '0xweth', 70, 'debit');
+END $$;
+
+DO $$
+DECLARE
+    balance NUMERIC;
+    fees NUMERIC;
+    owners TEXT[];
+BEGIN
+    -- 300 + 200 credited by fees, 120 withdrawn. The discarded, reverted and failed fees are out.
+    SELECT b.balance, b.credited_as_fees INTO balance, fees
+    FROM vault_balances b
+    WHERE b.owner = '0xfeetaker' AND b.token = '0xusdc';
+    IF balance IS DISTINCT FROM 380 OR fees IS DISTINCT FROM 500 THEN
+        RAISE EXCEPTION 'fee taker holds % of % credited, expected 380 of 500', balance, fees;
+    END IF;
+
+    -- A zero-amount fee row puts nobody in the vault.
+    IF EXISTS (SELECT 1 FROM vault_balances b WHERE b.owner = '0xclient') THEN
+        RAISE EXCEPTION 'a zero fee created a vault owner';
+    END IF;
+
+    -- The deposit reached alice, the move took it away again, and bob withdrew it. Both stay
+    -- listed on zero so the flow through them is still visible.
+    SELECT array_agg(b.owner || '=' || b.balance ORDER BY b.owner) INTO owners
+    FROM vault_balances b WHERE b.token = '0xweth';
+    IF owners IS DISTINCT FROM ARRAY['0xalice=0', '0xbob=0'] THEN
+        RAISE EXCEPTION 'weth balances are %', owners;
+    END IF;
+
+    -- The zero address is a mint and burn marker, not an owner.
+    IF EXISTS (
+        SELECT 1 FROM vault_balances b
+        WHERE b.owner = '0x0000000000000000000000000000000000000000'
+    ) THEN
+        RAISE EXCEPTION 'the zero address became a vault owner';
+    END IF;
+
+    -- Nothing here withdraws more than it was credited, so no balance may go negative. A
+    -- negative one on real data means a credit source is missing.
+    IF EXISTS (SELECT 1 FROM vault_balances b WHERE b.balance < 0) THEN
+        RAISE EXCEPTION 'a balance went negative';
+    END IF;
+END $$;
+
+DROP FUNCTION add_fee(TEXT, TEXT, TEXT, NUMERIC, TEXT);
+DROP FUNCTION add_vault(TEXT, TEXT, TEXT, TEXT, NUMERIC, TEXT);
 DROP FUNCTION add_trade(TEXT, TEXT, INTEGER, TEXT, TEXT, NUMERIC, BOOLEAN, BOOLEAN, BOOLEAN);
 COMMIT;

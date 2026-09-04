@@ -20,8 +20,9 @@ executors per hop, splits, watermark (trailing calldata), revert selector, decod
 gas used.
 
 Related tables: `trade_hops` (one row per executor hop), `fees_taken` (one row per fee
-recipient), `fee_config_events` (FeeCalculator admin events and fee-calculator rotations), and
-`router_call_errors` (selector-matched calls that could not be decoded safely).
+recipient), `fee_config_events` (FeeCalculator admin events and fee-calculator rotations),
+`vault_transfers` (ERC-6909 balance movements inside a router), and `router_call_errors`
+(selector-matched calls that could not be decoded safely).
 
 ### Discarded calls
 
@@ -53,6 +54,46 @@ The other two filters look redundant next to the flag, because a reverted call d
 state and a failed transaction discards all of it. They stay because the view does not lean on
 that: nothing in the Firehose contract promises a call cannot report `status_reverted` with its
 state kept.
+
+### Vault balances
+
+A V3 router holds token balances of its own, ERC-6909 style, and pays a fee recipient into that
+vault instead of transferring the token out. Router revenue therefore sits in the router until
+someone withdraws it, and `vault_balances` is what it looks like.
+
+The balance needs two sources, because the two kinds of movement report themselves differently:
+
+| movement | event | table |
+| --- | --- | --- |
+| fee credit | none, on purpose | `fees_taken` |
+| deposit, withdrawal, move between owners | ERC-6909 `Transfer` | `vault_transfers` |
+| swap funded from the vault, output paid into it | ERC-6909 `Transfer` | `vault_transfers` |
+
+`Vault._creditVaultForFees` mints without an event to save gas; `_takeFees` emits `FeesTaken`
+instead, and that is the only record of the credit. Every other path goes through `Vault._update`
+and does emit `Transfer`. Nothing else writes a vault balance, so the two together are complete.
+
+The credited token comes from the `FeesTaken` event, not from the swap calldata, so a balance
+does not depend on the swap decoder reading `tokenOut` right.
+
+`vault_flows` is the ledger of single movements and `vault_balances` the sum per owner, router
+and token. `balance` is what the router's `balanceOf(owner, uint256(uint160(token)))` returns, so
+it can be checked against the chain. An owner that withdrew everything stays listed on zero, so
+what it collected over time remains visible in `credited_as_fees`.
+
+Balances are per router: each deployment holds its own vault, and a rotation leaves the old
+balance where it was.
+
+Two things to know when reading real data:
+
+* A **negative** balance means credits are missing. Expect one on a chain that still holds trades
+  indexed before `state_committed` existed, because such a row counts a fee credit the chain
+  threw away and no later withdrawal takes it back out. Re-indexing the chain clears it.
+* The **zero token address** is native ETH on the first ethereum router
+  (`0x1f8db310`), which is the convention it was deployed with; later routers use the
+  `0xeeee…eeee` sentinel. Both appear as written, because the id the router credited is what
+  `balanceOf` answers on. On that router, the fee taker has withdrawn zero-address balances as
+  ETH: the debit of 487837220983021421 in block 25144849 moved exactly that many wei.
 
 ### Executor names
 
@@ -382,8 +423,10 @@ Nothing has to be cleared in the database: a chain with no cursor row starts at 
 ## Module graph
 
 ```
-index_router_activity ─┬─▶ map_fee_config_events ─▶ store_fee_config ─▶ map_trades ─▶ db_out
-                       └────────────────────────────────────────────▶            └──▶
+index_router_activity ─┬─▶ map_fee_config_events ─▶ store_fee_config ─▶ map_trades
+                       └─▶ map_vault_transfers
+
+db_out ◀── map_trades, map_fee_config_events, map_vault_transfers
 ```
 
 ### Block index
@@ -394,9 +437,12 @@ frame, and `fee_cfg` for a block that carries a log the fee-config decoders reco
 block that has neither, which is more than 999 blocks in 1000. Everything downstream of a
 filtered module, `store_fee_config` included, only sees the blocks that pass.
 
-`map_trades` filters on the routers of its params. Its filter has to name the same addresses,
-because a filter that is too narrow drops trades and reports nothing;
-`scripts/check_manifests.py` compares the two and runs in CI.
+`map_trades` and `map_vault_transfers` filter on the routers of their params, which are the
+same params. A filter has to name the same addresses, because one that is too narrow drops rows
+and reports nothing; `scripts/check_manifests.py` compares the three and runs in CI.
+
+A vault movement is a call to the router, so the `addr:` keys the index already writes cover it
+and `map_vault_transfers` needs nothing new from the index.
 
 `map_fee_config_events` filters on `fee_cfg` alone. It decodes a FeeCalculator event from any
 emitter, and a list of addresses would not hold: nearly half of the fee-config events stored so

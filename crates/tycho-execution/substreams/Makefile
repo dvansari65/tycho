@@ -37,6 +37,8 @@ lint: check-manifests
 fmt:
 	cargo +nightly fmt
 
+# Needs a substreams CLI that bundles the sink-sql descriptors (1.22 does, 1.16 does not:
+# it fails on the manifest's `sink:` block with "could not find protobuf message type").
 protogen:
 	cd tycho-router-trades && substreams protogen chains/ethereum.yaml --output-path src/pb --exclude-paths="sf/substreams,sf/firehose,google,sf/ethereum"
 
