@@ -1,3 +1,32 @@
+## [0.385.0](https://github.com/propeller-heads/tycho/compare/0.384.0...0.385.0) (2026-09-03)
+
+
+### Features
+
+* **router-trades:** value trades in USD from preferred tokens ([230eb98](https://github.com/propeller-heads/tycho/commit/230eb98f3abb0f6297f1647cab486f3e9925b019))
+* **router-trades:** value trades in USD from preferred tokens ([#1398](https://github.com/propeller-heads/tycho/issues/1398)) ([232479e](https://github.com/propeller-heads/tycho/commit/232479e8f19857bf68f79bb25dad2e196e1ad8c2))
+
+
+### Bug Fixes
+
+* **router-trades:** correct the bsc and robinhood start blocks ([99f811f](https://github.com/propeller-heads/tycho/commit/99f811f38825aa9628b62babeb7628f205e3541d))
+
+## [0.384.0](https://github.com/propeller-heads/tycho/compare/0.383.0...0.384.0) (2026-09-03)
+
+
+### Features
+
+* **substreams:** index Ramses V3 on Robinhood Chain ([ad835a0](https://github.com/propeller-heads/tycho/commit/ad835a08d69e0cc37eb92e505e316e4994f41518))
+* **substreams:** index Ramses V3 on Robinhood Chain ([#1391](https://github.com/propeller-heads/tycho/issues/1391)) ([ad3a756](https://github.com/propeller-heads/tycho/commit/ad3a756cc36d69790cb8f7c59131873c49a840e7))
+
+## [0.383.0](https://github.com/propeller-heads/tycho/compare/0.382.0...0.383.0) (2026-09-03)
+
+
+### Features
+
+* **substreams:** index RobinSwap V3 on Robinhood Chain ([70ee698](https://github.com/propeller-heads/tycho/commit/70ee698572602c58d7fb077efd5cfc5a53eb02f0))
+* **substreams:** index RobinSwap V3 on Robinhood Chain ([#1390](https://github.com/propeller-heads/tycho/issues/1390)) ([a11cf61](https://github.com/propeller-heads/tycho/commit/a11cf61ac96da3107c64e304023a01c935c9cacf))
+
 ## [0.382.0](https://github.com/propeller-heads/tycho/compare/0.381.0...0.382.0) (2026-09-03)
 
 
