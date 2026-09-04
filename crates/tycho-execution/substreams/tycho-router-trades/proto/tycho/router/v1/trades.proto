@@ -160,6 +160,10 @@ message FeeConfigEvent {
   // Decimal / hex string representation of the old and new values.
   string old_value = 10;
   string new_value = 11;
+  // Denominator of the bps values this emitter uses, when the event gives its generation away;
+  // 0 otherwise. The two FeeCalculator generations widened the bps arguments from uint16 to
+  // uint32, so an event that carries one has a different topic in each.
+  uint64 bps_scale = 12;
 }
 
 // Every ERC-6909 Transfer a router emitted in one block.

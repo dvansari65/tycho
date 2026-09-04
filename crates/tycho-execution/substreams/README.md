@@ -184,6 +184,26 @@ manifests under `tycho-router-trades/chains/`. The FeeCalculator constructor emi
 the initial pairing is a parameter; rotations (`FeeCalculatorActivated` / `FeeCalculatorUpdated`)
 and all fee-rate changes are replayed from events into `store_fee_config`.
 
+#### The bps denominator belongs to the calculator
+
+`trades.router_fee_on_output_bps` is a raw number and only means a rate together with
+`fee_bps_scale`. The scale is a property of the **FeeCalculator**, not of the router: the second
+generation widened the bps arguments from `uint16` to `uint32` and moved the denominator from
+10,000 to 100,000,000, so the same 0.1% reads as `10` on the first and `100000` on the second.
+
+A router can be rotated onto a calculator of the other generation, and five of them are: a v3_0
+router pointed at a `uint32` calculator reports bps on 100,000,000. Taking the scale from the
+router generation therefore made the rate 10,000 times too large on those.
+
+Because the two generations differ in the argument width, they differ in event signature and so
+in topic, and the event that sets a bps value also says which denominator it is on.
+`store_fee_config` keeps that under `fc:<calculator>:scale`, and a trade reads the scale of the
+calculator it resolved to. The router generation is only the fallback for a calculator that no
+observed event gives away. `fee_config_events.bps_scale` carries the same value per event.
+
+An event that carries no bps value has one signature in both generations and identifies neither,
+so it sets nothing.
+
 ### Volume in USD
 
 Pricing is a post-ingestion step, not part of the substreams. Tycho prices every token in the

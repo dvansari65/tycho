@@ -30,6 +30,9 @@ pub(crate) mod keys {
     pub fn positive_slippage(fc: &[u8]) -> String {
         format!("fc:{}:pos_slip", hex::encode(fc))
     }
+    pub fn fee_bps_scale(fc: &[u8]) -> String {
+        format!("fc:{}:scale", hex::encode(fc))
+    }
     pub fn positive_slippage_exempt(fc: &[u8], client: &[u8]) -> String {
         format!("fc:{}:ps_exempt:{}", hex::encode(fc), hex::encode(client))
     }

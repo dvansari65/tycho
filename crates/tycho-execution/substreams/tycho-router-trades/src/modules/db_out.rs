@@ -55,6 +55,9 @@ pub fn db_out(
         if !ev.new_value.is_empty() {
             row.set("new_value", &ev.new_value);
         }
+        if ev.bps_scale != 0 {
+            row.set("bps_scale", ev.bps_scale);
+        }
     }
     for t in &vault.transfers {
         let id = format!("{}:{}:{}", t.chain, hex_addr(&t.tx_hash), t.log_index);

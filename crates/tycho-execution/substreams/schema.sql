@@ -158,7 +158,12 @@ CREATE TABLE IF NOT EXISTS fee_config_events (
     event        TEXT NOT NULL,
     client       TEXT,
     old_value    TEXT,
-    new_value    TEXT
+    new_value    TEXT,
+    -- Denominator the old_value and new_value bps are on, when this event gives its emitter's
+    -- generation away; NULL otherwise. The two FeeCalculator generations widened the bps
+    -- arguments from uint16 to uint32, so an event carrying one has a different topic in each,
+    -- and 10 on the first means the same rate as 100000 on the second.
+    bps_scale    BIGINT
 );
 CREATE INDEX IF NOT EXISTS fee_config_events_emitter_idx ON fee_config_events (chain, emitter, block_number);
 

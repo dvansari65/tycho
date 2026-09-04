@@ -244,6 +244,11 @@ pub struct FeeConfigEvent {
     pub old_value: ::prost::alloc::string::String,
     #[prost(string, tag="11")]
     pub new_value: ::prost::alloc::string::String,
+    /// Denominator of the bps values this emitter uses, when the event gives its generation away;
+    /// 0 otherwise. The two FeeCalculator generations widened the bps arguments from uint16 to
+    /// uint32, so an event that carries one has a different topic in each.
+    #[prost(uint64, tag="12")]
+    pub bps_scale: u64,
 }
 /// Every ERC-6909 Transfer a router emitted in one block.
 ///
