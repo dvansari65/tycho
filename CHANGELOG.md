@@ -1,3 +1,67 @@
+## [0.386.1](https://github.com/propeller-heads/tycho/compare/0.386.0...0.386.1) (2026-09-04)
+
+
+### Bug Fixes
+
+* **testing:** make Robinhood Chain packages testable ([d93a698](https://github.com/propeller-heads/tycho/commit/d93a698d014b33c9ffd3ef8e1a91282ac4990f6b))
+* **testing:** make Robinhood Chain packages testable ([#1410](https://github.com/propeller-heads/tycho/issues/1410)) ([f39d07e](https://github.com/propeller-heads/tycho/commit/f39d07ee096a4182248c6f4179bc24880f1ce158))
+* **testing:** set ROBINHOOD_RPC_URL for the Foundry fork tests ([f2b689f](https://github.com/propeller-heads/tycho/commit/f2b689fb893c6c65bdb4e1d108fe5285d81813c4)), closes [#1337](https://github.com/propeller-heads/tycho/issues/1337)
+* **testing:** wire ROBINHOOD_RPC_URL through CI, and require it ([10d89ad](https://github.com/propeller-heads/tycho/commit/10d89adb27764913f76f8314fd2016ea7566dd54))
+
+## [0.386.0](https://github.com/propeller-heads/tycho/compare/0.385.0...0.386.0) (2026-09-04)
+
+
+### Features
+
+* **simulation:** gate the first-in-block fee bet behind an opt-in ([def6079](https://github.com/propeller-heads/tycho/commit/def60799ab03148ba775a1f85aa33e2534f8913d))
+* **simulation:** quote slipstream fees at the execution block ([901747a](https://github.com/propeller-heads/tycho/commit/901747ab2d236f493311c8c07a75a2aa701d453d))
+* **simulation:** quote slipstream fees at the execution block ([#1359](https://github.com/propeller-heads/tycho/issues/1359)) ([ae6f2f4](https://github.com/propeller-heads/tycho/commit/ae6f2f4357c8d88acb6b03737a2403c5bc1b55c5))
+
+
+### Bug Fixes
+
+* **simulation:** harden the execution-block sweep after review ([b00d797](https://github.com/propeller-heads/tycho/commit/b00d797cb885cd7a2ca089c48ea56d2d224e4cbd))
+* **simulation:** keep removed components out of the execution-block sweep ([b44a81c](https://github.com/propeller-heads/tycho/commit/b44a81c643d26f2c2c1eb9d16656830cd5cc8204))
+* **simulation:** pass the chain at the decoder sites merged from main ([7c21b1a](https://github.com/propeller-heads/tycho/commit/7c21b1a71e4e118f0d3885f7f4f7a9c22a0299e1))
+* **simulation:** set the chain in the fixture-replay decoder helper ([59c9bfc](https://github.com/propeller-heads/tycho/commit/59c9bfcbe8158e70f5696c388563f2b13e6df57a))
+
+## [0.385.0](https://github.com/propeller-heads/tycho/compare/0.384.0...0.385.0) (2026-09-03)
+
+
+### Features
+
+* **router-trades:** value trades in USD from preferred tokens ([230eb98](https://github.com/propeller-heads/tycho/commit/230eb98f3abb0f6297f1647cab486f3e9925b019))
+* **router-trades:** value trades in USD from preferred tokens ([#1398](https://github.com/propeller-heads/tycho/issues/1398)) ([232479e](https://github.com/propeller-heads/tycho/commit/232479e8f19857bf68f79bb25dad2e196e1ad8c2))
+
+
+### Bug Fixes
+
+* **router-trades:** correct the bsc and robinhood start blocks ([99f811f](https://github.com/propeller-heads/tycho/commit/99f811f38825aa9628b62babeb7628f205e3541d))
+
+## [0.384.0](https://github.com/propeller-heads/tycho/compare/0.383.0...0.384.0) (2026-09-03)
+
+
+### Features
+
+* **substreams:** index Ramses V3 on Robinhood Chain ([ad835a0](https://github.com/propeller-heads/tycho/commit/ad835a08d69e0cc37eb92e505e316e4994f41518))
+* **substreams:** index Ramses V3 on Robinhood Chain ([#1391](https://github.com/propeller-heads/tycho/issues/1391)) ([ad3a756](https://github.com/propeller-heads/tycho/commit/ad3a756cc36d69790cb8f7c59131873c49a840e7))
+
+## [0.383.0](https://github.com/propeller-heads/tycho/compare/0.382.0...0.383.0) (2026-09-03)
+
+
+### Features
+
+* **substreams:** index RobinSwap V3 on Robinhood Chain ([70ee698](https://github.com/propeller-heads/tycho/commit/70ee698572602c58d7fb077efd5cfc5a53eb02f0))
+* **substreams:** index RobinSwap V3 on Robinhood Chain ([#1390](https://github.com/propeller-heads/tycho/issues/1390)) ([a11cf61](https://github.com/propeller-heads/tycho/commit/a11cf61ac96da3107c64e304023a01c935c9cacf))
+
+## [0.382.0](https://github.com/propeller-heads/tycho/compare/0.381.0...0.382.0) (2026-09-03)
+
+
+### Features
+
+* **substreams:** index SushiSwap V3 on Robinhood Chain ([24a6041](https://github.com/propeller-heads/tycho/commit/24a60418c018d4cbc6c2be7b9c87b7d6e216bbd6))
+* **substreams:** index SushiSwap V3 on Robinhood Chain ([#1389](https://github.com/propeller-heads/tycho/issues/1389)) ([ca54e44](https://github.com/propeller-heads/tycho/commit/ca54e4400849f9b4a99c16fcec76e2570154c758))
+
 ## [0.381.0](https://github.com/propeller-heads/tycho/compare/0.380.0...0.381.0) (2026-09-03)
 
 
