@@ -157,18 +157,23 @@ where
     /// message are advanced in place under the write guard and cloned into `updated_states`
     /// only when their quoting behavior changed — so an idle block-sensitive pool costs one
     /// virtual call per message and zero clones, and consumers are only told about pools whose
-    /// quotes actually moved.
-    fn refresh_execution_block(
+    /// quotes actually moved. Stored states of failed or removed components are left untouched,
+    /// so a component the consumer was told is gone is never re-emitted.
+    fn refresh_execution_block<C>(
         updated_states: &mut HashMap<String, Box<dyn ProtocolSim>>,
         stored_states: &mut HashMap<String, Box<dyn ProtocolSim>>,
         failed_components: &HashSet<String>,
+        removed_components: &HashMap<String, C>,
         execution_block: &BlockContext,
     ) {
         for state in updated_states.values_mut() {
             state.apply_block(execution_block);
         }
         for (id, state) in stored_states.iter_mut() {
-            if failed_components.contains(id) || updated_states.contains_key(id) {
+            if failed_components.contains(id) ||
+                removed_components.contains_key(id) ||
+                updated_states.contains_key(id)
+            {
                 continue;
             }
             if state.apply_block(execution_block) {
@@ -1008,6 +1013,7 @@ where
                 &mut updated_states,
                 &mut decoder_state.states,
                 &decoder_state.failed_components,
+                &removed_pairs,
                 &execution_block,
             );
         }
@@ -1028,7 +1034,6 @@ where
         // Remove components from persistent state
         for id in removed_pairs.keys() {
             state_guard.components.remove(id);
-            state_guard.states.remove(id);
         }
 
         for (key, values) in contracts_map {
@@ -1380,7 +1385,7 @@ mod tests {
 
     #[test]
     fn confirmed_header_targets_the_next_block() {
-        let decoder = TychoStreamDecoder::<BlockHeader>::new(Chain::Ethereum);
+        let decoder = TychoStreamDecoder::<BlockHeader>::new(Chain::Base);
 
         let execution_block = decoder.execution_block(&header_at(100, 1_000, None));
 
@@ -1414,6 +1419,7 @@ mod tests {
             &mut updated,
             &mut stored,
             &HashSet::new(),
+            &HashMap::<String, ()>::new(),
             &BlockContext::new(101, 502),
         );
 
@@ -1441,6 +1447,30 @@ mod tests {
             &mut updated,
             &mut stored,
             &failed,
+            &HashMap::<String, ()>::new(),
+            &BlockContext::new(101, 502),
+        );
+
+        assert!(updated.is_empty());
+    }
+
+    #[test]
+    fn refresh_never_re_emits_removed_components() {
+        // The stored state of a component reported in `removed_pairs` stays in place; the sweep
+        // must not surface it again, even when its fee flipped in the execution block.
+        let mut stored = HashMap::from([("gone".to_string(), {
+            let mut state = block_sensitive_state();
+            state.apply_block(&BlockContext::new(100, 500));
+            state
+        })]);
+        let removed = HashMap::from([("gone".to_string(), ())]);
+        let mut updated: HashMap<String, Box<dyn ProtocolSim>> = HashMap::new();
+
+        TychoStreamDecoder::<BlockHeader>::refresh_execution_block(
+            &mut updated,
+            &mut stored,
+            &HashSet::new(),
+            &removed,
             &BlockContext::new(101, 502),
         );
 
@@ -1471,6 +1501,7 @@ mod tests {
             &mut updated,
             &mut stored,
             &HashSet::new(),
+            &HashMap::<String, ()>::new(),
             &BlockContext::new(102, 504),
         );
 
