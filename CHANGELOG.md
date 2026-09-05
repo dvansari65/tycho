@@ -1,3 +1,15 @@
+## [0.390.0](https://github.com/propeller-heads/tycho/compare/0.389.0...0.390.0) (2026-09-05)
+
+
+### Features
+
+* **router-trades:** start each chain at its first v3 router ([#1415](https://github.com/propeller-heads/tycho/issues/1415)) ([034d9f2](https://github.com/propeller-heads/tycho/commit/034d9f23def3f88d0b9d64ad2aa08a47de34d62a))
+
+
+### Performance Improvements
+
+* **router-trades:** start each chain at its first v3 router ([630fe7f](https://github.com/propeller-heads/tycho/commit/630fe7fadef263e078c4c942133017f07567743b))
+
 ## [0.389.0](https://github.com/propeller-heads/tycho/compare/0.388.0...0.389.0) (2026-09-04)
 
 
