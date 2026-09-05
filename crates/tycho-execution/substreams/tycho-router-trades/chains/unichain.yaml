@@ -1,7 +1,7 @@
 specVersion: v0.1.0
 package:
   name: tycho_router_trades
-  version: v0.2.0
+  version: v0.3.0
   url: https://github.com/propeller-heads/tycho/tree/main/crates/tycho-execution/substreams
 
 imports:
@@ -21,7 +21,7 @@ binaries:
 modules:
   - name: index_router_activity
     kind: blockIndex
-    initialBlock: 16000000
+    initialBlock: 43709003
     inputs:
       - source: sf.ethereum.type.v2.Block
     output:
@@ -29,7 +29,7 @@ modules:
 
   - name: map_fee_config_events
     kind: map
-    initialBlock: 16000000
+    initialBlock: 43709003
     blockFilter:
       module: index_router_activity
       query:
@@ -42,7 +42,7 @@ modules:
 
   - name: store_fee_config
     kind: store
-    initialBlock: 16000000
+    initialBlock: 43709003
     updatePolicy: set
     valueType: string
     inputs:
@@ -50,7 +50,7 @@ modules:
 
   - name: map_trades
     kind: map
-    initialBlock: 16000000
+    initialBlock: 43709003
     blockFilter:
       module: index_router_activity
       query:
@@ -64,7 +64,7 @@ modules:
 
   - name: map_vault_transfers
     kind: map
-    initialBlock: 16000000
+    initialBlock: 43709003
     blockFilter:
       module: index_router_activity
       query:
@@ -77,7 +77,7 @@ modules:
 
   - name: db_out
     kind: map
-    initialBlock: 16000000
+    initialBlock: 43709003
     inputs:
       - map: map_trades
       - map: map_fee_config_events
