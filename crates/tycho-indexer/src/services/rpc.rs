@@ -1738,6 +1738,37 @@ mod tests {
         assert_eq!(result.version.block, expected.version.block);
     }
 
+    #[rstest]
+    #[case::exact_block(
+        BlockOrTimestamp::Block(BlockIdentifier::Number((Chain::Ethereum, 1))),
+        CachePolicy::Cache
+    )]
+    #[case::timestamp(BlockOrTimestamp::Timestamp(NaiveDateTime::default()), CachePolicy::Bypass)]
+    #[tokio::test]
+    async fn test_cache_policy_without_pending_deltas(
+        #[case] request_version: BlockOrTimestamp,
+        #[case] expected_policy: CachePolicy,
+    ) {
+        let req_handler = RpcHandler::new(
+            MockGateway::new(),
+            None,
+            MockEntryPointTracer::new(),
+            PlansConfig::default(),
+            vec![],
+            vec![],
+        );
+
+        let resolved = req_handler
+            .calculate_versions(&request_version, "uniswap_v2", Chain::Ethereum)
+            .await
+            .unwrap();
+
+        assert_eq!(resolved.cache_policy, expected_policy);
+        assert_eq!(resolved.db_version.0, request_version);
+        assert!(matches!(resolved.db_version.1, VersionKind::Last));
+        assert!(resolved.deltas_version.is_none());
+    }
+
     #[tokio::test]
     async fn test_get_contract_state() {
         let expected = Account::new(
@@ -1883,6 +1914,49 @@ mod tests {
             .get_contract_state(&request)
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_committed_contract_state_is_cached() {
+        let mut gw = MockGateway::new();
+        gw.expect_get_contracts()
+            .once()
+            .returning(|_, _, _, _, _| {
+                Box::pin(async { Ok(WithTotal { entity: vec![], total: Some(0) }) })
+            });
+
+        let mut mock_buffer = MockPendingDeltas::new();
+        mock_buffer
+            .expect_get_block_commit_status()
+            .once()
+            .returning(|_, _| Ok(Some(CommitStatus::Committed)));
+
+        let req_handler = RpcHandler::new(
+            gw,
+            Some(Arc::new(mock_buffer)),
+            MockEntryPointTracer::new(),
+            PlansConfig::default(),
+            vec![],
+            vec![],
+        );
+        let request = dto::StateRequestBody {
+            contract_ids: Some(vec![]),
+            protocol_system: "uniswap_v2".to_string(),
+            version: dto::VersionParam::at_block(dto::Chain::Ethereum, 1),
+            chain: dto::Chain::Ethereum,
+            pagination: dto::PaginationParams::default(),
+        };
+
+        let first = req_handler
+            .get_contract_state(&request)
+            .await
+            .unwrap();
+        let second = req_handler
+            .get_contract_state(&request)
+            .await
+            .unwrap();
+
+        assert!(Arc::ptr_eq(&first, &second));
     }
 
     #[tokio::test]
@@ -3341,6 +3415,55 @@ mod tests {
             .unwrap();
 
         assert_eq!(lookup_count.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn test_complete_protocol_component_lookup_is_cached() {
+        let mut gw = MockGateway::new();
+        gw.expect_get_protocol_components()
+            .once()
+            .return_once(|_, _, _, _, _| {
+                Box::pin(async {
+                    Ok(WithTotal {
+                        entity: vec![protocol_component("committed", "pool")],
+                        total: Some(1),
+                    })
+                })
+            });
+
+        let mut mock_buffer = MockPendingDeltas::new();
+        mock_buffer
+            .expect_get_new_components()
+            .once()
+            .return_once(|_, _, _| Ok(vec![]));
+
+        let req_handler = RpcHandler::new(
+            gw,
+            Some(Arc::new(mock_buffer)),
+            MockEntryPointTracer::new(),
+            PlansConfig::default(),
+            vec![],
+            vec![],
+        );
+        let request = dto::ProtocolComponentsRequestBody {
+            protocol_system: "ambient".to_string(),
+            component_ids: Some(vec!["committed".to_string()]),
+            tvl_gt: None,
+            chain: dto::Chain::Ethereum,
+            pagination: dto::PaginationParams::default(),
+        };
+
+        let first = req_handler
+            .get_protocol_components(&request)
+            .await
+            .unwrap();
+        let second = req_handler
+            .get_protocol_components(&request)
+            .await
+            .unwrap();
+
+        assert!(Arc::ptr_eq(&first, &second));
+        assert_eq!(first.protocol_components[0].id, "committed");
     }
 
     #[tokio::test]
