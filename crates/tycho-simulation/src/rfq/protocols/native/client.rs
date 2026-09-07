@@ -1354,13 +1354,15 @@ mod tests {
     #[test]
     fn rejects_quote_with_mismatched_input_amount() {
         let params = create_test_quote_params();
-        let response = successful_quote_response("2");
+        let mut response = successful_quote_response(&params.amount_in.to_string());
+        // Keep sellerTokenAmount correct so only the top-level amountIn check can reject this.
+        response.amount_in = "2".to_string();
 
         let result = NativeClient::process_quote_response(response, &params);
 
         assert!(matches!(
             result,
-            Err(RFQError::ParsingError(message)) if message.contains("input amount mismatch")
+            Err(RFQError::ParsingError(message)) if message.contains("Native Relay quote input amount mismatch")
         ));
     }
 
@@ -1871,7 +1873,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn applies_one_timeout_to_the_complete_quote_request() {
+    async fn times_out_when_quote_response_stalls() {
         let address = create_hanging_quote_server().await;
         let mut client = create_test_client(format!("http://{address}"));
         client.quote_timeout = Duration::from_millis(50);
@@ -1887,6 +1889,54 @@ mod tests {
             result,
             Err(RFQError::ConnectionError(message)) if message.contains("timed out after 50ms")
         ));
+    }
+
+    #[tokio::test]
+    async fn shares_quote_timeout_across_retries() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        let request_count = Arc::new(AtomicUsize::new(0));
+        let server_request_count = request_count.clone();
+        let params = create_test_quote_params();
+        let success_body = successful_quote_json(&params.amount_in.to_string()).to_string();
+        let quote_timeout = NATIVE_API_RETRY_DELAY * 2;
+
+        tokio::spawn(async move {
+            let retry_body =
+                r#"{"code":301016,"message":"quote invalid, risk management checks failed"}"#
+                    .to_string();
+            for body in [retry_body, success_body] {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let attempt = server_request_count.fetch_add(1, Ordering::SeqCst);
+                if attempt == 1 {
+                    // This fits a fresh timeout, but not the time left after the retry backoff.
+                    tokio::time::sleep(quote_timeout * 3 / 4).await;
+                }
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream
+                    .write_all(response.as_bytes())
+                    .await;
+                let _ = stream.shutdown().await;
+            }
+        });
+
+        let mut client = create_test_client(format!("http://{address}"));
+        client.quote_timeout = quote_timeout;
+
+        let result = timeout(Duration::from_secs(5), client.request_binding_quote(&params))
+            .await
+            .expect("Native quote timeout did not terminate the retries");
+
+        assert!(matches!(
+            result,
+            Err(RFQError::QuoteNotFound(message)) if message.contains("301016")
+        ));
+        assert_eq!(request_count.load(Ordering::SeqCst), 2);
     }
 
     #[tokio::test]

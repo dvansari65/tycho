@@ -211,6 +211,7 @@ mod test {
     use std::{str::FromStr, sync::Arc};
 
     use alloy::hex::encode;
+    use rstest::rstest;
     use tycho_common::models::protocol::ProtocolComponent;
 
     use super::*;
@@ -269,29 +270,10 @@ mod test {
         ));
     }
 
-    #[test]
-    fn test_native_quote_amount_binding_rejects_mismatch() {
-        let requested_amount = BigUint::from(1_000_000u64);
-        let signed_quote = SignedQuote {
-            base_token: Bytes::default(),
-            quote_token: Bytes::default(),
-            amount_in: BigUint::from(999_999u64),
-            amount_out: BigUint::ZERO,
-            quote_attributes: HashMap::new(),
-        };
-
-        let error = validate_quote_amount(&signed_quote, &requested_amount).unwrap_err();
-
-        assert!(matches!(
-            error,
-            EncodingError::InvalidInput(message) if message.contains(
-                "Native quote amount 999999 does not match requested amount 1000000"
-            )
-        ));
-    }
-
-    #[test]
-    fn test_encode_native_single_with_protocol_state() {
+    #[rstest]
+    #[case::matching_amount(None)]
+    #[case::mismatched_amount(Some(2_999_999_999))]
+    fn test_encode_native_single_with_protocol_state(#[case] quote_amount_in: Option<u64>) {
         let quote_amount_out = BigUint::from_str("1000000000000000000").unwrap();
 
         let native_component = ProtocolComponent {
@@ -311,7 +293,7 @@ mod test {
         ];
 
         let native_state = MockRFQState {
-            quote_amount_in: None,
+            quote_amount_in: quote_amount_in.map(BigUint::from),
             quote_amount_out,
             quote_data: native_quote_data.into_iter().collect(),
             ..Default::default()
@@ -342,9 +324,18 @@ mod test {
         )
         .unwrap();
 
-        let encoded_swap = encoder
-            .encode_swap(&swap, &encoding_context)
-            .unwrap();
+        let result = encoder.encode_swap(&swap, &encoding_context);
+        if let Some(quote_amount_in) = quote_amount_in {
+            assert!(matches!(
+                result,
+                Err(EncodingError::InvalidInput(message)) if message == format!(
+                    "Native quote amount {quote_amount_in} does not match requested amount 3000000000"
+                )
+            ));
+            return;
+        }
+
+        let encoded_swap = result.unwrap();
         let hex_swap = encode(&encoded_swap);
 
         let expected_swap = format!(

@@ -358,6 +358,7 @@ impl IndicativelyPriced for NativeState {
 mod tests {
     use std::{collections::HashSet, str::FromStr};
 
+    use rstest::rstest;
     use tokio::time::Duration;
     use tycho_common::models::Chain;
 
@@ -552,6 +553,38 @@ mod tests {
             .unwrap();
 
         assert_eq!(result.amount, BigUint::from(500_000_000_000_000_000u64));
+    }
+
+    #[rstest]
+    #[case::sell_base(true, 2_500_000_000_000_000_000, 3_500_000_000)]
+    #[case::sell_quote(false, 8_192_000_000, 2_500_000_000_000_000_000)]
+    fn consumes_multiple_price_levels(
+        #[case] sell_base: bool,
+        #[case] amount_in: u64,
+        #[case] expected_amount_out: u64,
+    ) {
+        let mut state = state();
+        state.book.bids = vec![
+            NativePriceLevel { quantity: 1.0, price: 2_000.0 },
+            NativePriceLevel { quantity: 2.0, price: 1_000.0 },
+        ];
+        state.book.asks = vec![
+            NativePriceLevel { quantity: 1.0, price: 2_048.0 },
+            NativePriceLevel { quantity: 2.0, price: 4_096.0 },
+        ];
+        // Sell base: 1 * 2000 + 1.5 * 1000 = 3500 USDC.
+        // Sell quote: 2048 buys the first WETH; the remaining 6144 buys 1.5 WETH.
+        let (token_in, token_out) = if sell_base {
+            (&state.base_token, &state.quote_token)
+        } else {
+            (&state.quote_token, &state.base_token)
+        };
+
+        let result = state
+            .get_amount_out(BigUint::from(amount_in), token_in, token_out)
+            .unwrap();
+
+        assert_eq!(result.amount, BigUint::from(expected_amount_out));
     }
 
     #[test]
