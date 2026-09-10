@@ -18,7 +18,11 @@ use tycho_common::{
 use crate::evm::{
     engine_db::{create_engine, SHARED_TYCHO_DB},
     protocol::{
-        curve::{adapter::CurveVariant, math::Pool, vm},
+        curve::{
+            adapter::{build_pool, CurveVariant},
+            math::Pool,
+            vm,
+        },
         u256_num::{biguint_to_u256, u256_to_biguint, u256_to_f64},
     },
 };
@@ -223,8 +227,14 @@ impl ProtocolSim for CurveState {
             .get(vm::POOL_STATE_ADJUSTED)
         {
             Some(encoded) => {
-                let readings = vm::decode_readings(encoded)?;
-                vm::build_from_readings(&readings, self.variant, &self.decimals)?
+                let mut state = vm::decode_readings(encoded)?;
+                state.variant = self.variant;
+                state
+                    .token_decimals
+                    .clone_from(&self.decimals);
+                build_pool(&state).map_err(|e| {
+                    SimulationError::FatalError(format!("curve build_pool failed: {e}"))
+                })?
             }
             None => {
                 let engine = create_engine(SHARED_TYCHO_DB.clone(), false).expect("Infallible");
@@ -260,9 +270,7 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
-    use crate::evm::protocol::curve::vm::{
-        build_from_readings, encode_readings, CurvePoolReadings,
-    };
+    use crate::evm::protocol::curve::{adapter::RawPoolState, vm::encode_readings};
 
     const VARIANT: CurveVariant = CurveVariant::TriCryptoNG;
     const DECIMALS: [u8; 3] = [6, 8, 18];
@@ -272,9 +280,11 @@ mod tests {
     }
 
     /// The TriCryptoNG USDC/WBTC/WETH pool (0x7f86bf…), balances aside.
-    fn readings(balances: Vec<U256>) -> CurvePoolReadings {
-        CurvePoolReadings {
+    fn readings(balances: Vec<U256>) -> RawPoolState {
+        RawPoolState {
+            variant: CurveVariant::StableSwapV2,
             balances,
+            token_decimals: vec![18, 18, 18],
             amp: u("1707629"),
             mid_fee: Some(u("3000000")),
             out_fee: Some(u("30000000")),
@@ -287,7 +297,10 @@ mod tests {
     }
 
     fn state(balances: Vec<U256>) -> CurveState {
-        let pool = build_from_readings(&readings(balances), VARIANT, &DECIMALS).expect("build");
+        let mut readings = readings(balances);
+        readings.variant = VARIANT;
+        readings.token_decimals = DECIMALS.to_vec();
+        let pool = build_pool(&readings).expect("build");
         CurveState::new(
             Bytes::from([7u8; 20]),
             vec![Bytes::from([1u8; 20]), Bytes::from([2u8; 20]), Bytes::from([3u8; 20])],
@@ -324,6 +337,27 @@ mod tests {
             "balances must come from the attribute"
         );
         assert_ne!(curve.pool.balances()[..3], confirmed[..]);
+    }
+
+    #[test]
+    fn test_delta_transition_keeps_its_static_pool_data() {
+        let pending = vec![u("2470000000000"), u("4190000000"), u("1600000000000000000000")];
+        let mut curve = state(vec![u("1"), u("2"), u("3")]);
+        let attribute = encode_readings(&readings(pending.clone())).expect("encode");
+        let mut expected_state = readings(pending.clone());
+        expected_state.variant = VARIANT;
+        expected_state.token_decimals = DECIMALS.to_vec();
+        let expected = build_pool(&expected_state).expect("build expected pool");
+
+        curve
+            .delta_transition(
+                delta(HashMap::from([(vm::POOL_STATE_ADJUSTED.to_string(), attribute)])),
+                &HashMap::new(),
+                &Balances::default(),
+            )
+            .expect("delta transition must ignore the payload's static fields");
+
+        assert_eq!(curve.pool, expected);
     }
 
     #[test]

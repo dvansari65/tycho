@@ -14,7 +14,4 @@ mod vm;
 pub use adapter::CurveVariant;
 pub use state::CurveState;
 pub use variant::resolve_variant;
-pub use vm::{
-    build_from_readings, decode_readings, encode_readings, read_pool_readings, CurvePoolReadings,
-    POOL_STATE_ADJUSTED,
-};
+pub use vm::{decode_readings, encode_readings, read_pool_readings, POOL_STATE_ADJUSTED};
