@@ -1,3 +1,16 @@
+## [0.400.0](https://github.com/propeller-heads/tycho/compare/0.399.0...0.400.0) (2026-09-10)
+
+
+### Features
+
+* **common:** add StorageError::TransactionConflict for concurrent aborts ([944868c](https://github.com/propeller-heads/tycho/commit/944868c2c8d380fb056348550c6c1c721f70ca07))
+
+
+### Bug Fixes
+
+* **storage:** retry conflicts via Unexpected, drop TransactionConflict ([38f9342](https://github.com/propeller-heads/tycho/commit/38f9342c378f4770ad561e4be299c5fa12ab96b4))
+* **storage:** retry write batches on serialization failure ([e541e9b](https://github.com/propeller-heads/tycho/commit/e541e9bc41166ae06d2ea15739b1bd1cac3acded))
+
 ## [0.399.0](https://github.com/propeller-heads/tycho/compare/0.398.0...0.399.0) (2026-09-10)
 
 
