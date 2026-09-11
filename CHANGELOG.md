@@ -1,3 +1,12 @@
+## [0.402.0](https://github.com/propeller-heads/tycho/compare/0.401.0...0.402.0) (2026-09-11)
+
+
+### Features
+
+* **integration-test:** test ekubo_v3 and up_v3 on Robinhood Chain ([#1436](https://github.com/propeller-heads/tycho/issues/1436)) ([6469e33](https://github.com/propeller-heads/tycho/commit/6469e33d517b6d1587cb51199fee318d4fa6bcb3))
+* **integration-test:** test ekubo_v3 on Robinhood Chain ([976acca](https://github.com/propeller-heads/tycho/commit/976accadb08f8925d17124e977f0e9adc6a24889))
+* **integration-test:** test up_v3 on Robinhood Chain ([b45584f](https://github.com/propeller-heads/tycho/commit/b45584f252624a09c55870ffeff834f745f7ba34))
+
 ## [0.401.0](https://github.com/propeller-heads/tycho/compare/0.400.0...0.401.0) (2026-09-11)
 
 
