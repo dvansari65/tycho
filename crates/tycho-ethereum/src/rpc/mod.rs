@@ -683,7 +683,7 @@ impl EthereumRpcClient {
             return Ok([first, second]);
         }
 
-        let mut batch_attempts = 0;
+        let mut batch_attempts: usize = 0;
         let (first, second) = self
             .retry_policy
             .call_with_retry(|| {
@@ -704,7 +704,7 @@ impl EthereumRpcClient {
         let remaining_retries = self
             .get_retry_config()
             .max_retries
-            .saturating_sub(batch_attempts - 1);
+            .saturating_sub(batch_attempts.saturating_sub(1));
         let (first, second) = tokio::join!(
             self.retry_batched_eth_call(&requests[0], block, first, remaining_retries),
             self.retry_batched_eth_call(&requests[1], block, second, remaining_retries),
