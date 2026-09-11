@@ -1,3 +1,10 @@
+## [0.403.0](https://github.com/propeller-heads/tycho/compare/0.402.0...0.403.0) (2026-09-11)
+
+
+### Features
+
+* **indexer:** count extractor restarts in extractor_restarts_total ([ac41ab1](https://github.com/propeller-heads/tycho/commit/ac41ab1bee9e79bae4bfa6d1764e4e08e8cda8f7))
+
 ## [0.402.0](https://github.com/propeller-heads/tycho/compare/0.401.0...0.402.0) (2026-09-11)
 
 
