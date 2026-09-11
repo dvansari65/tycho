@@ -1,3 +1,10 @@
+## [0.404.1](https://github.com/propeller-heads/tycho/compare/0.404.0...0.404.1) (2026-09-11)
+
+
+### Bug Fixes
+
+* **token-analyzer:** compute transfer fee without intermediate underflow ([6087b63](https://github.com/propeller-heads/tycho/commit/6087b63e77b84b4a27a14f3a45b94ac5d8e3f024))
+
 ## [0.404.0](https://github.com/propeller-heads/tycho/compare/0.403.0...0.404.0) (2026-09-11)
 
 
