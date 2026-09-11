@@ -1,3 +1,10 @@
+## [0.404.2](https://github.com/propeller-heads/tycho/compare/0.404.1...0.404.2) (2026-09-11)
+
+
+### Bug Fixes
+
+* **indexer:** base revert attr miss label on component existence ([78dd99f](https://github.com/propeller-heads/tycho/commit/78dd99f2d0f23c94a1a9918a622e96fe3ea67f37))
+
 ## [0.404.1](https://github.com/propeller-heads/tycho/compare/0.404.0...0.404.1) (2026-09-11)
 
 
