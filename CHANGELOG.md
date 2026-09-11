@@ -1,3 +1,17 @@
+## [0.404.0](https://github.com/propeller-heads/tycho/compare/0.403.0...0.404.0) (2026-09-11)
+
+
+### Features
+
+* **simulation:** pending-block state for Curve pools ([#1362](https://github.com/propeller-heads/tycho/issues/1362)) ([3513d46](https://github.com/propeller-heads/tycho/commit/3513d46c74bfc54224a7905b9c2ef472a2fd9b0a))
+* **simulation:** re-export revm ([f850250](https://github.com/propeller-heads/tycho/commit/f85025062fa0be928467eb62ba7557a0e90d53b9))
+* **simulation:** rebuild curve pools from a delta attribute ([5bf9153](https://github.com/propeller-heads/tycho/commit/5bf91535d575a23a793b785f9b320905f18bd8cf))
+
+
+### Bug Fixes
+
+* **simulation:** register vm:curve for pending indexing ([00a346f](https://github.com/propeller-heads/tycho/commit/00a346f1c6791c9e8058783779b881df3ebb1076))
+
 ## [0.403.0](https://github.com/propeller-heads/tycho/compare/0.402.0...0.403.0) (2026-09-11)
 
 
