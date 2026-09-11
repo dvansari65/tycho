@@ -61,7 +61,7 @@ pub struct CurveState {
 
 impl CurveState {
     /// Construct a `CurveState` from a resolved variant and a built `curve_math::Pool`.
-    pub(super) fn new(
+    pub fn new(
         pool_address: Bytes,
         tokens: Vec<Bytes>,
         decimals: Vec<u8>,
