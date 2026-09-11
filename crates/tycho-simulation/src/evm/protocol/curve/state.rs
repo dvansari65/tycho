@@ -227,11 +227,21 @@ impl ProtocolSim for CurveState {
             .get(vm::POOL_STATE_ADJUSTED)
         {
             Some(encoded) => {
-                let mut state = vm::decode_readings(encoded)?;
-                state.variant = self.variant;
-                state
-                    .token_decimals
-                    .clone_from(&self.decimals);
+                let state = vm::decode_raw_state(encoded)?;
+                if state.variant != self.variant {
+                    return Err(SimulationError::FatalError(format!(
+                        "Variant mismatch: expected {}, got {}",
+                        self.variant, state.variant
+                    ))
+                    .into())
+                }
+                if state.token_decimals != self.decimals {
+                    return Err(SimulationError::FatalError(format!(
+                        "Token decimals mismatch: expected {:?}, got {:?}",
+                        self.decimals, state.token_decimals
+                    ))
+                    .into())
+                }
                 build_pool(&state).map_err(|e| {
                     SimulationError::FatalError(format!("curve build_pool failed: {e}"))
                 })?
@@ -270,7 +280,7 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
-    use crate::evm::protocol::curve::{adapter::RawPoolState, vm::encode_readings};
+    use crate::evm::protocol::curve::{adapter::RawPoolState, vm::encode_raw_state};
 
     const VARIANT: CurveVariant = CurveVariant::TriCryptoNG;
     const DECIMALS: [u8; 3] = [6, 8, 18];
@@ -280,11 +290,11 @@ mod tests {
     }
 
     /// The TriCryptoNG USDC/WBTC/WETH pool (0x7f86bf…), balances aside.
-    fn readings(balances: Vec<U256>) -> RawPoolState {
+    fn raw_pool_state(balances: Vec<U256>) -> RawPoolState {
         RawPoolState {
-            variant: CurveVariant::StableSwapV2,
+            variant: VARIANT,
             balances,
-            token_decimals: vec![18, 18, 18],
+            token_decimals: DECIMALS.to_vec(),
             amp: u("1707629"),
             mid_fee: Some(u("3000000")),
             out_fee: Some(u("30000000")),
@@ -297,10 +307,8 @@ mod tests {
     }
 
     fn state(balances: Vec<U256>) -> CurveState {
-        let mut readings = readings(balances);
-        readings.variant = VARIANT;
-        readings.token_decimals = DECIMALS.to_vec();
-        let pool = build_pool(&readings).expect("build");
+        let raw_state = raw_pool_state(balances);
+        let pool = build_pool(&raw_state).expect("build");
         CurveState::new(
             Bytes::from([7u8; 20]),
             vec![Bytes::from([1u8; 20]), Bytes::from([2u8; 20]), Bytes::from([3u8; 20])],
@@ -319,7 +327,7 @@ mod tests {
         let confirmed = vec![u("2466241139205"), u("4200057336"), u("1595469030050811720465")];
         let pending = vec![u("2470000000000"), u("4190000000"), u("1600000000000000000000")];
         let mut curve = state(confirmed.clone());
-        let attribute = encode_readings(&readings(pending.clone())).expect("encode");
+        let attribute = encode_raw_state(&raw_pool_state(pending.clone())).expect("encode");
 
         curve
             .delta_transition(
@@ -340,24 +348,35 @@ mod tests {
     }
 
     #[test]
-    fn test_delta_transition_keeps_its_static_pool_data() {
-        let pending = vec![u("2470000000000"), u("4190000000"), u("1600000000000000000000")];
+    fn test_delta_transition_errors_on_variant_mismatch() {
         let mut curve = state(vec![u("1"), u("2"), u("3")]);
-        let attribute = encode_readings(&readings(pending.clone())).expect("encode");
-        let mut expected_state = readings(pending.clone());
-        expected_state.variant = VARIANT;
-        expected_state.token_decimals = DECIMALS.to_vec();
-        let expected = build_pool(&expected_state).expect("build expected pool");
+        let mut pending_state = raw_pool_state(curve.pool.balances().to_vec());
+        pending_state.variant = CurveVariant::StableSwapMeta;
+        let encoded = encode_raw_state(&pending_state).expect("encode");
 
-        curve
-            .delta_transition(
-                delta(HashMap::from([(vm::POOL_STATE_ADJUSTED.to_string(), attribute)])),
-                &HashMap::new(),
-                &Balances::default(),
-            )
-            .expect("delta transition must ignore the payload's static fields");
+        let result = curve.delta_transition(
+            delta(HashMap::from([(vm::POOL_STATE_ADJUSTED.to_string(), encoded)])),
+            &HashMap::new(),
+            &Balances::default(),
+        );
 
-        assert_eq!(curve.pool, expected);
+        assert!(matches!(result, Err(TransitionError::SimulationError(_))), "got {result:?}");
+    }
+
+    #[test]
+    fn test_delta_transition_errors_on_decimals_mismatch() {
+        let mut curve = state(vec![u("1"), u("2"), u("3")]);
+        let mut pending_state = raw_pool_state(curve.pool.balances().to_vec());
+        pending_state.token_decimals = vec![18, 18, 18];
+        let encoded = encode_raw_state(&pending_state).expect("encode");
+
+        let result = curve.delta_transition(
+            delta(HashMap::from([(vm::POOL_STATE_ADJUSTED.to_string(), encoded)])),
+            &HashMap::new(),
+            &Balances::default(),
+        );
+
+        assert!(matches!(result, Err(TransitionError::SimulationError(_))), "got {result:?}");
     }
 
     #[test]
