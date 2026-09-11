@@ -22,7 +22,8 @@ Recovery worker reads finalized Pending rows
 ## Behavior and tradeoffs
 
 - `Pending` is separate from quality. Its numeric fields are placeholders and must not
-  be used for simulation. The decoder enforces readiness even at minimum quality zero.
+  be used for simulation. The decoder enforces readiness even at minimum quality zero, and
+  the extractor leaves pending tokens out of component TVL until they are repaired.
 - Only an RPC that does not answer produces `Pending`. A `symbol`/`decimals` call that
   reverts or returns undecodable data is a property of the token: it receives the same
   address/18-decimals fallbacks as before, and analysis decides the quality. A token with
