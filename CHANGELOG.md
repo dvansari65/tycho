@@ -1,3 +1,16 @@
+## [0.401.0](https://github.com/propeller-heads/tycho/compare/0.400.0...0.401.0) (2026-09-11)
+
+
+### Features
+
+* **execution:** enable positive slippage capture by default ([868df8e](https://github.com/propeller-heads/tycho/commit/868df8e138bd8edc76188cd70d9aa6d597627003))
+* **execution:** take the router fee receiver as a constructor arg ([2de051e](https://github.com/propeller-heads/tycho/commit/2de051e019762c76111512c4fdd4d6679e7f48ed))
+
+
+### Bug Fixes
+
+* set fee calculator receiver at deployment time ([#1433](https://github.com/propeller-heads/tycho/issues/1433)) ([838bf6c](https://github.com/propeller-heads/tycho/commit/838bf6c153d9a5c84a40a3b2dbb039c0d5cd64ff))
+
 ## [0.400.0](https://github.com/propeller-heads/tycho/compare/0.399.0...0.400.0) (2026-09-10)
 
 
