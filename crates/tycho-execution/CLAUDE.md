@@ -100,6 +100,11 @@ Three fee layers, deducted from swap output:
 3. **Router fee on client fee** (stored): `_routerFeeOnClientFeeBps` -- Tycho's cut of the client fee (deducted from the
    client's portion, not from the user).
 
+**Fee receiver**: `FeeCalculator(routerFeeSetter, routerFeeReceiver)` takes the receiver as a constructor argument
+and emits `RouterFeeReceiverUpdated(address(0), routerFeeReceiver)` at deployment; `setRouterFeeReceiver` changes it
+later. It is explicit rather than defaulted to `msg.sender` because deployment goes through the CREATE2 factory
+(`0x4e59b448…`), which can never call `withdraw` on the router — fees credited to it are lost.
+
 **Per-client overrides**: Both router fees can be overridden per client address via `_customRouterFees`
 mapping (`CustomFees` struct, single storage slot). If set, the custom rate replaces the default for that client. Can be
 removed to revert to defaults.
@@ -114,7 +119,8 @@ queryable via RPC:
 - `MAX_BPS_SQUARED = 10_000_000_000_000_000` — `MAX_BPS²`; the combined denominator when both fees use the
   sub-BPS scale
 
-**Positive slippage** (`_positiveSlippageEnabled`, toggled via `setPositiveSlippageEnabled`): when enabled, the router
+**Positive slippage** (`_positiveSlippageEnabled`, enabled from the constructor — which emits
+`PositiveSlippageToggled(true)` — and toggled afterwards via `setPositiveSlippageEnabled`): when enabled, the router
 takes the entire surplus (`actualAmountOut - expectedAmountOut`) before fees, and the remaining fees compute on
 `expectedAmountOut`. When disabled, fees compute on `actualAmountOut` and the surplus stays in the swap output. The flag
 also forces `mustOutputThroughRouter` to return true, since slippage direction is unknown before the swap. Per-client
@@ -350,10 +356,15 @@ forge fmt                       # auto-format
 forge snapshot                  # gas snapshots
 ```
 
-Config: `contracts/foundry.toml` -- Cancun EVM, optimizer 200 runs (default) / 1000 runs (production), via_ir enabled.
+Config: `contracts/foundry.toml` -- Osaka EVM, optimizer 200 runs (default) / 1000 runs (production), via_ir enabled.
 Line length 80.
 
 Tests fork Ethereum mainnet via `RPC_URL` and Base via `BASE_RPC_URL` env vars.
+
+Contract changes can alter the deployed runtime bytecode used by `protocol-testing`. From the
+repository root, run `./protocols/testing/scripts/update_runtime_bytecode.sh` and commit any changed
+`protocols/testing/fixtures/*.runtime.json`; CI runs the same script with `--check`. Foundry pins
+the compiler and omits the metadata hash to keep these fixtures reproducible.
 
 ### Rust
 
@@ -393,6 +404,8 @@ Features: `evm` (default, enables alloy + reqwest), `fork-tests` (mainnet fork t
    and `Executor::VARIANTS`, then implement `get_transfer_data`, `swap`, and `funds_expected_address` (plus
    `get_callback_transfer_data` and `handle_callback` for callback protocols), mirroring the Solidity executor.
    Only these caller-controlled executors are modeled — they carry the highest risk and are easiest to model.
+9. Regenerate and commit runtime-bytecode fixtures with
+   `./protocols/testing/scripts/update_runtime_bytecode.sh`.
 
 ## Security
 
