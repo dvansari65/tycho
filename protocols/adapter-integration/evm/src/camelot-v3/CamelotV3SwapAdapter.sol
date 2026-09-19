@@ -79,6 +79,7 @@ contract CamelotV3SwapAdapter is ISwapAdapter {
     /// @inheritdoc ISwapAdapter
     /// @dev Each price is the marginal price after selling the given amount,
     /// including the fee the pool would charge the next swap. Reverts with
+    /// `Unavailable` on a pool that was never initialized and with
     /// `LimitExceeded` when the pool cannot absorb the whole amount.
     function price(
         bytes32 poolId,
@@ -88,6 +89,9 @@ contract CamelotV3SwapAdapter is ISwapAdapter {
     ) external override returns (Fraction[] memory prices) {
         (IAlgebraPool pool, bool zeroToOne,,) =
             _pool(poolId, sellToken, buyToken);
+        // Fail like `getLimits` does before a quote reaches the pool's own
+        // lock check, which reverts with the bare string `LOK`.
+        _globalState(pool);
         prices = new Fraction[](specifiedAmounts.length);
         for (uint256 i = 0; i < specifiedAmounts.length; i++) {
             prices[i] = _priceAfterSell(pool, zeroToOne, specifiedAmounts[i]);
@@ -97,6 +101,7 @@ contract CamelotV3SwapAdapter is ISwapAdapter {
     /// @inheritdoc ISwapAdapter
     /// @dev Output goes to `msg.sender`, input is pulled from `msg.sender` in
     /// the pool's callback. A zero amount is an invalid order. Reverts with
+    /// `Unavailable` on a pool that was never initialized, with
     /// `LimitExceeded` when the pool ran out of liquidity before the specified
     /// amount was fully traded, and with `TooSmall` when a sell yields nothing.
     function swap(
@@ -111,6 +116,9 @@ contract CamelotV3SwapAdapter is ISwapAdapter {
         }
         (IAlgebraPool pool, bool zeroToOne, address token0, address token1) =
             _pool(poolId, sellToken, buyToken);
+        // Fail like `getLimits` does before the pool's own lock check, which
+        // reverts with the bare string `LOK`.
+        _globalState(pool);
         int256 amountRequired = side == OrderSide.Sell
             ? SafeCast.toInt256(specifiedAmount)
             : -SafeCast.toInt256(specifiedAmount);
