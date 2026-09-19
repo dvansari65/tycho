@@ -37,10 +37,14 @@ contract CamelotV3SwapAdapter is ISwapAdapter {
     /// quoting wrong.
     uint256 internal constant _MAX_TICK_WALK_STEPS = 400;
     /// @dev Price fractions are scaled so the squared sqrt price they are
-    /// built from stays below 2^148, keeping numerators below 2^168.
+    /// built from stays below 2^148, which keeps every numerator below 2^168:
+    /// callers may then scale a price by up to 2^88 without overflow, as the
+    /// shared adapter test does with its 1e25 precision.
     uint256 internal constant _MAX_SQUARED_PRICE_BITS = 148;
-    /// @dev Prices of token0 in token1 divide by the squared sqrt price, so
-    /// it is shifted by at least this much to keep the numerator below 2^148.
+    /// @dev Prices of token0 in token1 put the power of two in the numerator
+    /// instead, so the shift is at least this much to keep that numerator
+    /// within the same bound. It costs precision only below sqrt prices of
+    /// about 2^74, far outside any real pair.
     uint256 internal constant _MIN_INVERSE_SHIFT = 64;
     /// @dev First word of the revert data a quote travels back in, so any
     /// other revert is told apart and re-raised.
@@ -94,7 +98,7 @@ contract CamelotV3SwapAdapter is ISwapAdapter {
     /// @dev Output goes to `msg.sender`, input is pulled from `msg.sender` in
     /// the pool's callback. A zero amount is an invalid order. Reverts with
     /// `LimitExceeded` when the pool ran out of liquidity before the specified
-    /// amount was fully traded.
+    /// amount was fully traded, and with `TooSmall` when a sell yields nothing.
     function swap(
         bytes32 poolId,
         address sellToken,
@@ -129,6 +133,11 @@ contract CamelotV3SwapAdapter is ISwapAdapter {
         if (side == OrderSide.Sell) {
             if (amountIn < specifiedAmount) {
                 revert LimitExceeded(amountIn);
+            }
+            if (amountOut == 0) {
+                // The smallest sell with a non-zero output is not cheap to
+                // compute, so no lower limit is reported.
+                revert TooSmall(0);
             }
             trade.calculatedAmount = amountOut;
         } else {
@@ -384,8 +393,8 @@ contract CamelotV3SwapAdapter is ISwapAdapter {
         if (!zeroToOne && shift < _MIN_INVERSE_SHIFT) {
             shift = _MIN_INVERSE_SHIFT;
         }
-        uint256 squared = Math.mulDiv(sqrtPrice, sqrtPrice, 1 << shift);
-        uint256 powerOfTwo = 1 << (192 - shift);
+        uint256 squared = Math.mulDiv(sqrtPrice, sqrtPrice, 2 ** shift);
+        uint256 powerOfTwo = 2 ** (192 - shift);
         uint256 feeFactor = _FEE_DENOMINATOR - fee;
         if (zeroToOne) {
             return Fraction(squared * feeFactor, powerOfTwo * _FEE_DENOMINATOR);

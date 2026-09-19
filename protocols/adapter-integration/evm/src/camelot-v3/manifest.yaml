@@ -14,6 +14,7 @@ constants:
     - SellSide
     - BuySide
     - PriceFunction
+    - MarginalPrice
 
 # The file containing the adapter contract
 contract: CamelotV3SwapAdapter.sol

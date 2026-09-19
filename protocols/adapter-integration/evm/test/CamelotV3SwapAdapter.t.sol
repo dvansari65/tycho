@@ -59,7 +59,9 @@ contract CamelotV3SwapAdapterTest is AdapterTest {
     /// @dev The repo's shared adapter behaviour test: marginal prices fall as
     /// the sold amount grows, every executed price sits between the marginal
     /// prices before and after the trade, and amounts 5% above the walked
-    /// limit still price and swap, since the limit is only a lower bound.
+    /// limit still price and swap, since the limit is only a lower bound. That
+    /// last check needs pools whose liquidity extends past the walk's step
+    /// cap; both pools here do.
     function testPoolBehaviour() public {
         bytes32[] memory pools = new bytes32[](2);
         pools[0] = poolId(WETH_USDC_POOL);
@@ -129,15 +131,16 @@ contract CamelotV3SwapAdapterTest is AdapterTest {
 
     /// @dev The price at zero uses the pool's current sqrt price and the fee
     /// the pool charges the next swap, which the pool only computes when a
-    /// swap runs. That fee is read here by running a 1 wei swap in a snapshot.
+    /// swap runs. That fee is read here by running a tiny swap in a snapshot.
     function testPriceAtZeroMatchesPoolState() public {
         bytes32 pool = poolId(WETH_USDC_POOL);
         (uint160 sqrtPrice,,,,,,,) = IAlgebraPool(WETH_USDC_POOL).globalState();
 
         uint256 snapshot = vm.snapshot();
-        deal(WETH, address(this), 1);
-        IERC20(WETH).approve(address(adapter), 1);
-        adapter.swap(pool, WETH, USDC, OrderSide.Sell, 1);
+        uint256 tiny = 1e12; // 0.000001 WETH, enough for a non-zero output
+        deal(WETH, address(this), tiny);
+        IERC20(WETH).approve(address(adapter), tiny);
+        adapter.swap(pool, WETH, USDC, OrderSide.Sell, tiny);
         (,, uint16 feeZto, uint16 feeOtz,,,,) =
             IAlgebraPool(WETH_USDC_POOL).globalState();
         vm.revertTo(snapshot);
@@ -335,6 +338,17 @@ contract CamelotV3SwapAdapterTest is AdapterTest {
         assembly {
             limit := mload(add(reason, 36))
         }
+    }
+
+    /// @dev A sell too small to produce any output is reported as `TooSmall`
+    /// instead of as a trade that returns nothing.
+    function testDustSellReverts() public {
+        deal(WETH, address(this), 1);
+        IERC20(WETH).approve(address(adapter), 1);
+        vm.expectRevert(
+            abi.encodeWithSelector(ISwapAdapterTypes.TooSmall.selector, 0)
+        );
+        adapter.swap(poolId(WETH_USDC_POOL), WETH, USDC, OrderSide.Sell, 1);
     }
 
     function testSwapZeroAmountReverts() public {
