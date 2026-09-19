@@ -6,7 +6,7 @@
 //! transfer, so mint, burn, collect, swap, flash, community fee payments and pool-to-pool
 //! transfers are all covered by the same rule. Pools use `manual_updates`: a pool is marked
 //! for refresh when its own or its operator's storage changed, not on factory changes.
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::{anyhow, Result};
 use itertools::Itertools;
@@ -82,6 +82,10 @@ fn pool_at(
 /// Emits a relative balance delta for every ERC20 transfer of a pool token into or out of a
 /// tracked pool. Both sides of a transfer are handled independently, so a transfer between two
 /// pools debits one and credits the other. A self-transfer changes nothing and emits nothing.
+///
+/// Pool events cannot replace the transfers: a swap forwards the community share of its fee to
+/// the factory's vault inside the same call, and neither that amount nor the vault is part of
+/// the `Swap` event, so event-derived balances would drift by the fee on every swap.
 #[substreams::handlers::map]
 fn map_relative_component_balances(
     block: Block,
@@ -178,7 +182,29 @@ fn map_protocol_changes(
         &mut transaction_changes,
     );
 
+    // A pool can only write its incentive slot in a transaction whose contract changes were
+    // extracted above, so every other transaction is skipped without scanning its storage.
     for tx in block.transactions() {
+        if !transaction_changes.contains_key(&u64::from(tx.index)) {
+            continue;
+        }
+        let created: HashSet<&str> = new_components
+            .tx_components
+            .iter()
+            .filter(|tx_components| {
+                tx_components
+                    .tx
+                    .as_ref()
+                    .map(|t| t.index) ==
+                    Some(u64::from(tx.index))
+            })
+            .flat_map(|tx_components| {
+                tx_components
+                    .components
+                    .iter()
+                    .map(|c| c.id.as_str())
+            })
+            .collect();
         let mut incentives: HashMap<String, (u64, Vec<u8>)> = HashMap::new();
         let slot_writes = tx
             .calls
@@ -204,12 +230,19 @@ fn map_protocol_changes(
             .entry(tx.index.into())
             .or_insert_with(|| TransactionChangesBuilder::new(&tx.into()));
         for (component_id, (_, value)) in incentives {
+            // The pool writes the slot in its creation transaction, so a new pool always
+            // starts with a known value.
+            let change = if created.contains(component_id.as_str()) {
+                ChangeType::Creation
+            } else {
+                ChangeType::Update
+            };
             builder.add_entity_change(&EntityChanges {
                 component_id,
                 attributes: vec![Attribute {
                     name: ACTIVE_INCENTIVE_ATTRIBUTE.to_string(),
                     value: active_incentive_from_slot(&value)?,
-                    change: ChangeType::Update.into(),
+                    change: change.into(),
                 }],
             });
         }

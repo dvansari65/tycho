@@ -48,8 +48,10 @@ A pool with a non-zero `activeIncentive` calls that virtual pool on every swap a
 Those contracts are not indexed, so such pools cannot be simulated. The current value is exposed
 as the `active_incentive` state attribute for consumers to filter on. It is read from the pool's
 storage slot rather than from `Incentive` events, because a swap that finds the incentive gone
-clears the field without emitting anything. The factory's `farmingAddress` (the only account
-allowed to set an incentive) is the zero address at the time of writing.
+clears the field without emitting anything. The generic `paused` attribute is not used for this:
+such a pool still trades on chain, only Tycho cannot quote it. The factory's `farmingAddress`
+(the only account allowed to set an incentive) has never been set as of block 504411773, so no
+Camelot V3 pool has carried an incentive so far.
 
 ## Build and test
 
