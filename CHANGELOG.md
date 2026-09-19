@@ -1,3 +1,46 @@
+## [0.410.0](https://github.com/propeller-heads/tycho/compare/0.409.0...0.410.0) (2026-09-18)
+
+
+### Features
+
+* **execution:** quote the pAMM against its fallback before swapping ([cfc3cb3](https://github.com/propeller-heads/tycho/commit/cfc3cb38fcc7360dccd67a65fd06710ba30f3c8e))
+* **execution:** quote the pAMM against its fallback before swapping ([#1446](https://github.com/propeller-heads/tycho/issues/1446)) ([23dae48](https://github.com/propeller-heads/tycho/commit/23dae48ef4a4e04a9d61c6a0d32cfd4683c17413))
+
+## [0.409.0](https://github.com/propeller-heads/tycho/compare/0.408.0...0.409.0) (2026-09-18)
+
+
+### Features
+
+* **indexer:** add delta window depth and fold batch flags ([a8e8a89](https://github.com/propeller-heads/tycho/commit/a8e8a89edd538f0fbdae5923ded23fc13926e64a))
+* **indexer:** add DeltaWindow patch capture ([d0c28b0](https://github.com/propeller-heads/tycho/commit/d0c28b026501c0fbc6f50c30be2d7f3466d59404))
+* **indexer:** add DeltaWindow skeleton for entity cache ([5a76f93](https://github.com/propeller-heads/tycho/commit/5a76f93dbb7600552ce88b9557cad5afcac9cdd9))
+* **indexer:** add ReorgBuffer::oldest_block and expose version comparison ([49713c3](https://github.com/propeller-heads/tycho/commit/49713c33a9e579263e3c5d6edf3a1e2a48a554d1))
+* **indexer:** back PendingDeltas with DeltaWindow ([c497d14](https://github.com/propeller-heads/tycho/commit/c497d14be5350f22dd9fa760756b0604c462f2c9))
+* **indexer:** batch DeltaWindow folding behind a minimum fold size ([1cac111](https://github.com/propeller-heads/tycho/commit/1cac111ad7c58feb9f40b40956fc26255bb57252))
+* **indexer:** expose DeltaWindow block ranges and WindowConfig ([58e89cb](https://github.com/propeller-heads/tycho/commit/58e89cb3822aa664ce634eb23e262365eb17a373))
+* **indexer:** implement DeltaWindow eviction bound ([f0bba7d](https://github.com/propeller-heads/tycho/commit/f0bba7d4604ea6a69d97527cdbd6e73852962b44))
+* **indexer:** implement DeltaWindow floor and version resolution ([554fa37](https://github.com/propeller-heads/tycho/commit/554fa37ac06c09dd1ad8d8f1cfb5f9f9093d31cd))
+* **indexer:** implement DeltaWindow fold_and_evict with a discard sink ([190bd41](https://github.com/propeller-heads/tycho/commit/190bd41b30ade62937b380a895abb5ab6df8487b))
+* **indexer:** implement DeltaWindow insert and watermarks ([a1a8eb3](https://github.com/propeller-heads/tycho/commit/a1a8eb3499a4bc28d4d72632497e1987db7252ab))
+* **indexer:** implement DeltaWindow revert guard ([8188fc3](https://github.com/propeller-heads/tycho/commit/8188fc32b9f78dd28c8a5017588b5215bb45dc8f))
+* **indexer:** implement DeltaWindow watermark commit status ([d3cdd10](https://github.com/propeller-heads/tycho/commit/d3cdd10cfe027106c9694bcf966f2448216c155d))
+* **indexer:** meter DeltaWindow fold duration ([30380ce](https://github.com/propeller-heads/tycho/commit/30380ced7728406288f844782b96a7788d21c1ef))
+
+
+### Bug Fixes
+
+* **indexer:** end the pump on a DeltaWindow insert error ([7dd93f2](https://github.com/propeller-heads/tycho/commit/7dd93f257f00af1b8fbaa4a64b51c5a2965aaa79))
+* **indexer:** fold committed blocks before a window reset ([b1879ec](https://github.com/propeller-heads/tycho/commit/b1879ec3adf264775e7fc6875fe5a12c00b24778))
+* **indexer:** log an error when a ReorgBuffer index lookup finds the wrong block ([bf606f6](https://github.com/propeller-heads/tycho/commit/bf606f68715c0a99b1089bfbca4c9edf3f3af24a))
+* **indexer:** reset an extractor's window when a delta insert fails ([4c60f5d](https://github.com/propeller-heads/tycho/commit/4c60f5d14485759f9e08753fae8225d0b425ac50))
+* **indexer:** resolve code review findings for PR [#1303](https://github.com/propeller-heads/tycho/issues/1303) ([1ddc60d](https://github.com/propeller-heads/tycho/commit/1ddc60daa2168074ffe5df2dc81b00edaeac613b))
+* **indexer:** return an error from DeltaWindow::new instead of panicking ([956010c](https://github.com/propeller-heads/tycho/commit/956010ceeb271356f464861a6268aa95b8dc12e7))
+
+
+### Performance Improvements
+
+* **indexer:** share block messages between the window and the broadcaster ([c3101a5](https://github.com/propeller-heads/tycho/commit/c3101a516e9d0eea77d411b2012025af30b1437f))
+
 ## [0.408.0](https://github.com/propeller-heads/tycho/compare/0.407.2...0.408.0) (2026-09-17)
 
 
