@@ -7,10 +7,24 @@ import "src/interfaces/ISwapAdapterTypes.sol";
 import "src/libraries/FractionMath.sol";
 import "src/camelot-v3/CamelotV3SwapAdapter.sol";
 
+/// @dev The factory functions the tests use beyond what the adapter needs.
+interface IAlgebraFactoryTest {
+    function vaultAddress() external view returns (address);
+    function createPool(address tokenA, address tokenB)
+        external
+        returns (address pool);
+}
+
 /// @dev Fork tests against Camelot V3 on Arbitrum One. `ARBITRUM_RPC_URL`
 /// must point at a node that serves state at the fork block.
 contract CamelotV3SwapAdapterTest is AdapterTest {
     using FractionMath for Fraction;
+
+    struct Direction {
+        address pool;
+        address tokenIn;
+        address tokenOut;
+    }
 
     CamelotV3SwapAdapter adapter;
 
@@ -31,6 +45,19 @@ contract CamelotV3SwapAdapterTest is AdapterTest {
 
     uint256 constant FORK_BLOCK = 504411371;
     uint256 constant FEE_DENOMINATOR = 1e6;
+    uint256 constant TEST_ITERATIONS = 10;
+    /// @dev Gas the simulation engine gives the transaction that calls the
+    /// adapter (`SimulationEngine`'s default in tycho-simulation), and what
+    /// that leaves for the call itself once the intrinsic transaction cost is
+    /// paid: the 21k base plus the calldata of a `swap` or `getLimits` call.
+    uint256 constant ENGINE_GAS_LIMIT = 8_000_000;
+    uint256 constant ENGINE_CALL_GAS = ENGINE_GAS_LIMIT - 25_000;
+    /// @dev Fuzz lower bounds on the WETH/USDC pool, kept well above dust so
+    /// every case moves tokens: at the fork price a WETH sell below roughly
+    /// 4e8 wei pays no USDC and is reported as `TooSmall`. Buys start at
+    /// 0.01 USDC.
+    uint256 constant MIN_WETH_SELL = 1e12;
+    uint256 constant MIN_USDC_BUY = 1e4;
 
     function setUp() public {
         vm.createSelectFork(vm.rpcUrl("arbitrum"), FORK_BLOCK);
@@ -47,6 +74,48 @@ contract CamelotV3SwapAdapterTest is AdapterTest {
 
     function poolId(address pool) internal pure returns (bytes32) {
         return bytes32(bytes20(pool));
+    }
+
+    /// @dev Both pools in both directions.
+    function directions() internal pure returns (Direction[4] memory list) {
+        list[0] = Direction(WETH_USDC_POOL, WETH, USDC);
+        list[1] = Direction(WETH_USDC_POOL, USDC, WETH);
+        list[2] = Direction(WETH_ARB_POOL, WETH, ARB);
+        list[3] = Direction(WETH_ARB_POOL, ARB, WETH);
+    }
+
+    /// @dev Receives the community share of every swap's fee.
+    function vault() internal view returns (address) {
+        return IAlgebraFactoryTest(FACTORY).vaultAddress();
+    }
+
+    /// @dev Everything a swap on the WETH/USDC pool would change.
+    function poolStateHash() internal view returns (bytes32) {
+        (
+            uint160 price,
+            int24 tick,
+            uint16 feeZto,
+            uint16 feeOtz,
+            uint16 timepointIndex,
+            uint8 communityFee0,
+            uint8 communityFee1,
+            bool unlocked
+        ) = IAlgebraPool(WETH_USDC_POOL).globalState();
+        return keccak256(
+            abi.encode(
+                price,
+                tick,
+                feeZto,
+                feeOtz,
+                timepointIndex,
+                communityFee0,
+                communityFee1,
+                unlocked,
+                IAlgebraPool(WETH_USDC_POOL).liquidity(),
+                IERC20(WETH).balanceOf(WETH_USDC_POOL),
+                IERC20(USDC).balanceOf(WETH_USDC_POOL)
+            )
+        );
     }
 
     function testGetTokens() public view {
@@ -89,14 +158,26 @@ contract CamelotV3SwapAdapterTest is AdapterTest {
         adapter.getPoolIds(0, 10);
     }
 
+    /// @dev Every entry point resolves the pair the same way, and the same
+    /// token on both sides is not a pair either.
     function testRejectsTokensOutsideThePair() public {
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                ISwapAdapterTypes.InvalidOrder.selector,
-                "tokens are not the pool's pair"
-            )
+        bytes memory invalidOrder = abi.encodeWithSelector(
+            ISwapAdapterTypes.InvalidOrder.selector,
+            "tokens are not the pool's pair"
         );
+        uint256[] memory amounts = new uint256[](1);
+
+        vm.expectRevert(invalidOrder);
         adapter.getLimits(poolId(WETH_USDC_POOL), WETH, ARB);
+
+        vm.expectRevert(invalidOrder);
+        adapter.price(poolId(WETH_USDC_POOL), WETH, ARB, amounts);
+
+        vm.expectRevert(invalidOrder);
+        adapter.swap(poolId(WETH_USDC_POOL), WETH, ARB, OrderSide.Sell, 1 ether);
+
+        vm.expectRevert(invalidOrder);
+        adapter.getLimits(poolId(WETH_USDC_POOL), WETH, WETH);
     }
 
     function testGetLimits() public {
@@ -114,19 +195,106 @@ contract CamelotV3SwapAdapterTest is AdapterTest {
         assertLe(sellUsdc[1], IERC20(WETH).balanceOf(WETH_USDC_POOL));
     }
 
-    /// @dev Selling exactly the limit is fully executed: the limit is the
-    /// walked liquidity grossed up by the fee, so the pool never runs short.
+    /// @dev Selling exactly the limit is fully executed and pays out the buy
+    /// limit up to the rounding of the last step, since the pool rounds every
+    /// step the way the walk does. Both calls get the gas the engine's
+    /// transaction leaves them, as the engine funds the payer with exactly
+    /// this limit.
     function testSellingTheLimitIsFullyExecuted() public {
-        bytes32 pool = poolId(WETH_USDC_POOL);
-        uint256 limit = adapter.getLimits(pool, WETH, USDC)[0];
+        Direction[4] memory list = directions();
+        for (uint256 i = 0; i < list.length; i++) {
+            uint256 snapshot = vm.snapshot();
+            bytes32 pool = poolId(list[i].pool);
+            uint256[] memory limits = adapter.getLimits{gas: ENGINE_CALL_GAS}(
+                pool, list[i].tokenIn, list[i].tokenOut
+            );
 
-        deal(WETH, address(this), limit);
-        IERC20(WETH).approve(address(adapter), limit);
-        Trade memory trade =
-            adapter.swap(pool, WETH, USDC, OrderSide.Sell, limit);
+            deal(list[i].tokenIn, address(this), limits[0]);
+            IERC20(list[i].tokenIn).approve(address(adapter), limits[0]);
+            uint256 outBefore =
+                IERC20(list[i].tokenOut).balanceOf(address(this));
 
-        assertEq(IERC20(WETH).balanceOf(address(this)), 0);
-        assertEq(IERC20(USDC).balanceOf(address(this)), trade.calculatedAmount);
+            Trade memory trade = adapter.swap{gas: ENGINE_CALL_GAS}(
+                pool,
+                list[i].tokenIn,
+                list[i].tokenOut,
+                OrderSide.Sell,
+                limits[0]
+            );
+
+            assertEq(
+                IERC20(list[i].tokenIn).balanceOf(address(this)),
+                0,
+                "input spent"
+            );
+            assertEq(
+                IERC20(list[i].tokenOut).balanceOf(address(this)) - outBefore,
+                trade.calculatedAmount,
+                "output received"
+            );
+            assertLe(
+                trade.calculatedAmount, limits[1], "output within the buy limit"
+            );
+            assertApproxEqRel(
+                trade.calculatedAmount,
+                limits[1],
+                1e12, // 1e-6 relative
+                "output reaches the buy limit"
+            );
+            console2.log(
+                "sell limit swap gas",
+                list[i].tokenIn,
+                list[i].tokenOut,
+                trade.gasUsed
+            );
+            vm.revertTo(snapshot);
+        }
+    }
+
+    /// @dev Buying exactly the buy limit is fully executed and costs the sell
+    /// limit, up to the rounding of the last step. Both calls run with the gas
+    /// the engine's transaction leaves them.
+    function testBuyingTheLimitIsFullyExecuted() public {
+        Direction[4] memory list = directions();
+        for (uint256 i = 0; i < list.length; i++) {
+            uint256 snapshot = vm.snapshot();
+            bytes32 pool = poolId(list[i].pool);
+            uint256[] memory limits = adapter.getLimits{gas: ENGINE_CALL_GAS}(
+                pool, list[i].tokenIn, list[i].tokenOut
+            );
+
+            deal(list[i].tokenIn, address(this), type(uint128).max);
+            IERC20(list[i].tokenIn).approve(address(adapter), type(uint256).max);
+            uint256 inBefore = IERC20(list[i].tokenIn).balanceOf(address(this));
+            uint256 outBefore =
+                IERC20(list[i].tokenOut).balanceOf(address(this));
+
+            Trade memory trade = adapter.swap{gas: ENGINE_CALL_GAS}(
+                pool,
+                list[i].tokenIn,
+                list[i].tokenOut,
+                OrderSide.Buy,
+                limits[1]
+            );
+
+            assertEq(
+                IERC20(list[i].tokenOut).balanceOf(address(this)) - outBefore,
+                limits[1],
+                "exact output"
+            );
+            assertEq(
+                inBefore - IERC20(list[i].tokenIn).balanceOf(address(this)),
+                trade.calculatedAmount,
+                "input paid"
+            );
+            assertApproxEqRel(
+                trade.calculatedAmount,
+                limits[0],
+                1e12, // 1e-6 relative
+                "input matches the sell limit"
+            );
+            vm.revertTo(snapshot);
+        }
     }
 
     /// @dev The price at zero uses the pool's current sqrt price and the fee
@@ -166,6 +334,31 @@ contract CamelotV3SwapAdapterTest is AdapterTest {
             ),
             1e6,
             "USDC -> WETH price at zero"
+        );
+    }
+
+    /// @dev Any two amounts up to the limit price, and selling more never
+    /// improves the marginal price.
+    function testPriceFuzz(uint256 amount0, uint256 amount1) public {
+        bytes32 pool = poolId(WETH_USDC_POOL);
+        uint256 limit = adapter.getLimits(pool, WETH, USDC)[0];
+        uint256[] memory amounts = new uint256[](2);
+        amounts[0] = bound(amount0, 0, limit);
+        amounts[1] = bound(amount1, 0, limit);
+        if (amounts[0] > amounts[1]) {
+            (amounts[0], amounts[1]) = (amounts[1], amounts[0]);
+        }
+
+        Fraction[] memory prices = adapter.price(pool, WETH, USDC, amounts);
+
+        for (uint256 i = 0; i < prices.length; i++) {
+            assertGt(prices[i].numerator, 0);
+            assertGt(prices[i].denominator, 0);
+        }
+        assertGe(
+            prices[0].compareFractions(prices[1]),
+            0,
+            "price must not rise with the sold amount"
         );
     }
 
@@ -213,8 +406,9 @@ contract CamelotV3SwapAdapterTest is AdapterTest {
     }
 
     /// @dev A sell moves exactly the specified input, pays out the calculated
-    /// amount, and prices behave like a pool with price impact: executed
-    /// price <= price before, and > marginal price after.
+    /// amount, lands the input in the pool and the community vault, and prices
+    /// behave like a pool with price impact: executed price <= price before,
+    /// and > marginal price after.
     function checkSell(
         address pool,
         address tokenIn,
@@ -230,6 +424,8 @@ contract CamelotV3SwapAdapterTest is AdapterTest {
         deal(tokenIn, address(this), amount);
         IERC20(tokenIn).approve(address(adapter), amount);
         uint256 outBefore = IERC20(tokenOut).balanceOf(address(this));
+        uint256 poolBefore = IERC20(tokenIn).balanceOf(pool);
+        uint256 vaultBefore = IERC20(tokenIn).balanceOf(vault());
 
         Trade memory trade = adapter.swap(
             poolId(pool), tokenIn, tokenOut, OrderSide.Sell, amount
@@ -240,6 +436,13 @@ contract CamelotV3SwapAdapterTest is AdapterTest {
             IERC20(tokenOut).balanceOf(address(this)) - outBefore,
             trade.calculatedAmount,
             "output received"
+        );
+        // The pool keeps the input minus the community fee it forwards.
+        assertEq(
+            IERC20(tokenIn).balanceOf(pool) - poolBefore
+                + IERC20(tokenIn).balanceOf(vault()) - vaultBefore,
+            amount,
+            "input lands in the pool and the vault"
         );
         assertGt(trade.calculatedAmount, 0);
         assertGt(trade.gasUsed, 0);
@@ -261,21 +464,214 @@ contract CamelotV3SwapAdapterTest is AdapterTest {
     }
 
     function testSwapBuy() public {
-        bytes32 pool = poolId(WETH_USDC_POOL);
-        uint256 wanted = 1_000e6;
-        deal(WETH, address(this), 10 ether);
-        IERC20(WETH).approve(address(adapter), 10 ether);
+        checkBuy(WETH_USDC_POOL, WETH, USDC, 1_000e6);
+        checkBuy(WETH_USDC_POOL, USDC, WETH, 1 ether);
+        checkBuy(WETH_ARB_POOL, WETH, ARB, 5_000 ether);
+        checkBuy(WETH_ARB_POOL, ARB, WETH, 1 ether);
+    }
 
-        Trade memory trade =
-            adapter.swap(pool, WETH, USDC, OrderSide.Buy, wanted);
+    /// @dev A buy pays out exactly the wanted amount, pulls the calculated
+    /// input into the pool and the vault, and reports the marginal price after
+    /// the trade: below the executed price, and the price quoted for selling
+    /// the same input up to the rounding of the last step.
+    function checkBuy(
+        address pool,
+        address tokenIn,
+        address tokenOut,
+        uint256 wanted
+    ) internal {
+        uint256 snapshot = vm.snapshot();
+        deal(tokenIn, address(this), type(uint128).max);
+        IERC20(tokenIn).approve(address(adapter), type(uint256).max);
+        uint256 inBefore = IERC20(tokenIn).balanceOf(address(this));
+        uint256 outBefore = IERC20(tokenOut).balanceOf(address(this));
+        uint256 poolBefore = IERC20(tokenIn).balanceOf(pool);
+        uint256 vaultBefore = IERC20(tokenIn).balanceOf(vault());
+        uint256[] memory amounts = new uint256[](1);
+        Fraction memory priceAtZero =
+            adapter.price(poolId(pool), tokenIn, tokenOut, amounts)[0];
 
-        assertEq(IERC20(USDC).balanceOf(address(this)), wanted, "exact output");
+        Trade memory trade = adapter.swap(
+            poolId(pool), tokenIn, tokenOut, OrderSide.Buy, wanted
+        );
+
         assertEq(
-            10 ether - IERC20(WETH).balanceOf(address(this)),
+            IERC20(tokenOut).balanceOf(address(this)) - outBefore,
+            wanted,
+            "exact output"
+        );
+        assertEq(
+            inBefore - IERC20(tokenIn).balanceOf(address(this)),
             trade.calculatedAmount,
             "input paid"
         );
+        assertEq(
+            IERC20(tokenIn).balanceOf(pool) - poolBefore
+                + IERC20(tokenIn).balanceOf(vault()) - vaultBefore,
+            trade.calculatedAmount,
+            "input lands in the pool and the vault"
+        );
+        assertGt(trade.calculatedAmount, 0);
         assertGt(trade.gasUsed, 0);
+
+        Fraction memory executed = Fraction(wanted, trade.calculatedAmount);
+        assertEq(
+            priceAtZero.compareFractions(executed),
+            1,
+            "price at zero > executed"
+        );
+        assertEq(
+            executed.compareFractions(trade.price), 1, "executed > price after"
+        );
+
+        vm.revertTo(snapshot);
+        amounts[0] = trade.calculatedAmount;
+        Fraction memory quoted =
+            adapter.price(poolId(pool), tokenIn, tokenOut, amounts)[0];
+        assertApproxEqRel(
+            trade.price.toQ128x128(),
+            quoted.toQ128x128(),
+            1e9, // 1e-9 relative
+            "buy reports the price quoted for selling its input"
+        );
+    }
+
+    /// @dev Like the other adapter suites: any amount up to the limit, on
+    /// either side, moves exactly the specified amount and reports the rest.
+    function testSwapFuzz(uint256 specifiedAmount, bool isBuy) public {
+        bytes32 pool = poolId(WETH_USDC_POOL);
+        uint256[] memory limits = adapter.getLimits(pool, WETH, USDC);
+        uint256 usdcBefore = IERC20(USDC).balanceOf(address(this));
+        Trade memory trade;
+
+        if (isBuy) {
+            specifiedAmount = bound(specifiedAmount, MIN_USDC_BUY, limits[1]);
+            deal(WETH, address(this), type(uint128).max);
+            IERC20(WETH).approve(address(adapter), type(uint256).max);
+            uint256 wethBefore = IERC20(WETH).balanceOf(address(this));
+
+            trade =
+                adapter.swap(pool, WETH, USDC, OrderSide.Buy, specifiedAmount);
+
+            assertEq(
+                IERC20(USDC).balanceOf(address(this)) - usdcBefore,
+                specifiedAmount,
+                "exact output"
+            );
+            assertEq(
+                wethBefore - IERC20(WETH).balanceOf(address(this)),
+                trade.calculatedAmount,
+                "input paid"
+            );
+        } else {
+            specifiedAmount = bound(specifiedAmount, MIN_WETH_SELL, limits[0]);
+            uint256[] memory amounts = new uint256[](1);
+            amounts[0] = specifiedAmount;
+            Fraction memory quoted = adapter.price(pool, WETH, USDC, amounts)[0];
+            deal(WETH, address(this), specifiedAmount);
+            IERC20(WETH).approve(address(adapter), specifiedAmount);
+
+            trade =
+                adapter.swap(pool, WETH, USDC, OrderSide.Sell, specifiedAmount);
+
+            assertEq(IERC20(WETH).balanceOf(address(this)), 0, "input spent");
+            assertEq(
+                IERC20(USDC).balanceOf(address(this)) - usdcBefore,
+                trade.calculatedAmount,
+                "output received"
+            );
+            assertEq(
+                trade.price.compareFractions(quoted),
+                0,
+                "swap reports the price quoted for the same amount"
+            );
+        }
+
+        assertGt(trade.calculatedAmount, 0);
+        assertGt(trade.price.numerator, 0);
+        assertGt(trade.price.denominator, 0);
+    }
+
+    function testSwapSellIncreasing() public {
+        executeIncreasingSwaps(OrderSide.Sell);
+    }
+
+    function testSwapBuyIncreasing() public {
+        executeIncreasingSwaps(OrderSide.Buy);
+    }
+
+    /// @dev Larger trades move at least as many tokens, cost at least as much
+    /// gas, and end at a strictly worse marginal price.
+    function executeIncreasingSwaps(OrderSide side) internal {
+        bytes32 pool = poolId(WETH_USDC_POOL);
+        uint256[] memory limits = adapter.getLimits(pool, WETH, USDC);
+        uint256 limit = side == OrderSide.Sell ? limits[0] : limits[1];
+        if (side == OrderSide.Buy) {
+            deal(WETH, address(this), type(uint128).max);
+            IERC20(WETH).approve(address(adapter), type(uint256).max);
+        }
+
+        Trade[] memory trades = new Trade[](TEST_ITERATIONS);
+        for (uint256 i = 0; i < TEST_ITERATIONS; i++) {
+            uint256 amount = limit * (i + 1) / TEST_ITERATIONS;
+            uint256 snapshot = vm.snapshot();
+            if (side == OrderSide.Sell) {
+                deal(WETH, address(this), amount);
+                IERC20(WETH).approve(address(adapter), amount);
+            }
+            trades[i] = adapter.swap(pool, WETH, USDC, side, amount);
+            vm.revertTo(snapshot);
+        }
+
+        for (uint256 i = 0; i < TEST_ITERATIONS - 1; i++) {
+            assertLe(
+                trades[i].calculatedAmount,
+                trades[i + 1].calculatedAmount,
+                "amount grows with the trade"
+            );
+            assertLe(
+                trades[i].gasUsed,
+                trades[i + 1].gasUsed,
+                "gas grows with the trade"
+            );
+            assertEq(
+                trades[i].price.compareFractions(trades[i + 1].price),
+                1,
+                "price worsens with the trade"
+            );
+        }
+    }
+
+    /// @dev A swap changes the state every later call sees: the price at zero
+    /// afterwards is the price the swap reported, and repeating the same sell
+    /// pays out less at a worse price.
+    function testSwapUpdatesQuotesForTheNextTrade() public {
+        bytes32 pool = poolId(WETH_USDC_POOL);
+        deal(WETH, address(this), 2 ether);
+        IERC20(WETH).approve(address(adapter), 2 ether);
+
+        Trade memory first =
+            adapter.swap(pool, WETH, USDC, OrderSide.Sell, 1 ether);
+        uint256[] memory amounts = new uint256[](1);
+        Fraction memory priceAfter = adapter.price(pool, WETH, USDC, amounts)[0];
+        assertEq(
+            priceAfter.compareFractions(first.price),
+            0,
+            "price at zero after the swap is the price the swap reported"
+        );
+
+        Trade memory second =
+            adapter.swap(pool, WETH, USDC, OrderSide.Sell, 1 ether);
+        assertLt(
+            second.calculatedAmount,
+            first.calculatedAmount,
+            "the second sell pays out less"
+        );
+        assertEq(
+            second.price.compareFractions(first.price),
+            -1,
+            "the second sell ends at a worse price"
+        );
     }
 
     /// @dev Selling more than the pool can absorb drains it to its minimum
@@ -372,6 +768,39 @@ contract CamelotV3SwapAdapterTest is AdapterTest {
         assertEq(sellWeth[1], 0);
     }
 
+    /// @dev A pool the factory created but nobody initialized has no price and
+    /// every entry point reports it as unavailable, never as the pool's own
+    /// `LOK`. Anyone may create one, and the factory never looks at the token
+    /// contracts, so two fresh addresses do.
+    function testUninitializedPoolIsUnavailable() public {
+        address tokenA = makeAddr("tokenA");
+        address tokenB = makeAddr("tokenB");
+        address pool = IAlgebraFactoryTest(FACTORY).createPool(tokenA, tokenB);
+        (address token0, address token1) =
+            tokenA < tokenB ? (tokenA, tokenB) : (tokenB, tokenA);
+
+        address[] memory tokens = adapter.getTokens(poolId(pool));
+        assertEq(tokens[0], token0);
+        assertEq(tokens[1], token1);
+
+        bytes memory unavailable = abi.encodeWithSelector(
+            ISwapAdapterTypes.Unavailable.selector, "pool is not initialized"
+        );
+        vm.expectRevert(unavailable);
+        adapter.getLimits(poolId(pool), token0, token1);
+
+        uint256[] memory amounts = new uint256[](1);
+        vm.expectRevert(unavailable);
+        adapter.price(poolId(pool), token0, token1, amounts);
+
+        amounts[0] = 1 ether;
+        vm.expectRevert(unavailable);
+        adapter.price(poolId(pool), token0, token1, amounts);
+
+        vm.expectRevert(unavailable);
+        adapter.swap(poolId(pool), token0, token1, OrderSide.Sell, 1 ether);
+    }
+
     /// @dev A pool parked at the end of its price range cannot trade in that
     /// direction; the price at zero reports it as unavailable instead of
     /// surfacing the pool's own `SPL` revert. The price is forced by writing
@@ -420,6 +849,20 @@ contract CamelotV3SwapAdapterTest is AdapterTest {
         adapter.algebraSwapCallback(1, 0, data);
     }
 
+    /// @dev A real Camelot pool cannot collect a payment for a pair it does
+    /// not serve: the caller must be the factory's pool for the pair named in
+    /// the callback data.
+    function testCallbackRejectsPoolOfAnotherPair() public {
+        bytes memory data = abi.encode(
+            CamelotV3SwapAdapter.CallbackData(WETH, USDC, address(this), false)
+        );
+        vm.prank(WETH_ARB_POOL);
+        vm.expectRevert(
+            CamelotV3SwapAdapter.CamelotV3SwapAdapter__UnknownPool.selector
+        );
+        adapter.algebraSwapCallback(1, 0, data);
+    }
+
     function testExecuteQuoteRejectsExternalCallers() public {
         vm.expectRevert(
             CamelotV3SwapAdapter.CamelotV3SwapAdapter__NotSelf.selector
@@ -427,20 +870,20 @@ contract CamelotV3SwapAdapterTest is AdapterTest {
         adapter.executeQuote(IAlgebraPool(WETH_USDC_POOL), true, 1, 4295128740);
     }
 
-    /// @dev Quoting must leave the pool untouched.
+    /// @dev Quoting must leave the pool untouched, even for the largest quote
+    /// in each direction, which crosses every walked tick.
     function testQuotesDoNotChangePoolState() public {
         bytes32 pool = poolId(WETH_USDC_POOL);
-        (uint160 priceBefore,,,, uint16 indexBefore,,,) =
-            IAlgebraPool(WETH_USDC_POOL).globalState();
+        bytes32 before = poolStateHash();
+
+        uint256[] memory sellWeth = adapter.getLimits(pool, WETH, USDC);
+        uint256[] memory sellUsdc = adapter.getLimits(pool, USDC, WETH);
         uint256[] memory amounts = new uint256[](2);
-        amounts[1] = 1 ether;
-
-        adapter.getLimits(pool, WETH, USDC);
+        amounts[1] = sellWeth[0];
         adapter.price(pool, WETH, USDC, amounts);
+        amounts[1] = sellUsdc[0];
+        adapter.price(pool, USDC, WETH, amounts);
 
-        (uint160 priceAfter,,,, uint16 indexAfter,,,) =
-            IAlgebraPool(WETH_USDC_POOL).globalState();
-        assertEq(priceAfter, priceBefore);
-        assertEq(indexAfter, indexBefore);
+        assertEq(poolStateHash(), before, "quotes leave the pool untouched");
     }
 }
