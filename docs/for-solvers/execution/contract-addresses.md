@@ -1,4 +1,27 @@
-# Contract Addresses
+# Router Registry and Contract Addresses
+
+PropellerHeads designates every chain marked **active** below as a Designated Router deployment for Fynd License 1.0. Every Fynd settlement must target the active TychoRouterV3 for its chain. The router's FeeCalculator is a mandatory dependency. A route must use the listed executor for every protocol operation that it performs.
+
+The <a href="https://raw.githubusercontent.com/propeller-heads/tycho/main/crates/tycho-execution/config/deployment_registry.json" target="_blank" rel="noopener noreferrer">machine-readable deployment registry</a> contains the same active router, FeeCalculator, and executor addresses, together with effective dates and superseded deployments. GitHub preserves the <a href="https://github.com/propeller-heads/tycho/commits/main/crates/tycho-execution/config/deployment_registry.json" target="_blank" rel="noopener noreferrer">registry version history</a>. Send legal and continuity notices to legal@propellerheads.xyz.
+
+Protocol-specific routes may also depend on constructor or integration addresses recorded in <a href="https://github.com/propeller-heads/tycho/blob/main/crates/tycho-execution/config/executor_deployments.json" target="_blank" rel="noopener noreferrer">executor_deployments.json</a> and <a href="https://github.com/propeller-heads/tycho/blob/main/crates/tycho-execution/config/protocol_specific_addresses.json" target="_blank" rel="noopener noreferrer">protocol_specific_addresses.json</a>. Those dependencies apply only when the route uses the corresponding protocol.
+
+## Current designation
+
+| Network | Status | Effective date | Migration deadline |
+| --- | --- | --- | --- |
+| Ethereum | Active | 1 September 2026 | None |
+| Base | Active | 1 September 2026 | None |
+| Unichain | Active | 1 September 2026 | None |
+| Arbitrum | Active | 1 September 2026 | None |
+| BSC | Active | 1 September 2026 | None |
+| Polygon | Active | 1 September 2026 | None |
+| Plasma | Active | 1 September 2026 | None |
+| Robinhood | Active | 1 September 2026 | None |
+
+## Migration history
+
+Commit <a href="https://github.com/propeller-heads/tycho/commit/91b7f1511facc4ea5808f9e82a9078583fd839c9" target="_blank" rel="noopener noreferrer"><code>91b7f151</code></a> introduced the deployment that took effect on 1 August 2026. Commit <a href="https://github.com/propeller-heads/tycho/commit/8cfd100c1da5b6e367417c281859496f189a9388" target="_blank" rel="noopener noreferrer"><code>8cfd100c</code></a> introduced the deployment that superseded it on 1 September 2026 across all eight chains. The machine-readable registry records both address sets. Structured registry history starts on 1 August 2026; the Router V2 tables below and Git history preserve earlier deployments.
 
 ## Ethereum
 

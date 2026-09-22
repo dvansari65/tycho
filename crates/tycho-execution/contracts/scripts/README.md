@@ -69,6 +69,14 @@ Via the safe wallet UI:
 5. Set the executors addresses
 6. Set fee amounts in FeeCalculator
 7. Set the pauser wallets
+
+### Publish the deployment
+
+1. Update `config/deployment_registry.json` with the new router, FeeCalculator, and executor addresses.
+2. Add the effective date, notice publication date, migration deadline, and deployment commit.
+3. Move the previous active deployment into the chain's `superseded` list. Do not remove its history.
+4. Update `docs/for-solvers/execution/contract-addresses.md` with the new active deployment and migration history.
+
 ### Revoke roles
 
 1. If you wish to revoke a role for a certain address, run: `npx hardhat run scripts/revoke-role.js --network NETWORK`
