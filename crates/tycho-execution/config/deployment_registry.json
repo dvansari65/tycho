@@ -4,6 +4,11 @@
   "published_at": "2026-09-22",
   "designation": "Fynd License 1.0",
   "legal_contact": "legal@propellerheads.xyz",
+  "notice_policy": {
+    "effective_at": "2026-09-22T08:26:05Z",
+    "standard_notice_days": 30,
+    "short_notice_exception": "material_security_risk"
+  },
   "registry_url": "https://docs.propellerheads.xyz/tycho/for-solvers/execution/contract-addresses",
   "machine_readable_url": "https://raw.githubusercontent.com/propeller-heads/tycho/main/crates/tycho-execution/config/deployment_registry.json",
   "archive_url": "https://github.com/propeller-heads/tycho/commits/main/crates/tycho-execution/config/deployment_registry.json",
@@ -15,7 +20,7 @@
     "router": "Every Fynd settlement must target the active router for its chain.",
     "fee_calculator": "The active FeeCalculator is a mandatory dependency of the active router.",
     "executors": "A route must use the listed executor for every protocol operation that it performs.",
-    "protocol_specific_dependencies": "See executor_deployments.json and protocol_specific_addresses.json for constructor and protocol-specific dependencies."
+    "protocol_specific_dependencies": "Each deployment's dependency_snapshot pins executor_deployments.json and protocol_specific_addresses.json to a Git commit."
   },
   "chains": {
     "ethereum": {
@@ -24,7 +29,13 @@
       "effective_at": "2026-09-01T17:25:01Z",
       "notice_published_at": "2026-09-01T17:25:01Z",
       "migration_deadline": null,
+      "scheduled_successor": null,
       "deployment_record_commit": "8cfd100c1da5b6e367417c281859496f189a9388",
+      "dependency_snapshot": {
+        "source_commit": "c55e145d63eac042e2294660406316e117be2747",
+        "executor_deployments_path": "crates/tycho-execution/config/executor_deployments.json",
+        "protocol_specific_addresses_path": "crates/tycho-execution/config/protocol_specific_addresses.json"
+      },
       "router": { "address": "0x1644D2477f809cc2C71bCCFd6Dc9497E3F83210d" },
       "fee_calculator": { "address": "0x2930cB02F8293A684981EF7fB63C160329C410f1" },
       "executors": {
@@ -72,7 +83,13 @@
       "effective_at": "2026-09-01T17:25:01Z",
       "notice_published_at": "2026-09-01T17:25:01Z",
       "migration_deadline": null,
+      "scheduled_successor": null,
       "deployment_record_commit": "8cfd100c1da5b6e367417c281859496f189a9388",
+      "dependency_snapshot": {
+        "source_commit": "c55e145d63eac042e2294660406316e117be2747",
+        "executor_deployments_path": "crates/tycho-execution/config/executor_deployments.json",
+        "protocol_specific_addresses_path": "crates/tycho-execution/config/protocol_specific_addresses.json"
+      },
       "router": { "address": "0xAbA5B53b03eAfaD1C5fc8BD5Fc765fC85Bb3de67" },
       "fee_calculator": { "address": "0x4C95D7678Be1668FCa8205f0d076B5E872B715e1" },
       "executors": {
@@ -105,7 +122,13 @@
       "effective_at": "2026-09-01T17:25:01Z",
       "notice_published_at": "2026-09-01T17:25:01Z",
       "migration_deadline": null,
+      "scheduled_successor": null,
       "deployment_record_commit": "8cfd100c1da5b6e367417c281859496f189a9388",
+      "dependency_snapshot": {
+        "source_commit": "c55e145d63eac042e2294660406316e117be2747",
+        "executor_deployments_path": "crates/tycho-execution/config/executor_deployments.json",
+        "protocol_specific_addresses_path": "crates/tycho-execution/config/protocol_specific_addresses.json"
+      },
       "router": { "address": "0xCba5574597Ad00EA250Fd106DAB4Fc7461949635" },
       "fee_calculator": { "address": "0x3A20AdED2BAcfAB637DfDA86543Eb8E832402417" },
       "executors": {
@@ -133,7 +156,13 @@
       "effective_at": "2026-09-01T17:25:01Z",
       "notice_published_at": "2026-09-01T17:25:01Z",
       "migration_deadline": null,
+      "scheduled_successor": null,
       "deployment_record_commit": "8cfd100c1da5b6e367417c281859496f189a9388",
+      "dependency_snapshot": {
+        "source_commit": "c55e145d63eac042e2294660406316e117be2747",
+        "executor_deployments_path": "crates/tycho-execution/config/executor_deployments.json",
+        "protocol_specific_addresses_path": "crates/tycho-execution/config/protocol_specific_addresses.json"
+      },
       "router": { "address": "0x924F147c50eA59f5180a26031A8b65B2aA1e81Cd" },
       "fee_calculator": { "address": "0x9ca59BD78aAB97Db9692E43684b12072e910F0b7" },
       "executors": {
@@ -160,7 +189,13 @@
       "effective_at": "2026-09-01T17:25:01Z",
       "notice_published_at": "2026-09-01T17:25:01Z",
       "migration_deadline": null,
+      "scheduled_successor": null,
       "deployment_record_commit": "8cfd100c1da5b6e367417c281859496f189a9388",
+      "dependency_snapshot": {
+        "source_commit": "c55e145d63eac042e2294660406316e117be2747",
+        "executor_deployments_path": "crates/tycho-execution/config/executor_deployments.json",
+        "protocol_specific_addresses_path": "crates/tycho-execution/config/protocol_specific_addresses.json"
+      },
       "router": { "address": "0x7f3D12BBaFb8955E51B3ab9588b34c8ad95BDA4e" },
       "fee_calculator": { "address": "0x6C62645e52d40A700F8219f18CD92CE8a668C8Ea" },
       "executors": {
@@ -188,7 +223,13 @@
       "effective_at": "2026-09-01T17:25:01Z",
       "notice_published_at": "2026-09-01T17:25:01Z",
       "migration_deadline": null,
+      "scheduled_successor": null,
       "deployment_record_commit": "8cfd100c1da5b6e367417c281859496f189a9388",
+      "dependency_snapshot": {
+        "source_commit": "c55e145d63eac042e2294660406316e117be2747",
+        "executor_deployments_path": "crates/tycho-execution/config/executor_deployments.json",
+        "protocol_specific_addresses_path": "crates/tycho-execution/config/protocol_specific_addresses.json"
+      },
       "router": { "address": "0xbd4e6011F03355C2A377Fd9Af939322A7d0A1bC1" },
       "fee_calculator": { "address": "0x3970230EAAC99d1C1880C04fcEc069E61dA823dC" },
       "executors": {
@@ -216,7 +257,13 @@
       "effective_at": "2026-09-01T17:25:01Z",
       "notice_published_at": "2026-09-01T17:25:01Z",
       "migration_deadline": null,
+      "scheduled_successor": null,
       "deployment_record_commit": "8cfd100c1da5b6e367417c281859496f189a9388",
+      "dependency_snapshot": {
+        "source_commit": "c55e145d63eac042e2294660406316e117be2747",
+        "executor_deployments_path": "crates/tycho-execution/config/executor_deployments.json",
+        "protocol_specific_addresses_path": "crates/tycho-execution/config/protocol_specific_addresses.json"
+      },
       "router": { "address": "0x0953c7E23B44259e5e5630e9b97C31D7278C4c85" },
       "fee_calculator": { "address": "0x8b9918adcb59234fb9f3e7594cf972e3edbb93f1" },
       "executors": {
@@ -242,7 +289,13 @@
       "effective_at": "2026-09-01T17:25:01Z",
       "notice_published_at": "2026-09-01T17:25:01Z",
       "migration_deadline": null,
+      "scheduled_successor": null,
       "deployment_record_commit": "8cfd100c1da5b6e367417c281859496f189a9388",
+      "dependency_snapshot": {
+        "source_commit": "c55e145d63eac042e2294660406316e117be2747",
+        "executor_deployments_path": "crates/tycho-execution/config/executor_deployments.json",
+        "protocol_specific_addresses_path": "crates/tycho-execution/config/protocol_specific_addresses.json"
+      },
       "router": { "address": "0x09215a470bD585E59EB3F4B612fBD2678131fF9e" },
       "fee_calculator": { "address": "0x0Dd35E98aa40B4b75A8Aa4950Fd761B23De12854" },
       "executors": {
