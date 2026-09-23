@@ -335,6 +335,20 @@ pub fn get_default_endpoint(chain: &Chain) -> Option<String> {
         Chain::Polygon => Some("https://polygon.streamingfast.io:443".to_string()),
         Chain::Arbitrum => Some("https://arb-one.streamingfast.io:443".to_string()),
         Chain::Robinhood => Some("https://mainnet.robinhood.streamingfast.io:443".to_string()),
+        Chain::Arc => Some("https://arc.substreams.pinax.network:443".to_string()),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn arc_uses_pinax_substreams_endpoint() {
+        assert_eq!(
+            get_default_endpoint(&Chain::Arc).as_deref(),
+            Some("https://arc.substreams.pinax.network:443")
+        );
     }
 }

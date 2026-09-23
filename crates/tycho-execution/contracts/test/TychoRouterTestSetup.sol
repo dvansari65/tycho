@@ -16,9 +16,6 @@ import {
 import {HashflowExecutor} from "../src/executors/HashflowExecutor.sol";
 import {MaverickV2Executor} from "../src/executors/MaverickV2Executor.sol";
 import {PropAMMExecutor} from "../src/executors/PropAMMExecutor.sol";
-import {
-    PropAMMFallbackExecutor
-} from "../src/executors/PropAMMFallbackExecutor.sol";
 import {FallbackExecutor} from "../src/executors/FallbackExecutor.sol";
 import {TychoFallbackRouter} from "../src/fallback/TychoFallbackRouter.sol";
 import {IUniswapV3StaticQuoter} from "@interfaces/IUniswapV3StaticQuoter.sol";
@@ -33,6 +30,7 @@ import {SlipstreamsExecutor} from "../src/executors/SlipstreamsExecutor.sol";
 import {RocketpoolExecutor} from "../src/executors/RocketpoolExecutor.sol";
 import {ERC4626Executor} from "../src/executors/ERC4626Executor.sol";
 import {NativeWrapExecutor} from "../src/executors/NativeWrapExecutor.sol";
+import {LidoV4Executor} from "../src/executors/LidoV4Executor.sol";
 import {LiquoriceExecutor} from "../src/executors/LiquoriceExecutor.sol";
 import {AerodromeV1Executor} from "../src/executors/AerodromeV1Executor.sol";
 import {MetricExecutor} from "../src/executors/MetricExecutor.sol";
@@ -129,6 +127,7 @@ contract TychoRouterTestSetup is
     RocketpoolExecutor public rocketpoolExecutor;
     ERC4626Executor public erc4626Executor;
     NativeWrapExecutor public nativeWrapExecutor;
+    LidoV4Executor public lidoV4Executor;
     EkuboV3Executor public ekuboV3Executor;
     EtherfiExecutor public etherfiExecutor;
     LiquidityPartyExecutor public liquidityPartyExecutor;
@@ -140,7 +139,6 @@ contract TychoRouterTestSetup is
     RingSwapV2Executor public ringSwapV2Executor;
     NativeExecutor public nativeExecutor;
     PropAMMExecutor public propAMMExecutor;
-    PropAMMFallbackExecutor public propAMMFallbackExecutor;
     SkyExecutor public skyExecutor;
     TychoFallbackRouter public fallbackRouter;
     FallbackExecutor public fallbackExecutor;
@@ -267,7 +265,6 @@ contract TychoRouterTestSetup is
         ringSwapV2Executor =
             new RingSwapV2Executor(RING_FEW_FACTORY, RING_SWAP_FACTORY);
         propAMMExecutor = new PropAMMExecutor();
-        propAMMFallbackExecutor = new PropAMMFallbackExecutor();
         // Every executor's address here is deterministic from its deploy order, and the
         // Rust-generated calldata.txt hardcodes those addresses, so inserting a deployment
         // invalidates every entry after it. Add new deployments at the end of this block.
@@ -301,6 +298,9 @@ contract TychoRouterTestSetup is
             IUniswapV3StaticQuoter(UNISWAP_V3_STATIC_QUOTER)
         );
         fallbackExecutor = new FallbackExecutor(address(fallbackRouter));
+        // Last, per the note above: Lido V4 is only configured on mainnet, where both Sky and
+        // Native always deploy, so appending it shifts no address before it.
+        lidoV4Executor = new LidoV4Executor(STETH_ADDR, WSTETH_ADDR);
 
         address[] memory executors = new address[](
             28 + (skyDeployable ? 1 : 0) + (supportsNative ? 1 : 0)
@@ -331,8 +331,8 @@ contract TychoRouterTestSetup is
         executors[23] = address(bopAMMExecutor);
         executors[24] = address(ringSwapV2Executor);
         executors[25] = address(propAMMExecutor);
-        executors[26] = address(propAMMFallbackExecutor);
-        executors[27] = address(fallbackExecutor);
+        executors[26] = address(fallbackExecutor);
+        executors[27] = address(lidoV4Executor);
         uint256 nextExecutorIndex = 28;
         if (skyDeployable) {
             executors[nextExecutorIndex] = address(skyExecutor);
@@ -341,6 +341,7 @@ contract TychoRouterTestSetup is
         if (supportsNative) {
             executors[nextExecutorIndex] = address(nativeExecutor);
         }
+
         return executors;
     }
 
