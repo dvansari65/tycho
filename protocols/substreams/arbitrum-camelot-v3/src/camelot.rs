@@ -101,15 +101,14 @@ pub fn pools_created(factory: &[u8], tx: &TransactionTrace) -> Result<Vec<Protoc
 
 /// The `activeIncentive` address held in a value of [`ACTIVE_INCENTIVE_SLOT`].
 ///
-/// Substreams may deliver storage values without their leading zero bytes; anything longer
-/// than a word is an error.
+/// Firehose delivers storage keys and values as full 32-byte words, which is also what the
+/// exact key comparison against [`ACTIVE_INCENTIVE_SLOT`] relies on. A value of any other
+/// length therefore means that assumption broke and is an error, not something to pad.
 pub fn active_incentive_from_slot(value: &[u8]) -> Result<Vec<u8>> {
-    if value.len() > 32 {
-        bail!("storage value of {} bytes is longer than a word", value.len());
+    if value.len() != 32 {
+        bail!("activeIncentive slot value of {} bytes is not a 32-byte word", value.len());
     }
-    let mut word = [0u8; 32];
-    word[32 - value.len()..].copy_from_slice(value);
-    Ok(word[8..28].to_vec())
+    Ok(value[8..28].to_vec())
 }
 
 /// The address of the single contract `create_pool` deployed directly with `CREATE`.
@@ -263,10 +262,10 @@ mod tests {
     }
 
     #[test]
-    fn reads_active_incentive_from_short_value() {
-        // Only tickSpacing set: the value arrives as one byte at the low end.
-        assert_eq!(active_incentive_from_slot(&[60]).unwrap(), vec![0u8; 20]);
-        assert_eq!(active_incentive_from_slot(&[]).unwrap(), vec![0u8; 20]);
+    fn rejects_short_slot_value() {
+        assert!(active_incentive_from_slot(&[60]).is_err());
+        assert!(active_incentive_from_slot(&[]).is_err());
+        assert!(active_incentive_from_slot(&[0u8; 31]).is_err());
     }
 
     #[test]
