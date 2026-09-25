@@ -19,7 +19,7 @@ import itertools
 import json
 from collections import Counter, defaultdict
 
-DEFAULT_URL = "wss://eu.rpc.titanbuilder.xyz/ws/pamm_quote_stream"
+DEFAULT_URL = "wss://eu.data.titanbuilder.xyz/ws/pamm_quote_stream"
 META_KEYS = {"slot", "blockNumber", "timestamp"}
 
 

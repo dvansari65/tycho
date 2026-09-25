@@ -22,7 +22,8 @@ use tycho_common::Bytes;
 
 /// Default Titan pAMM price level WebSocket endpoint. Titan serves the same stream from other
 /// regions as well; see <https://docs.titanbuilder.xyz/propamms/takers>.
-pub(super) const TITAN_PRICE_LEVEL_URL: &str = "wss://eu.rpc.titanbuilder.xyz/ws/pamm_price_levels";
+pub(super) const TITAN_PRICE_LEVEL_URL: &str =
+    "wss://eu.data.titanbuilder.xyz/ws/pamm_price_levels";
 
 /// Connection tuning for the Titan WebSocket, set through the
 /// [`PriceLevelStreamBuilder`](super::stream::PriceLevelStreamBuilder).
