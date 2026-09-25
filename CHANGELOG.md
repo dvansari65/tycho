@@ -1,3 +1,17 @@
+## [0.427.0](https://github.com/propeller-heads/tycho/compare/0.426.0...0.427.0) (2026-09-25)
+
+
+### Features
+
+* **scripts:** read the census stream endpoint from the env ([32b1d8a](https://github.com/propeller-heads/tycho/commit/32b1d8a4529f906b536e4ffffccbff0af56aa6dd))
+* **simulation:** read the price level endpoint from an env var ([745fde2](https://github.com/propeller-heads/tycho/commit/745fde2637bf10525dcdd310d2bf6681e4f17ef3))
+
+
+### Bug Fixes
+
+* **simulation:** point the Titan pAMM streams at the data host ([1a31d09](https://github.com/propeller-heads/tycho/commit/1a31d09f0e14567a1dbc85b945054344236a4119))
+* **simulation:** point the Titan pAMM streams at the data host ([#1502](https://github.com/propeller-heads/tycho/issues/1502)) ([80ac861](https://github.com/propeller-heads/tycho/commit/80ac861dd573f1033d30c12a7e0d1235a6ba45a2))
+
 ## [0.426.0](https://github.com/propeller-heads/tycho/compare/0.425.0...0.426.0) (2026-09-25)
 
 
