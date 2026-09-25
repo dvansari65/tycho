@@ -25,6 +25,10 @@ use tycho_common::Bytes;
 pub(super) const TITAN_PRICE_LEVEL_URL: &str =
     "wss://eu.data.titanbuilder.xyz/ws/pamm_price_levels";
 
+/// Environment variable that replaces [`TITAN_PRICE_LEVEL_URL`] when the builder is given no
+/// endpoint.
+pub(super) const TITAN_PRICE_LEVEL_URL_ENV: &str = "TITAN_PAMM_PRICE_LEVEL_URL";
+
 /// Connection tuning for the Titan WebSocket, set through the
 /// [`PriceLevelStreamBuilder`](super::stream::PriceLevelStreamBuilder).
 #[derive(Clone, Copy, Debug)]
