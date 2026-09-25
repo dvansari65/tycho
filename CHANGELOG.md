@@ -1,3 +1,16 @@
+## [0.426.0](https://github.com/propeller-heads/tycho/compare/0.425.0...0.426.0) (2026-09-25)
+
+
+### Features
+
+* add versioned deployment registry ([4f89655](https://github.com/propeller-heads/tycho/commit/4f89655dfe1a5be2047e44b058e12f63cdfd3b86))
+* add versioned deployment registry ([#1477](https://github.com/propeller-heads/tycho/issues/1477)) ([438ce08](https://github.com/propeller-heads/tycho/commit/438ce085714159f4844514818bc44c2f468dc176))
+
+
+### Bug Fixes
+
+* resolve code review findings for PR [#1477](https://github.com/propeller-heads/tycho/issues/1477) ([613f259](https://github.com/propeller-heads/tycho/commit/613f2591c012dde425c7e96c0814ac0429e3e04b))
+
 ## [0.425.0](https://github.com/propeller-heads/tycho/compare/0.424.1...0.425.0) (2026-09-24)
 
 
