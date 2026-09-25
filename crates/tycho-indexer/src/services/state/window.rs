@@ -88,7 +88,7 @@ impl Default for WindowConfig {
 }
 
 /// Drops every folded block.
-// Placeholder until the entity cache (ENG-6291) provides the real sink.
+// Placeholder until ENG-6305 wires the entity cache in as the real sink.
 pub(crate) struct DiscardSink;
 
 impl FoldSink for DiscardSink {
@@ -483,6 +483,7 @@ impl DeltaWindow {
 mod test {
     use std::{ops::RangeInclusive, str::FromStr};
 
+    use chrono::NaiveDateTime;
     use rstest::rstest;
     use tycho_common::models::{Chain, ChangeType};
 
@@ -495,18 +496,16 @@ mod test {
         testing::aggregated_changes(EXTRACTOR, number, finalized, committed)
     }
 
-    fn revert_msg(number: u64) -> BlockAggregatedChanges {
-        BlockAggregatedChanges { revert: true, ..msg(number, 0, None) }
+    fn arc_msg(number: u64, timestamp: NaiveDateTime) -> BlockAggregatedChanges {
+        let mut message = msg(number, 0, None);
+        message.chain = Chain::Arc;
+        message.block.chain = Chain::Arc;
+        message.block.ts = timestamp;
+        message
     }
 
-    fn with_component_delta(
-        mut m: BlockAggregatedChanges,
-        id: &str,
-        x: u64,
-    ) -> BlockAggregatedChanges {
-        m.state_deltas
-            .insert(id.to_string(), testing::state_delta(id, x));
-        m
+    fn revert_msg(number: u64) -> BlockAggregatedChanges {
+        BlockAggregatedChanges { revert: true, ..msg(number, 0, None) }
     }
 
     fn with_component_balance(mut m: BlockAggregatedChanges, id: &str) -> BlockAggregatedChanges {
@@ -619,7 +618,7 @@ mod test {
         for n in 1..=6u64 {
             let mut m = msg(n, 0, None);
             if n % 2 == 0 {
-                m = with_component_delta(m, "c1", n);
+                m = testing::with_state_delta(m, "c1", n);
             }
             if n == 3 || n == 5 {
                 m = with_account_delta(m, &address, n);
@@ -652,6 +651,39 @@ mod test {
     }
 
     #[test]
+    fn arc_same_timestamp_blocks_keep_number_order_for_latest_snapshot() {
+        let timestamp = "2020-01-01T00:00:00"
+            .parse::<NaiveDateTime>()
+            .unwrap();
+        let mut w = window(128, 1);
+        for number in 40..=42 {
+            put(&mut w, testing::with_state_delta(arc_msg(number, timestamp), "c1", number))
+                .unwrap();
+        }
+
+        let patch = w
+            .capture_patch(&["c1"], &[], None)
+            .unwrap();
+        let blocks = patch.components["c1"]
+            .iter()
+            .map(|change| change.block)
+            .collect::<Vec<_>>();
+        let latest = w.tip().unwrap();
+
+        assert_eq!(blocks, vec![40, 41, 42]);
+        assert_eq!(latest.number, 42);
+        assert_eq!(latest.chain, Chain::Arc);
+        assert_eq!(
+            w.resolve(BlockNumberOrTimestamp::Number(42)),
+            WindowResolution::InWindow(latest.clone())
+        );
+        assert_eq!(
+            w.resolve(BlockNumberOrTimestamp::Timestamp(timestamp + chrono::Duration::seconds(1))),
+            WindowResolution::InWindow(latest)
+        );
+    }
+
+    #[test]
     fn capture_patch_captures_balance_only_changes() {
         let address = Bytes::from_str("0x6F4Feb566b0f29e2edC231aDF88Fe7e1169D7c05").unwrap();
         let mut w = window(128, 1);
@@ -676,7 +708,7 @@ mod test {
     fn capture_patch_below_the_floor_yields_the_floor_block_alone() {
         let mut w = window(128, 1);
         for n in 5..=7u64 {
-            put(&mut w, with_component_delta(msg(n, 0, None), "c1", n)).unwrap();
+            put(&mut w, testing::with_state_delta(msg(n, 0, None), "c1", n)).unwrap();
         }
 
         let patch = w
