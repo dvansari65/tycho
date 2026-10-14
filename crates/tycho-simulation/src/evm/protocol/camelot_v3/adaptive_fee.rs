@@ -10,10 +10,14 @@ use alloy::primitives::{I256, U256};
 use serde::{Deserialize, Serialize};
 use tycho_common::simulation::errors::SimulationError;
 
+use super::attributes;
 use crate::evm::protocol::safe_math::sqrt_u256;
 
 /// `100000 << 64`: the largest volume-to-liquidity ratio the operator records per swap.
 const MAX_VOLUME_PER_LIQUIDITY: u128 = 100_000u128 << 64;
+
+/// The bytes of a storage slot that `AdaptiveFee.Configuration` occupies.
+const PACKED_BYTES: usize = 24;
 
 /// `AdaptiveFee.Configuration`: the sigmoid coefficients of one swap direction.
 ///
@@ -39,16 +43,12 @@ impl FeeConfiguration {
     ///
     /// Solidity packs the nine fields into the low 24 bytes of the slot in declaration order,
     /// starting from the low end. The attribute may arrive with its leading zero bytes
-    /// stripped, so any length up to 32 bytes is accepted.
+    /// stripped; anything above the 24 bytes that is not zero is an error.
     pub fn from_slot(bytes: &[u8]) -> Result<Self, SimulationError> {
-        if bytes.len() > 32 {
-            return Err(SimulationError::FatalError(format!(
-                "fee configuration of {} bytes is longer than a storage slot",
-                bytes.len()
-            )));
-        }
+        let packed = attributes::narrow("fee configuration", bytes, PACKED_BYTES, 0)
+            .map_err(SimulationError::FatalError)?;
         let mut slot = [0u8; 32];
-        slot[32 - bytes.len()..].copy_from_slice(bytes);
+        slot[32 - packed.len()..].copy_from_slice(packed);
         let mut reader = LowEndReader::new(&slot);
         Ok(Self {
             alpha1: reader.u16(),
@@ -250,8 +250,15 @@ mod tests {
     }
 
     #[test]
-    fn rejects_an_oversized_slot() {
-        assert!(FeeConfiguration::from_slot(&[0u8; 33]).is_err());
+    fn rejects_surplus_bytes_that_are_not_zero() {
+        // The eight bytes above the packed struct are unused storage; a value with them set
+        // is not a configuration slot, and neither is a value longer than a slot.
+        let mut slot = WETH_USDC_CONFIG_SLOT;
+        slot[7] = 1;
+        assert!(FeeConfiguration::from_slot(&slot).is_err());
+        let mut long = [0u8; 33];
+        long[0] = 1;
+        assert!(FeeConfiguration::from_slot(&long).is_err());
     }
 
     #[test]
@@ -295,6 +302,37 @@ mod tests {
         assert_eq!(sigmoid(U256::from(720), 59, 600, U256::from(720)).unwrap(), U256::from(300));
     }
 
+    /// Values from an integer model of the deployed `AdaptiveFee.sol`: alpha 600, gamma 59
+    /// and beta 720, so one gamma away from the midpoint the series sits at `e^1`.
+    #[rstest]
+    #[case::one_gamma_right_of_the_midpoint(779, 438)] // alpha * e / (1 + e)
+    #[case::one_gamma_left_of_the_midpoint(661, 161)] // alpha / (1 + e)
+    #[case::just_below_the_right_saturation(720 + 6 * 59 - 1, 598)]
+    #[case::saturated_on_the_right(720 + 6 * 59, 600)]
+    #[case::saturated_on_the_left(720 - 6 * 59, 0)]
+    fn sigmoid_matches_the_contract_series(#[case] x: u64, #[case] expected: u64) {
+        assert_eq!(sigmoid(U256::from(x), 59, 600, U256::from(720)).unwrap(), U256::from(expected));
+    }
+
+    #[rstest]
+    // Volatility at the second midpoint gives half of alpha2, and the volume sigmoid sits at
+    // its own midpoint without volume, halving that again.
+    #[case::both_sigmoids_at_their_midpoints(60_000, 0, 250)]
+    // One gamma right of the second midpoint, with the volume sigmoid saturated.
+    #[case::right_branch_with_saturated_volume(68_500, 1 << 20, 538)]
+    fn fee_matches_the_contract_between_the_saturations(
+        #[case] volatility: u64,
+        #[case] volume_per_liquidity: u64,
+        #[case] expected: u16,
+    ) {
+        assert_eq!(
+            weth_usdc_config()
+                .get_fee(U256::from(volatility), U256::from(volume_per_liquidity))
+                .unwrap(),
+            expected
+        );
+    }
+
     #[test]
     fn zero_gamma_is_an_error() {
         assert!(sigmoid(U256::from(1), 0, 600, U256::ZERO).is_err());
@@ -326,6 +364,17 @@ mod tests {
         let huge = I256::try_from(i128::MAX).unwrap();
         assert_eq!(
             calculate_volume_per_liquidity(1, huge, huge).unwrap(),
+            MAX_VOLUME_PER_LIQUIDITY
+        );
+    }
+
+    #[test]
+    fn volume_per_liquidity_caps_a_product_of_roots_above_192_bits() {
+        // sqrt(2^200) * sqrt(2^200) = 2^200: shifting it would not fit a word, so the operator
+        // divides the maximum word instead, which the cap then absorbs.
+        let amount = I256::from_raw(U256::from(1) << 200);
+        assert_eq!(
+            calculate_volume_per_liquidity(1, amount, -amount).unwrap(),
             MAX_VOLUME_PER_LIQUIDITY
         );
     }

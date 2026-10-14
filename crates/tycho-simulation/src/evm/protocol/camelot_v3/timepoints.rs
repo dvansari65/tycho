@@ -247,6 +247,14 @@ impl Timepoints {
             .retain(|t| t.index != index);
     }
 
+    /// Checks the ring shape every write relies on: `index` names the newest timepoint, and
+    /// the timepoint before it is present unless `index` is the first write of the ring.
+    pub fn check_last(&self, index: u16) -> Result<(), SimulationError> {
+        let ring = Ring::new(&self.entries, None);
+        ring.before(ring.last(index)?)
+            .map(|_| ())
+    }
+
     /// `DataStorage.write`: the timepoint the pool writes at `block_timestamp`, or `None` when
     /// the last timepoint already carries that timestamp. The caller stores it with
     /// [`Self::upsert`] once the swap it belongs to is committed.
@@ -264,7 +272,7 @@ impl Timepoints {
             return Ok(None);
         }
         let average_tick = wrap_i24(ring.average_tick(block_timestamp, tick, last)?);
-        let prev_tick = ring.prev_tick(last, tick);
+        let prev_tick = ring.prev_tick(last, tick)?;
         let mut timepoint = create_new_timepoint(
             last,
             block_timestamp,
@@ -356,7 +364,7 @@ impl<'a> Ring<'a> {
             .ok_or_else(|| SimulationError::FatalError("oracle ring is empty".to_string()))
     }
 
-    /// The timepoint the pool's `timepointIndex` points at.
+    /// The timepoint the pool's `timepointIndex` points at, which is the newest in the ring.
     fn last(&self, index: u16) -> Result<&'a Timepoint, SimulationError> {
         if let Some(appended) = self
             .appended
@@ -364,42 +372,70 @@ impl<'a> Ring<'a> {
         {
             return Ok(appended);
         }
-        self.entries
+        let position = self
+            .entries
             .iter()
-            .rev()
-            .find(|t| t.index == index)
+            .rposition(|t| t.index == index)
             .ok_or_else(|| {
                 SimulationError::FatalError(format!(
                     "oracle ring is missing the last written timepoint {index}"
                 ))
-            })
+            })?;
+        if position + 1 != self.entries.len() {
+            return Err(SimulationError::FatalError(format!(
+                "oracle ring holds timepoints newer than the last written timepoint {index}"
+            )));
+        }
+        Ok(&self.entries[position])
     }
 
-    /// `self[index - 1]` for the timepoint before `last`, when `index != oldestIndex`.
+    /// `self[index - 1]`: the timepoint before `last`, or `None` when `last` is the first
+    /// write of a ring that has not wrapped, where the contract reads an empty slot.
     ///
-    /// The indexer keeps that timepoint whenever the chain has one, so its absence means the
-    /// ring holds a single timepoint and the contract would read an empty slot.
-    fn before(&self, last: &Timepoint) -> Option<&'a Timepoint> {
-        if self
+    /// The indexer keeps that timepoint whenever the chain has one, so any other shape is
+    /// inconsistent data: another timepoint right before `last`, or none at all.
+    fn before(&self, last: &Timepoint) -> Result<Option<&'a Timepoint>, SimulationError> {
+        let previous = if self
             .appended
             .is_some_and(|t| t.index == last.index)
         {
-            return self.entries.last();
+            self.entries.last()
+        } else {
+            // `last` is the newest entry, so the search starts from the end.
+            let position = self
+                .entries
+                .iter()
+                .rposition(|t| t.index == last.index)
+                .ok_or_else(|| {
+                    SimulationError::FatalError(format!(
+                        "oracle ring is missing the last written timepoint {}",
+                        last.index
+                    ))
+                })?;
+            position
+                .checked_sub(1)
+                .map(|p| &self.entries[p])
+        };
+        let expected = last.index.wrapping_sub(1);
+        let timepoints = self.entries.len() + usize::from(self.appended.is_some());
+        match previous {
+            Some(previous) if previous.index == expected => Ok(Some(previous)),
+            Some(previous) => Err(SimulationError::FatalError(format!(
+                "oracle ring holds timepoint {} before timepoint {}, not timepoint {expected}",
+                previous.index, last.index
+            ))),
+            None if last.index == 0 && timepoints == 1 => Ok(None),
+            None => Err(SimulationError::FatalError(format!(
+                "oracle ring is missing timepoint {expected} before timepoint {}",
+                last.index
+            ))),
         }
-        // `last` is the newest entry, so the search starts from the end.
-        let position = self
-            .entries
-            .iter()
-            .rposition(|t| t.index == last.index)?;
-        position
-            .checked_sub(1)
-            .map(|p| &self.entries[p])
     }
 
     /// The tick at the previous timepoint, derived from the cumulative ticks as the contract
     /// does, or the current tick when there is no previous timepoint.
-    fn prev_tick(&self, last: &Timepoint, tick: i32) -> i32 {
-        match self.before(last) {
+    fn prev_tick(&self, last: &Timepoint, tick: i32) -> Result<i32, SimulationError> {
+        Ok(match self.before(last)? {
             Some(prev) => wrap_i24(
                 wrap_i56(i128::from(last.tick_cumulative) - i128::from(prev.tick_cumulative)) /
                     i64::from(
@@ -408,7 +444,7 @@ impl<'a> Ring<'a> {
                     ),
             ),
             None => tick,
-        }
+        })
     }
 
     /// `_getAverageTick`: the average tick over the window ending at `time`, before the int24
@@ -419,7 +455,7 @@ impl<'a> Ring<'a> {
         if lte(oldest.block_timestamp, window_start, time) {
             if lte(last.block_timestamp, window_start, time) {
                 // The last timepoint is older than the window: average over its own interval.
-                return Ok(match self.before(last) {
+                return Ok(match self.before(last)? {
                     Some(start) => {
                         wrap_i56(
                             i128::from(last.tick_cumulative) - i128::from(start.tick_cumulative),
@@ -494,7 +530,7 @@ impl<'a> Ring<'a> {
                 return Ok(*last);
             }
             let average_tick = wrap_i24(self.average_tick(time, tick, last)?);
-            let prev_tick = self.prev_tick(last, tick);
+            let prev_tick = self.prev_tick(last, tick)?;
             return Ok(create_new_timepoint(
                 last,
                 target,
@@ -686,12 +722,45 @@ mod tests {
 
     #[test]
     fn write_wraps_the_ring_index() {
-        let ring = Timepoints::new(vec![timepoint(u16::MAX, 1_000, 0)]);
+        let ring =
+            Timepoints::new(vec![timepoint(u16::MAX - 1, 900, 0), timepoint(u16::MAX, 1_000, 0)]);
         let written = ring
             .write(u16::MAX, 1_001, 0, 1, 0)
             .unwrap()
             .unwrap();
         assert_eq!(written.index, 0);
+    }
+
+    #[test]
+    fn write_errors_when_the_timepoint_before_the_last_is_missing() {
+        // The contract reads `self[index - 1]` for the previous tick; the indexer always keeps
+        // it, so its absence is inconsistent data rather than a reason to fall back silently.
+        let ring = Timepoints::new(vec![timepoint(0, 1_000, 0), timepoint(2, 3_000, 0)]);
+        let err = ring
+            .write(2, 4_000, 0, 1, 0)
+            .unwrap_err();
+        assert!(err.to_string().contains("timepoint 1"), "{err}");
+        assert!(ring.check_last(2).is_err());
+    }
+
+    #[test]
+    fn write_errors_when_the_last_timepoint_is_not_the_newest() {
+        let ring = Timepoints::new(vec![timepoint(0, 1_000, 0), timepoint(1, 2_000, 0)]);
+        assert!(ring.write(0, 3_000, 0, 1, 0).is_err());
+        assert!(ring.check_last(0).is_err());
+        assert!(ring.check_last(1).is_ok());
+    }
+
+    #[test]
+    fn a_single_timepoint_ring_must_be_the_first_write() {
+        // Only `initialize` leaves a ring with one timepoint, and it writes index 0; any other
+        // index implies a predecessor the ring does not hold.
+        assert!(Timepoints::new(vec![timepoint(0, 1_000, 0)])
+            .check_last(0)
+            .is_ok());
+        let ring = Timepoints::new(vec![timepoint(3, 1_000, 0)]);
+        assert!(ring.check_last(3).is_err());
+        assert!(ring.write(3, 2_000, 0, 1, 0).is_err());
     }
 
     #[test]
@@ -730,19 +799,27 @@ mod tests {
 
     #[test]
     fn averages_see_the_timepoint_being_written() {
-        let last = timepoint(0, 1_000, 0);
-        let ring = Timepoints::new(vec![last]);
+        // One timepoint at 1000 with an average tick of 0; the write comes a day and ten
+        // seconds later at tick 5 with liquidity 1 and three units of volume per liquidity.
+        let ring = Timepoints::new(vec![timepoint(0, 1_000, 0)]);
+        let time = 1_000 + WINDOW + 10;
         let appended = ring
-            .write(0, 1_000 + WINDOW + 10, 0, 1, 1 << 57)
+            .write(0, time, 5, 1, 3 << 57)
             .unwrap()
             .unwrap();
-        // The oldest timepoint now precedes the window start, so the window branch runs; its
-        // start interpolates between the two timepoints and the volume over the window is the
-        // appended timepoint's share of the write.
-        let (_, volume) = ring
-            .averages(Some(&appended), 1_000 + WINDOW + 10, 0, 1, 1)
+        // With a single timepoint both the previous and the average tick default to 5, so
+        // over the 86410 seconds the tick sits 5 above an average that moves from 0 to 5:
+        // `_volatilityOnRange` with K = -5 and B = 5 * 86410 gives 720070.
+        assert_eq!(appended.volatility_cumulative, 720_070);
+        assert_eq!(appended.volume_per_liquidity_cumulative, U256::from(3u64 << 57));
+        // The stored timepoint precedes the window start, so the window branch runs. Its
+        // start interpolates ten seconds past the stored timepoint: 8 * 10 of the volatility
+        // and 10 / 86410 of the volume, which leaves the window two of the three units.
+        let (volatility, volume) = ring
+            .averages(Some(&appended), time, 5, 1, 1)
             .unwrap();
-        assert!(volume <= U256::from(1));
+        assert_eq!(volatility, (720_070 - 80) / u128::from(WINDOW));
+        assert_eq!(volume, U256::from(2));
     }
 
     #[test]

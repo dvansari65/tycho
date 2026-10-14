@@ -104,8 +104,8 @@ impl CamelotV3State {
     /// Creates a state from the pool's indexed values.
     ///
     /// `ticks` may be in any order and may include ticks whose net liquidity is zero; they stay
-    /// step boundaries as on chain. `timepoints` must contain the timepoint at
-    /// `timepoint_index`.
+    /// step boundaries as on chain. `timepoints` must hold the timepoint at `timepoint_index`
+    /// and, unless that is the ring's first write, the one before it.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: String,
@@ -138,18 +138,28 @@ impl CamelotV3State {
             fee_config_zto,
             fee_config_otz,
         };
-        if state.is_initialized() &&
+        if state.is_initialized() {
             state
                 .timepoints
-                .get(timepoint_index)
-                .is_none()
-        {
-            return Err(SimulationError::FatalError(format!(
-                "pool {}: timepoint {timepoint_index} is not indexed",
-                state.id
-            )));
+                .check_last(timepoint_index)
+                .map_err(|err| state.with_pool(err))?;
         }
         Ok(state)
+    }
+
+    /// Prefixes an error with the pool id, so that a log line names the pool it is about.
+    fn with_pool(&self, err: SimulationError) -> SimulationError {
+        match err {
+            SimulationError::FatalError(message) => {
+                SimulationError::FatalError(format!("pool {}: {message}", self.id))
+            }
+            SimulationError::RecoverableError(message) => {
+                SimulationError::RecoverableError(format!("pool {}: {message}", self.id))
+            }
+            SimulationError::InvalidInput(message, partial) => {
+                SimulationError::InvalidInput(format!("pool {}: {message}", self.id), partial)
+            }
+        }
     }
 
     /// Whether `initialize` has run. It sets the price and writes the first timepoint, so
@@ -1375,6 +1385,38 @@ mod tests {
                 .unwrap(),
             (BigUint::zero(), BigUint::zero())
         );
+    }
+
+    /// The ring must hold the timepoint before the last written one: the first swap of a block
+    /// derives the previous tick from it, and without it the fee would silently diverge.
+    #[test]
+    fn a_ring_without_the_timepoint_before_the_last_is_rejected() {
+        let fixture = fixture("0x299c");
+        let pre = &fixture.pre;
+        let before_last = pre.timepoint_index - 1;
+        let timepoints: Vec<_> = fixture_timepoints(pre)
+            .into_iter()
+            .filter(|t| t.index != before_last)
+            .collect();
+        let err = CamelotV3State::new(
+            fixture.pool.clone(),
+            fixture.timestamp,
+            pre.liquidity.parse().unwrap(),
+            U256::from_str(&pre.sqrt_price).unwrap(),
+            pre.tick,
+            pre.fee_zto,
+            pre.fee_otz,
+            pre.timepoint_index,
+            0,
+            Vec::new(),
+            timepoints,
+            fixture_config(&pre.fee_config_zto),
+            fixture_config(&pre.fee_config_otz),
+        )
+        .unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains(&fixture.pool), "{message}");
+        assert!(message.contains(&format!("timepoint {before_last}")), "{message}");
     }
 
     /// Before `initialize` a pool has no price and no ring: it reports the fees its constructor

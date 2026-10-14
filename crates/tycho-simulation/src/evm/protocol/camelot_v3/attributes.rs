@@ -2,8 +2,8 @@
 //! emits, shared by the snapshot decoder and `delta_transition`.
 //!
 //! Values are big-endian and fixed-width at the source. A value may still arrive wider than
-//! its field, padded with sign bytes, which every parser here accepts; anything else is an
-//! error rather than a silent truncation.
+//! its field, padded with sign bytes, which every parser here accepts; anything else, an
+//! empty value included, is an error rather than a silent truncation or a silent zero.
 
 use alloy::primitives::U256;
 
@@ -21,8 +21,17 @@ pub(super) const TICKS_PREFIX: &str = "ticks/";
 /// `timepoints/{index}`: the two storage words of the operator's `timepoints[index]`.
 pub(super) const TIMEPOINTS_PREFIX: &str = "timepoints/";
 
-/// Drops surplus leading bytes above `width`, which must all be the padding byte `pad`.
-fn narrow<'a>(name: &str, bytes: &'a [u8], width: usize, pad: u8) -> Result<&'a [u8], String> {
+/// Drops surplus leading bytes above `width`, which must all be the padding byte `pad`. An
+/// empty value is an error: every attribute is a fixed-width number at the source.
+pub(super) fn narrow<'a>(
+    name: &str,
+    bytes: &'a [u8],
+    width: usize,
+    pad: u8,
+) -> Result<&'a [u8], String> {
+    if bytes.is_empty() {
+        return Err(format!("{name}: empty value"));
+    }
     if bytes.len() <= width {
         return Ok(bytes);
     }
@@ -131,10 +140,14 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_value_is_zero() {
-        assert_eq!(i24_attr("tick", &[]).unwrap(), 0);
-        assert_eq!(i128_attr("ticks/1", &[]).unwrap(), 0);
-        assert_eq!(u128_attr("liquidity", &[]).unwrap(), 0);
+    fn an_empty_value_is_an_error() {
+        // Every attribute is a fixed-width number at the source, so an empty value is
+        // malformed rather than a zero.
+        assert!(u16_attr("fee", &[]).is_err());
+        assert!(u128_attr("liquidity", &[]).is_err());
+        assert!(u160_attr("sqrt_price_x96", &[]).is_err());
+        assert!(i24_attr("tick", &[]).is_err());
+        assert!(i128_attr("ticks/1", &[]).is_err());
     }
 
     #[test]

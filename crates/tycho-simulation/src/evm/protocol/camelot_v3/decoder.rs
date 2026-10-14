@@ -34,9 +34,10 @@ impl TryFromWithBlock<ComponentWithState, BlockHeader> for CamelotV3State {
 
     /// Decodes a `ComponentWithState` into a `CamelotV3State`.
     ///
-    /// Errors when a pool-level attribute is missing or malformed, or when the ring does not
-    /// contain the timepoint `timepoint_index` points at. A pool without positions has no
-    /// `ticks/*` attributes and decodes to a state that quotes nothing.
+    /// Errors when a pool-level attribute is missing or malformed, or when the ring lacks the
+    /// timepoint `timepoint_index` points at or, unless that is the ring's first write, the
+    /// one before it. A pool without positions has no `ticks/*` attributes and decodes to a
+    /// state that quotes nothing.
     async fn try_from_with_header(
         snapshot: ComponentWithState,
         block: BlockHeader,
@@ -95,15 +96,24 @@ impl TryFromWithBlock<ComponentWithState, BlockHeader> for CamelotV3State {
                 );
             }
         }
-        if !sqrt_price.is_zero() &&
-            !timepoints
-                .iter()
-                .any(|t| t.index == timepoint_index)
-        {
-            return Err(InvalidSnapshotError::MissingAttribute(format!(
-                "{}{timepoint_index}",
-                attributes::TIMEPOINTS_PREFIX
-            )));
+        if !sqrt_price.is_zero() {
+            // The first swap of a block derives the previous tick from the timepoint before
+            // the last one, which exists unless the ring holds only its first write.
+            let mut required = vec![timepoint_index];
+            if !(timepoint_index == 0 && timepoints.len() == 1) {
+                required.push(timepoint_index.wrapping_sub(1));
+            }
+            for index in required {
+                if !timepoints
+                    .iter()
+                    .any(|t| t.index == index)
+                {
+                    return Err(InvalidSnapshotError::MissingAttribute(format!(
+                        "{}{index}",
+                        attributes::TIMEPOINTS_PREFIX
+                    )));
+                }
+            }
         }
 
         CamelotV3State::new(
@@ -285,6 +295,7 @@ mod tests {
     #[case::fee_config_zto("fee_config_zto")]
     #[case::fee_config_otz("fee_config_otz")]
     #[case::last_timepoint("timepoints/48648")]
+    #[case::timepoint_before_last("timepoints/48647")]
     #[tokio::test]
     async fn a_missing_attribute_is_reported(#[case] missing: &str) {
         let mut attributes = attributes();
