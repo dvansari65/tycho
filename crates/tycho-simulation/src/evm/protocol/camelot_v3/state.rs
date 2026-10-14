@@ -1091,14 +1091,30 @@ mod tests {
     }
 
     /// The spot price of `base` in `quote` is what a small sale of `quote` pays per unit of
-    /// `base` received, fee included.
+    /// `base` received, fee included. Small is relative to the pool: a hundredth of the
+    /// captured swap, sold in its direction and, with what it bought, back the other way.
     #[test]
     fn spot_price_is_the_marginal_price_of_a_small_swap() {
         for fixture in load_fixtures() {
             let state = state_at_swap_block(&fixture);
             let (token0, token1) = (token(&fixture.token0), token(&fixture.token1));
-            for (base, quote_token) in [(&token0, &token1), (&token1, &token0)] {
-                let sold = whole_token(quote_token);
+            let (zero_for_one, amount_in) = fixture_swap(&fixture);
+            let amount_out = u256_to_biguint(
+                I256::from_dec_str(if zero_for_one {
+                    &fixture.swap.amount1
+                } else {
+                    &fixture.swap.amount0
+                })
+                .unwrap()
+                .unsigned_abs(),
+            );
+            let probes = if zero_for_one {
+                [(&token1, &token0, amount_in), (&token0, &token1, amount_out)]
+            } else {
+                [(&token0, &token1, amount_in), (&token1, &token0, amount_out)]
+            };
+            for (base, quote_token, captured) in probes {
+                let sold = captured / 100u32;
                 let (bought, _) = quote(&state, &sold, quote_token, base);
                 let as_f64 = |amount: &BigUint| {
                     amount
