@@ -21,7 +21,7 @@ use crate::rfq::protocols::metric::{
 };
 
 /// Gas estimate for one MetricExecutor swap (pool swap + callback settlement).
-const METRIC_SWAP_GAS: u64 = 170_000;
+const METRIC_SWAP_GAS: u64 = 235_000;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct MetricState {
@@ -1068,6 +1068,7 @@ mod tests {
                 token_out: state.quote_token.address.clone(),
                 sender: trader.clone(),
                 receiver: trader,
+                origin: None,
             })
             .await
             .unwrap();

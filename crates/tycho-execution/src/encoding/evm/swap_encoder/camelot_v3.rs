@@ -108,6 +108,7 @@ mod tests {
             router_address: Some(Bytes::zero(20)),
             group_token_in: weth.clone(),
             group_token_out: usdc.clone(),
+            origin: None,
         };
 
         let sell_weth = Swap::new(

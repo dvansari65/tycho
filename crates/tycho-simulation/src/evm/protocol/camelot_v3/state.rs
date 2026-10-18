@@ -27,12 +27,12 @@ use crate::evm::protocol::{
         add_fee_markup,
         uniswap::{
             liquidity_math,
+            pool_tick::PoolTick,
             sqrt_price_math::{get_amount0_delta, get_amount1_delta, sqrt_price_q96_to_f64},
-            swap_math,
+            swap_math::{self, SwapStepResult},
             tick_list::{TickInfo, TickList, TickListErrorKind},
             tick_math::{
-                get_sqrt_ratio_at_tick, get_tick_at_sqrt_ratio, MAX_SQRT_RATIO, MAX_TICK,
-                MIN_SQRT_RATIO, MIN_TICK,
+                get_sqrt_ratio_at_tick_cached, MAX_SQRT_RATIO, MAX_TICK, MIN_SQRT_RATIO, MIN_TICK,
             },
             StepComputation, SwapResults, SwapState,
         },
@@ -241,7 +241,7 @@ impl CamelotV3State {
             new_state.commit_write(pending);
         }
         new_state.liquidity = result.liquidity;
-        new_state.tick = result.tick;
+        new_state.tick = result.tick.value();
         new_state.sqrt_price = result.sqrt_price;
         let amount_in = result.amount_specified - result.amount_remaining;
         let (amount0, amount1) = if zero_for_one {
@@ -289,16 +289,16 @@ impl CamelotV3State {
             amount_remaining: amount_specified,
             amount_calculated: I256::ZERO,
             sqrt_price: self.sqrt_price,
-            tick: self.tick,
+            tick: PoolTick::from(self.tick),
             liquidity: self.liquidity,
         };
         let mut gas_used =
             U256::from(SWAP_BASE_GAS + if pending.is_some() { TIMEPOINT_WRITE_GAS } else { 0 });
 
         while state.amount_remaining != I256::ZERO && state.sqrt_price != price_limit {
-            let (mut next_tick, initialized) = match self
+            let (mut next_tick, next_tick_info) = match self
                 .ticks
-                .next_initialized_tick_within_one_word(state.tick, zero_for_one)
+                .next_initialized_tick_within_one_word(state.tick.value(), zero_for_one)
             {
                 Ok(next) => next,
                 Err(tick_err) => match tick_err.kind {
@@ -311,7 +311,7 @@ impl CamelotV3State {
                             amount_remaining: state.amount_remaining,
                             sqrt_price: state.sqrt_price,
                             liquidity: state.liquidity,
-                            tick: state.tick,
+                            tick: state.tick.clone(),
                             gas_used,
                         };
                         let new_state = self.state_after(pending, &partial, zero_for_one)?;
@@ -330,37 +330,37 @@ impl CamelotV3State {
             next_tick = next_tick.clamp(MIN_TICK, MAX_TICK);
 
             let sqrt_price_start = state.sqrt_price;
-            let sqrt_price_next = get_sqrt_ratio_at_tick(next_tick)?;
+            let sqrt_price_next = match next_tick_info {
+                Some(info) => info.sqrt_price,
+                None => get_sqrt_ratio_at_tick_cached(next_tick)?,
+            };
             let target = if (sqrt_price_next < price_limit) == zero_for_one {
                 price_limit
             } else {
                 sqrt_price_next
             };
-            let (sqrt_price, amount_in, amount_out, fee_amount) = swap_math::compute_swap_step(
-                state.sqrt_price,
-                target,
-                state.liquidity,
-                state.amount_remaining,
-                u32::from(fee),
-            )?;
+            let SwapStepResult { sqrt_price, amount_in_with_fee, amount_out } =
+                swap_math::compute_swap_step(
+                    state.sqrt_price,
+                    target,
+                    state.liquidity,
+                    state.amount_remaining,
+                    u32::from(fee),
+                )?;
             state.sqrt_price = sqrt_price;
             let step = StepComputation {
                 sqrt_price_start,
                 tick_next: next_tick,
-                initialized,
                 sqrt_price_next,
-                amount_in,
+                amount_in_with_fee,
                 amount_out,
-                fee_amount,
             };
             gas_used = safe_add_u256(gas_used, U256::from(GAS_PER_STEP))?;
 
             if exact_input {
-                state.amount_remaining -= I256::checked_from_sign_and_abs(
-                    Sign::Positive,
-                    safe_add_u256(step.amount_in, step.fee_amount)?,
-                )
-                .ok_or_else(|| SimulationError::FatalError("step input overflow".into()))?;
+                state.amount_remaining -=
+                    I256::checked_from_sign_and_abs(Sign::Positive, step.amount_in_with_fee)
+                        .ok_or_else(|| SimulationError::FatalError("step input overflow".into()))?;
                 state.amount_calculated -=
                     I256::checked_from_sign_and_abs(Sign::Positive, step.amount_out).ok_or_else(
                         || SimulationError::FatalError("step output overflow".into()),
@@ -370,32 +370,22 @@ impl CamelotV3State {
                     I256::checked_from_sign_and_abs(Sign::Positive, step.amount_out).ok_or_else(
                         || SimulationError::FatalError("step output overflow".into()),
                     )?;
-                state.amount_calculated += I256::checked_from_sign_and_abs(
-                    Sign::Positive,
-                    safe_add_u256(step.amount_in, step.fee_amount)?,
-                )
-                .ok_or_else(|| SimulationError::FatalError("step input overflow".into()))?;
+                state.amount_calculated +=
+                    I256::checked_from_sign_and_abs(Sign::Positive, step.amount_in_with_fee)
+                        .ok_or_else(|| SimulationError::FatalError("step input overflow".into()))?;
             }
             if state.sqrt_price == step.sqrt_price_next {
-                if step.initialized {
-                    let liquidity_raw = self
-                        .ticks
-                        .get_tick(step.tick_next)
-                        .map_err(|_| {
-                            SimulationError::FatalError(format!(
-                                "initialized tick {} is missing",
-                                step.tick_next
-                            ))
-                        })?
-                        .net_liquidity;
-                    let liquidity_net = if zero_for_one { -liquidity_raw } else { liquidity_raw };
+                if let Some(info) = next_tick_info {
+                    let liquidity_net =
+                        if zero_for_one { -info.net_liquidity } else { info.net_liquidity };
                     state.liquidity =
                         liquidity_math::add_liquidity_delta(state.liquidity, liquidity_net)?;
                     gas_used = safe_add_u256(gas_used, U256::from(GAS_PER_INITIALIZED_TICK_CROSS))?;
                 }
-                state.tick = if zero_for_one { step.tick_next - 1 } else { step.tick_next };
+                state.tick =
+                    PoolTick::from(if zero_for_one { step.tick_next - 1 } else { step.tick_next });
             } else if state.sqrt_price != step.sqrt_price_start {
-                state.tick = get_tick_at_sqrt_ratio(state.sqrt_price)?;
+                state.tick = PoolTick::at_sqrt_price(state.sqrt_price)?;
             }
         }
         Ok(SwapResults {
@@ -546,16 +536,20 @@ impl ProtocolSim for CamelotV3State {
         // timepoint write and every row and crossing at the price `swap` charges.
         let mut gas_used = SWAP_BASE_GAS + TIMEPOINT_WRITE_GAS;
 
-        while let Ok((tick, initialized)) = self
+        while let Ok((tick, next_tick_info)) = self
             .ticks
             .next_initialized_tick_within_one_word(current_tick, zero_for_one)
         {
-            gas_used += GAS_PER_STEP + if initialized { GAS_PER_INITIALIZED_TICK_CROSS } else { 0 };
+            gas_used += GAS_PER_STEP +
+                if next_tick_info.is_some() { GAS_PER_INITIALIZED_TICK_CROSS } else { 0 };
             if gas_used > MAX_SWAP_GAS {
                 break;
             }
             let next_tick = tick.clamp(MIN_TICK, MAX_TICK);
-            let sqrt_price_next = get_sqrt_ratio_at_tick(next_tick)?;
+            let sqrt_price_next = match next_tick_info {
+                Some(info) => info.sqrt_price,
+                None => get_sqrt_ratio_at_tick_cached(next_tick)?,
+            };
 
             let (amount_in, amount_out) = if zero_for_one {
                 (
@@ -591,17 +585,9 @@ impl ProtocolSim for CamelotV3State {
             total_amount_in = safe_add_u256(total_amount_in, amount_in)?;
             total_amount_out = safe_add_u256(total_amount_out, amount_out)?;
 
-            if initialized {
-                let liquidity_raw = self
-                    .ticks
-                    .get_tick(next_tick)
-                    .map_err(|_| {
-                        SimulationError::FatalError(format!(
-                            "initialized tick {next_tick} is missing"
-                        ))
-                    })?
-                    .net_liquidity;
-                let liquidity_delta = if zero_for_one { -liquidity_raw } else { liquidity_raw };
+            if let Some(info) = next_tick_info {
+                let liquidity_delta =
+                    if zero_for_one { -info.net_liquidity } else { info.net_liquidity };
                 match liquidity_math::add_liquidity_delta(current_liquidity, liquidity_delta) {
                     Ok(new_liquidity) => current_liquidity = new_liquidity,
                     // Inconsistent tick data: the liquidity walked so far is all that is known.
@@ -681,6 +667,7 @@ mod tests {
     use tycho_common::models::Chain;
 
     use super::*;
+    use crate::evm::protocol::utils::uniswap::tick_math::get_sqrt_ratio_at_tick;
 
     /// One real Arbitrum swap, captured by `dump_fixture.py` in the PR: the pool state at the
     /// parent block, every initialized tick around the swap and the oracle timepoints the fee
@@ -1353,15 +1340,13 @@ mod tests {
                 .net_liquidity,
             0
         );
-        assert_eq!(
-            state
-                .ticks
-                .next_initialized_tick_within_one_word(kept - 1, false)
-                .unwrap(),
-            (kept, true),
-            "a zero-net tick stays a step boundary"
-        );
-        assert!(state.ticks.get_tick(removed).is_err());
+        let (next_tick, next_tick_info) = state
+            .ticks
+            .next_initialized_tick_within_one_word(kept - 1, false)
+            .unwrap();
+        assert_eq!(next_tick, kept);
+        assert!(next_tick_info.is_some(), "a zero-net tick stays a step boundary");
+        assert!(state.ticks.get_tick(removed).is_none());
         let fees_after = state.fees().unwrap();
         assert_ne!(fees_after, fees_before);
         assert!(fees_after.0 >= base_fee + 1_000);
