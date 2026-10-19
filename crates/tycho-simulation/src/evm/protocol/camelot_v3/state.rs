@@ -10,7 +10,10 @@ use tycho_common::{
     models::token::Token,
     simulation::{
         errors::{SimulationError, TransitionError},
-        protocol_sim::{Balances, BlockContext, GetAmountOutResult, ProtocolSim},
+        protocol_sim::{
+            Balances, BlockContext, GetAmountOutResult, PoolSwap, Price, ProtocolSim,
+            QueryPoolSwapParams, SwapConstraint,
+        },
     },
     Bytes,
 };
@@ -20,23 +23,29 @@ use super::{
     attributes,
     timepoints::{Timepoint, Timepoints},
 };
-use crate::evm::protocol::{
-    safe_math::{safe_add_u256, safe_sub_u256},
-    u256_num::u256_to_biguint,
-    utils::{
-        add_fee_markup,
-        uniswap::{
-            liquidity_math,
-            pool_tick::PoolTick,
-            sqrt_price_math::{get_amount0_delta, get_amount1_delta, sqrt_price_q96_to_f64},
-            swap_math::{self, SwapStepResult},
-            tick_list::{TickInfo, TickList, TickListErrorKind},
-            tick_math::{
-                get_sqrt_ratio_at_tick_cached, MAX_SQRT_RATIO, MAX_TICK, MIN_SQRT_RATIO, MIN_TICK,
+use crate::evm::{
+    protocol::{
+        clmm::clmm_swap_to_price,
+        safe_math::{safe_add_u256, safe_sub_u256},
+        u256_num::u256_to_biguint,
+        utils::{
+            add_fee_markup,
+            slipstreams::raw_target_price,
+            uniswap::{
+                liquidity_math,
+                pool_tick::PoolTick,
+                sqrt_price_math::{get_amount0_delta, get_amount1_delta, sqrt_price_q96_to_f64},
+                swap_math::{self, SwapStepResult},
+                tick_list::{TickInfo, TickList, TickListErrorKind},
+                tick_math::{
+                    get_sqrt_ratio_at_tick_cached, MAX_SQRT_RATIO, MAX_TICK, MIN_SQRT_RATIO,
+                    MIN_TICK,
+                },
+                StepComputation, SwapResults, SwapState,
             },
-            StepComputation, SwapResults, SwapState,
         },
     },
+    query_pool_swap::price_to_f64_with_decimals,
 };
 
 /// Algebra's `TickTable` indexes raw ticks: a row holds 256 consecutive ticks, which is
@@ -215,6 +224,87 @@ impl CamelotV3State {
             Some(pending) => (pending.fee_zto, pending.fee_otz),
             None => (self.fee_zto, self.fee_otz),
         })
+    }
+
+    /// The fee a swap in direction `zero_for_one` pays: the one `pending` recomputes when the
+    /// swap is the block's first, otherwise the stored one.
+    fn direction_fee(&self, pending: Option<&PendingWrite>, zero_for_one: bool) -> u16 {
+        match (pending, zero_for_one) {
+            (Some(pending), true) => pending.fee_zto,
+            (Some(pending), false) => pending.fee_otz,
+            (None, true) => self.fee_zto,
+            (None, false) => self.fee_otz,
+        }
+    }
+
+    /// The swap that moves the spot price of `token_in` in `token_out` into the band
+    /// `[target, target * (1 + tolerance)]`, computed in closed form, or `None` when the closed
+    /// form cannot land there and the generic search has to.
+    ///
+    /// The spot price carries the fee of buying `token_in` back, which after the swap is the
+    /// stored or recomputed fee of the other direction, so the raw price the swap stops at strips
+    /// that fee. The swap itself pays the fee of its own direction. The output and the state
+    /// after are those of an exact-input swap of the input found, the trade that executes.
+    fn swap_to_target_price(
+        &self,
+        params: &QueryPoolSwapParams,
+        target: &Price,
+        tolerance: f64,
+    ) -> Result<Option<PoolSwap>, SimulationError> {
+        let (token_in, token_out) = (params.token_in(), params.token_out());
+        let target_f64 = price_to_f64_with_decimals(target, token_in.decimals, token_out.decimals)?;
+        if target_f64 == self.spot_price(token_in, token_out)? {
+            return Ok(Some(PoolSwap::new(
+                BigUint::ZERO,
+                BigUint::ZERO,
+                Box::new(self.clone()),
+                None,
+            )));
+        }
+        let zero_for_one = token_in < token_out;
+        let pending = self.pending_write()?;
+        let spot_fee = self.direction_fee(pending.as_ref(), !zero_for_one);
+        let Some(limit) = raw_target_price(target, tolerance, u32::from(spot_fee)) else {
+            return Ok(None);
+        };
+        let fee = self.direction_fee(pending.as_ref(), zero_for_one);
+        // A target past the indexed ticks or outside the price range fails here; the generic
+        // search then reports it the way it does for every other protocol.
+        let Ok((amount_in, _, _)) = clmm_swap_to_price(
+            self.sqrt_price,
+            &token_in.address,
+            &token_out.address,
+            &limit,
+            0,
+            Sign::Positive,
+            |zero_for_one, amount_specified, sqrt_price_limit| {
+                self.swap(
+                    zero_for_one,
+                    amount_specified,
+                    Some(sqrt_price_limit),
+                    fee,
+                    pending.as_ref(),
+                )
+            },
+        ) else {
+            return Ok(None);
+        };
+        if amount_in.is_zero() {
+            return Ok(None);
+        }
+        // The closed form stops exactly at the raw price with its input rounded up. An
+        // exact-input swap of that input turns the rounding into output, up to one input unit's
+        // worth, which is what the chain pays for it.
+        let Ok(executed) = self.get_amount_out(amount_in.clone(), token_in, token_out) else {
+            return Ok(None);
+        };
+        let spot = executed
+            .new_state
+            .spot_price(token_in, token_out)?;
+        if spot < target_f64 || spot > target_f64 * (1.0 + tolerance) {
+            return Ok(None);
+        }
+        Ok(Some(PoolSwap::new(amount_in, executed.amount, executed.new_state, None)))
     }
 
     /// Records the timepoint and fees of `pending`, as `_calculateSwapAndLock` does before its
@@ -495,12 +585,7 @@ impl ProtocolSim for CamelotV3State {
         })?;
 
         let pending = self.pending_write()?;
-        let fee = match &pending {
-            Some(pending) if zero_for_one => pending.fee_zto,
-            Some(pending) => pending.fee_otz,
-            None if zero_for_one => self.fee_zto,
-            None => self.fee_otz,
-        };
+        let fee = self.direction_fee(pending.as_ref(), zero_for_one);
         let result = self.swap(zero_for_one, amount_specified, None, fee, pending.as_ref())?;
         trace!(?amount_in, ?token_in, ?token_out, ?zero_for_one, ?result, "CAMELOT V3 SWAP");
 
@@ -650,11 +735,32 @@ impl ProtocolSim for CamelotV3State {
             .is_some_and(|other| self == other)
     }
 
-    fn query_pool_swap(
-        &self,
-        params: &tycho_common::simulation::protocol_sim::QueryPoolSwapParams,
-    ) -> Result<tycho_common::simulation::protocol_sim::PoolSwap, SimulationError> {
-        crate::evm::query_pool_swap::query_pool_swap(self, params)
+    /// A target price is reached in closed form when it can be, otherwise by the generic search.
+    ///
+    /// A trade limit is not supported, as for Uniswap V3: it bounds the average price of the
+    /// trade, which no closed form gives, and the generic search starts from `get_limits`,
+    /// which on a pool with full-range positions is so large that its bisection never reaches
+    /// a trade that small. It would answer zero where a trade qualifies.
+    fn query_pool_swap(&self, params: &QueryPoolSwapParams) -> Result<PoolSwap, SimulationError> {
+        match params.swap_constraint() {
+            SwapConstraint::TradeLimitPrice { .. } => Err(SimulationError::InvalidInput(
+                "Camelot V3 does not support TradeLimitPrice constraint in query_pool_swap"
+                    .to_string(),
+                None,
+            )),
+            SwapConstraint::PoolTargetPrice { target, tolerance, .. } => {
+                if !tolerance.is_finite() || *tolerance < 0.0 {
+                    return Err(SimulationError::InvalidInput(
+                        format!("target price tolerance {tolerance} is not a non-negative number"),
+                        None,
+                    ));
+                }
+                match self.swap_to_target_price(params, target, *tolerance)? {
+                    Some(swap) => Ok(swap),
+                    None => crate::evm::query_pool_swap::query_pool_swap(self, params),
+                }
+            }
+        }
     }
 }
 
@@ -664,10 +770,16 @@ mod tests {
 
     use num_bigint::BigUint;
     use serde::Deserialize;
-    use tycho_common::models::Chain;
+    use tycho_common::{
+        models::Chain,
+        simulation::protocol_sim::{QueryPoolSwapParams, SwapConstraint},
+    };
 
     use super::*;
-    use crate::evm::protocol::utils::uniswap::tick_math::get_sqrt_ratio_at_tick;
+    use crate::evm::{
+        protocol::utils::uniswap::tick_math::get_sqrt_ratio_at_tick,
+        query_pool_swap::test_helpers::{target_price_params, to_price},
+    };
 
     /// One real Arbitrum swap, captured by `dump_fixture.py` in the PR: the pool state at the
     /// parent block, every initialized tick around the swap and the oracle timepoints the fee
@@ -1121,6 +1233,109 @@ mod tests {
                     base.address
                 );
             }
+        }
+    }
+
+    /// A target-price query takes the closed-form path: the pool lands in the tolerance band,
+    /// an exact-input quote of the returned input pays the returned output, and the post-swap
+    /// state carries the block's timepoint write when there is one, as the swap would on chain.
+    #[test]
+    fn query_pool_swap_reaches_a_target_price_in_closed_form() {
+        for fixture in load_fixtures() {
+            let label = format!("{} block {}", fixture.pool, fixture.block);
+            let state = state_at_swap_block(&fixture);
+            // The fixtures at a timestamp the ring already holds write nothing.
+            let written_index = state
+                .pending_write()
+                .unwrap()
+                .map_or(state.timepoint_index, |pending| pending.timepoint.index);
+            let (token0, token1) = (token(&fixture.token0), token(&fixture.token1));
+            for (token_in, token_out) in [(&token0, &token1), (&token1, &token0)] {
+                let price = to_price(
+                    state
+                        .spot_price(token_in, token_out)
+                        .unwrap() *
+                        0.99,
+                    token_in,
+                    token_out,
+                );
+                // The band is around the price passed, which `to_price` rounds to atomic units.
+                let target =
+                    price_to_f64_with_decimals(&price, token_in.decimals, token_out.decimals)
+                        .unwrap();
+                let tolerance = 1e-4;
+                let params = target_price_params(token_in, token_out, price, tolerance);
+
+                let swap = state
+                    .query_pool_swap(&params)
+                    .unwrap_or_else(|err| panic!("{label}: {err}"));
+
+                assert!(swap.price_points().is_none(), "{label}: the closed form takes no steps");
+                let after = swap
+                    .new_state()
+                    .as_any()
+                    .downcast_ref::<CamelotV3State>()
+                    .unwrap();
+                let spot = after
+                    .spot_price(token_in, token_out)
+                    .unwrap();
+                assert!(
+                    spot >= target && spot <= target * (1.0 + tolerance),
+                    "{label}: spot {spot}, target {target}"
+                );
+                assert_eq!(after.timepoint_index, written_index, "{label}: the write");
+                let (amount_out, _) = quote(&state, swap.amount_in(), token_in, token_out);
+                assert_eq!(&amount_out, swap.amount_out(), "{label}: amount out");
+            }
+        }
+    }
+
+    /// A trade-limit query is refused with an error a caller can act on, rather than answered
+    /// with the zero the generic search returns on a pool with full-range positions.
+    #[test]
+    fn query_pool_swap_refuses_a_trade_limit_price() {
+        let fixture = fixture("0x299c");
+        let state = state_at_swap_block(&fixture);
+        let (token_in, token_out) = (token(&fixture.token1), token(&fixture.token0));
+        let params = QueryPoolSwapParams::new(
+            token_in.clone(),
+            token_out.clone(),
+            SwapConstraint::TradeLimitPrice {
+                limit: to_price(1.0, &token_in, &token_out),
+                tolerance: 1e-3,
+                min_amount_in: None,
+                max_amount_in: None,
+            },
+        );
+
+        let err = state
+            .query_pool_swap(&params)
+            .unwrap_err();
+
+        assert!(matches!(err, SimulationError::InvalidInput(_, None)), "{err:?}");
+    }
+
+    /// A tolerance that is not a non-negative number cannot define a band.
+    #[test]
+    fn query_pool_swap_rejects_an_invalid_tolerance() {
+        let fixture = fixture("0x299c");
+        let state = state_at_swap_block(&fixture);
+        let (token_in, token_out) = (token(&fixture.token0), token(&fixture.token1));
+        let target = state
+            .spot_price(&token_in, &token_out)
+            .unwrap() *
+            0.99;
+        for tolerance in [-1e-4, f64::NAN, f64::INFINITY] {
+            let params = target_price_params(
+                &token_in,
+                &token_out,
+                to_price(target, &token_in, &token_out),
+                tolerance,
+            );
+            assert!(
+                matches!(state.query_pool_swap(&params), Err(SimulationError::InvalidInput(..))),
+                "tolerance {tolerance}"
+            );
         }
     }
 
