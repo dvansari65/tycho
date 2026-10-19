@@ -61,7 +61,10 @@ execution time only moves forward, so once an entry is older than the newest tim
 before `now - 1 day` (and is not the one right before the last), nothing reads it again. On
 every write the package deletes the entries that the previous write still kept and this one no
 longer needs, using `store_operator_slots` to read timestamps by ring index. A busy pool's
-snapshot therefore carries about a day of timepoints instead of the whole ring.
+snapshot therefore carries about a day of timepoints instead of the whole ring. Once the ring
+has wrapped, each write overwrites its oldest slot, which the pruning has usually deleted
+already: that write is emitted as a creation, and as an update only while the slot is still
+kept.
 
 ## Build and test
 

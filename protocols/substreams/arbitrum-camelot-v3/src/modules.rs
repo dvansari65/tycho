@@ -28,9 +28,9 @@ use crate::{
     abi::pool::events::{Burn, Mint},
     camelot::{
         attributes, contract_key, fee_config_attribute, global_state_attributes,
-        initial_attributes, liquidity_attributes, operator_slot_key, pools_created, slot_number,
-        slot_word, tick_attribute, tick_slot, timepoint_attribute, timepoint_header,
-        timepoint_of_slot, timepoint_slots, unreachable_timepoints, word, Word,
+        initial_attributes, liquidity_attributes, operator_slot_key, overwrites_a_kept_timepoint,
+        pools_created, slot_number, slot_word, tick_attribute, tick_slot, timepoint_attribute,
+        timepoint_header, timepoint_of_slot, timepoint_slots, unreachable_timepoints, word, Word,
         DATA_STORAGE_OPERATOR_ATTRIBUTE, GLOBAL_STATE_SLOT, LIQUIDITY_SLOT,
     },
     params::parse_factory,
@@ -177,25 +177,32 @@ fn store_operator_slots(
     }
 }
 
-/// Storage words written by a transaction: by contract, then by key, the first old and the
-/// last new value.
-type WordChanges = BTreeMap<Vec<u8>, BTreeMap<Word, (Word, Word)>>;
-
-/// The first old and the last new value of every storage word a transaction wrote, by
-/// contract and key, in the order the writes happened.
-fn word_changes(tx: &TransactionTrace) -> Result<WordChanges> {
-    let mut changes = WordChanges::new();
+/// The storage changes of a transaction's successful calls by contract, each contract's in the
+/// order the writes happened.
+fn storage_changes_by_contract(tx: &TransactionTrace) -> BTreeMap<&[u8], Vec<&StorageChange>> {
+    let mut by_contract: BTreeMap<&[u8], Vec<&StorageChange>> = BTreeMap::new();
     for change in storage_changes(tx).sorted_by_key(|change| change.ordinal) {
+        by_contract
+            .entry(change.address.as_slice())
+            .or_default()
+            .push(change);
+    }
+    by_contract
+}
+
+/// The first old and the last new value of every storage word among one contract's `changes`,
+/// which must be in the order the writes happened.
+fn word_changes(changes: &[&StorageChange]) -> Result<BTreeMap<Word, (Word, Word)>> {
+    let mut words = BTreeMap::new();
+    for change in changes {
         let key = word(&change.key)?;
         let (old, new) = (word(&change.old_value)?, word(&change.new_value)?);
-        changes
-            .entry(change.address.clone())
-            .or_default()
+        words
             .entry(key)
-            .and_modify(|value| value.1 = new)
+            .and_modify(|value: &mut (Word, Word)| value.1 = new)
             .or_insert((old, new));
     }
-    Ok(changes)
+    Ok(words)
 }
 
 /// The ticks every `Mint` and `Burn` the pool emitted in the transaction touched.
@@ -240,10 +247,18 @@ fn pool_attributes(keyed: &BTreeMap<Word, (Word, Word)>, ticks: &[i32]) -> Vec<A
     out
 }
 
+/// The latest value of an operator's storage slot.
+///
+/// Panics on a stored value that is not a word: `store_operator_slots` cannot reject one, and
+/// `word_changes` fails the block that wrote it, so this only names the slot in that failure.
 fn stored_word(store: &StoreGetRaw, operator: &[u8], slot: u64) -> Option<Word> {
     store
         .get_last(operator_slot_key(operator, slot))
-        .map(|value| word(&value).expect("operator slot values are storage words"))
+        .map(|value| {
+            word(&value).unwrap_or_else(|err| {
+                panic!("operator 0x{} slot {slot}: {err}", hex::encode(operator))
+            })
+        })
 }
 
 /// The attribute changes of an operator's storage writes: fee configurations, every timepoint
@@ -278,25 +293,31 @@ fn operator_attributes(
             .map(|(_, new)| new)
             .or_else(|| stored(second_slot))
             .unwrap_or([0u8; 32]);
-        let change = match words[0] {
-            Some((old, _)) if !timepoint_header(&old).0 => ChangeType::Creation,
-            _ => ChangeType::Update,
+        let timestamp_at = |ring_index: u16| {
+            stored(timepoint_slots(ring_index).0).and_then(|first| {
+                let (initialized, timestamp) = timepoint_header(&first);
+                initialized.then_some(timestamp)
+            })
+        };
+        // A new first word is a new timepoint: the ring never rewrites the current one.
+        let written = words[0].map(|(old, new)| (timepoint_header(&old).0, timepoint_header(&new)));
+        let change = match written {
+            // An overwrite of a slot the pruning already deleted creates the attribute anew.
+            Some((true, (true, timestamp))) => {
+                if overwrites_a_kept_timepoint(index, timestamp, timestamp_at) {
+                    ChangeType::Update
+                } else {
+                    ChangeType::Creation
+                }
+            }
+            Some(_) => ChangeType::Creation,
+            None => ChangeType::Update,
         };
         out.push(timepoint_attribute(index, &first, &second, change));
 
-        // A new first word is a new timepoint (the ring never rewrites the current one), so
-        // the window moved and older entries may have become unreachable.
-        if let Some((_, new_first)) = words[0] {
-            let (initialized, timestamp) = timepoint_header(&new_first);
-            if !initialized {
-                continue;
-            }
-            let timestamp_at = |ring_index: u16| {
-                stored(timepoint_slots(ring_index).0).and_then(|first| {
-                    let (initialized, timestamp) = timepoint_header(&first);
-                    initialized.then_some(timestamp)
-                })
-            };
+        // The window moved with the new timepoint, so older entries may have become
+        // unreachable.
+        if let Some((_, (true, timestamp))) = written {
             for unreachable in unreachable_timepoints(index, timestamp, timestamp_at) {
                 out.push(Attribute {
                     name: attributes::timepoint(unreachable),
@@ -338,14 +359,15 @@ fn transaction_attributes(
     stored: impl Fn(&[u8], u64) -> Option<Word>,
 ) -> Result<BTreeMap<String, Vec<Attribute>>> {
     let mut per_component: BTreeMap<String, Vec<Attribute>> = BTreeMap::new();
-    for (address, keyed) in &word_changes(tx)? {
+    for (address, changes) in storage_changes_by_contract(tx) {
         let Some(component) = component_at(address) else {
             continue;
         };
+        let keyed = word_changes(&changes)?;
         let attributes = if component.id == address.to_hex() {
-            pool_attributes(keyed, &ticks_touched(tx, address))
+            pool_attributes(&keyed, &ticks_touched(tx, address))
         } else {
-            operator_attributes(keyed, |slot| stored(address, slot))
+            operator_attributes(&keyed, |slot| stored(address, slot))
         };
         if !attributes.is_empty() {
             per_component
@@ -577,10 +599,11 @@ mod tests {
             reverted,
         ]);
 
-        let changes = word_changes(&tx).unwrap();
+        let by_contract = storage_changes_by_contract(&tx);
 
-        assert_eq!(changes.len(), 1);
-        assert_eq!(changes[&POOL.to_vec()][&key], (word_with(0), word_with(3)));
+        assert_eq!(by_contract.len(), 1);
+        let changes = word_changes(&by_contract[POOL.as_slice()]).unwrap();
+        assert_eq!(changes[&key], (word_with(0), word_with(3)));
     }
 
     #[test]
@@ -588,7 +611,7 @@ mod tests {
         let mut short = change(&POOL, slot_word(GLOBAL_STATE_SLOT), word_with(0), word_with(1), 1);
         short.new_value.pop();
 
-        assert!(word_changes(&tx_with(vec![call_with(vec![short], vec![])])).is_err());
+        assert!(word_changes(&[&short]).is_err());
     }
 
     #[test]
@@ -647,6 +670,68 @@ mod tests {
                 ("timepoints/12", i32::from(ChangeType::Deletion), 0)
             ]
         );
+    }
+
+    /// A wrapped ring where every slot is written, `step` seconds apart, and slot 10 was just
+    /// overwritten: slot 11 holds the oldest timepoint. Returns the operator writes of that
+    /// transaction and the end-of-block store.
+    fn wrapped_ring_write(
+        step: u32,
+    ) -> (BTreeMap<Word, (Word, Word)>, impl Fn(u64) -> Option<Word>) {
+        let ring = u32::from(u16::MAX) + 1;
+        let timestamp = move |index: u16| {
+            let position = (u32::from(index) + ring - 11) % ring;
+            2_000_000_000 + step * position
+        };
+        let (first_slot, second_slot) = timepoint_slots(10);
+        let keyed = BTreeMap::from([
+            (
+                slot_word(first_slot),
+                (timepoint_first_word(timestamp(11) - step), timepoint_first_word(timestamp(10))),
+            ),
+            (slot_word(second_slot), ([1u8; 32], [2u8; 32])),
+        ]);
+        let stored = move |slot: u64| {
+            timepoint_of_slot(slot).map(|(index, second)| {
+                if second {
+                    [1u8; 32]
+                } else {
+                    timepoint_first_word(timestamp(index))
+                }
+            })
+        };
+        (keyed, stored)
+    }
+
+    fn change_of(attributes: &[Attribute], name: &str) -> i32 {
+        attributes
+            .iter()
+            .find(|a| a.name == name)
+            .unwrap_or_else(|| panic!("{name} missing"))
+            .change
+    }
+
+    #[test]
+    fn overwriting_a_pruned_timepoint_is_a_creation() {
+        // Ten seconds apart, a day is 8,640 slots: the slot a write overwrites is the oldest,
+        // which earlier writes deleted long ago, so the indexer no longer holds it.
+        let (keyed, stored) = wrapped_ring_write(10);
+
+        let attributes = operator_attributes(&keyed, stored);
+
+        assert_eq!(change_of(&attributes, "timepoints/10"), i32::from(ChangeType::Creation));
+    }
+
+    #[test]
+    fn overwriting_a_timepoint_still_kept_is_an_update() {
+        // One second apart, the whole ring spans 65,536 seconds, less than a day: nothing was
+        // ever pruned, so the overwritten slot is still an attribute.
+        let (keyed, stored) = wrapped_ring_write(1);
+
+        let attributes = operator_attributes(&keyed, stored);
+
+        assert_eq!(change_of(&attributes, "timepoints/10"), i32::from(ChangeType::Update));
+        assert_eq!(attributes.len(), 1, "nothing becomes unreachable: {attributes:?}");
     }
 
     #[test]
@@ -752,6 +837,26 @@ mod tests {
                 .unwrap();
 
         assert_eq!(per_component[&POOL.to_hex()].len(), initial_attributes().len());
+    }
+
+    #[test]
+    fn an_untracked_contracts_writes_are_not_parsed() {
+        // A value that is not a word fails only the contract it belongs to, and only a tracked
+        // contract's writes are parsed at all.
+        let mut malformed =
+            change(&OTHER, slot_word(GLOBAL_STATE_SLOT), word_with(0), word_with(1), 1);
+        malformed.new_value.pop();
+        let mut liquidity = [0u8; 32];
+        liquidity[31] = 5;
+        let tx = tx_with(vec![call_with(
+            vec![malformed, change(&POOL, slot_word(LIQUIDITY_SLOT), [0u8; 32], liquidity, 2)],
+            vec![],
+        )]);
+
+        let per_component =
+            transaction_attributes(&tx, &[], component_at, |_: &[u8], _: u64| None).unwrap();
+
+        assert_eq!(per_component[&POOL.to_hex()].len(), 1);
     }
 
     #[test]

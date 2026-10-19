@@ -360,37 +360,86 @@ pub fn unreachable_timepoints(
     new_timestamp: u32,
     timestamp_at: impl Fn(u16) -> Option<u32>,
 ) -> Vec<u16> {
-    let prev_index = new_index.wrapping_sub(1);
-    let Some(prev_timestamp) = timestamp_at(prev_index) else {
+    let Some(ring) = WrittenRing::new(new_index, new_timestamp, timestamp_at) else {
         // `initialize` wrote the first timepoint: nothing precedes it.
         return Vec::new();
     };
-    // The slot after the newest one is initialized only once the ring has wrapped, and is then
-    // the oldest entry.
-    let oldest = if timestamp_at(new_index.wrapping_add(1)).is_some() {
-        new_index.wrapping_add(1)
-    } else {
-        0
+    let keep_start = |timestamp: u32, before_last: u32| -> u32 {
+        ring.search(timestamp.wrapping_sub(WINDOW))
+            .unwrap_or(0)
+            .min(before_last)
     };
-    let index_at =
-        |position: u32| -> u16 { (u32::from(oldest) + position).rem_euclid(RING_SIZE) as u16 };
-    let last_position =
-        (u32::from(new_index).wrapping_sub(u32::from(oldest))).rem_euclid(RING_SIZE);
-    let timestamp_at_position = |position: u32| -> Option<u32> {
-        if position == last_position {
-            Some(new_timestamp)
+    let new_start = keep_start(new_timestamp, ring.last_position.saturating_sub(1));
+    let prev_start = keep_start(ring.prev_timestamp, ring.last_position.saturating_sub(2));
+    (prev_start..new_start)
+        .map(|position| ring.index_at(position))
+        .collect()
+}
+
+/// Whether the write of `new_index` overwrote a timepoint the package still emits.
+///
+/// The ring rewrites a slot only once it has wrapped, and then always its oldest entry. The
+/// previous write kept that entry only when it was its window start, that is when no other
+/// timepoint was at or before `previous timestamp - WINDOW`; otherwise an earlier write deleted
+/// it. `timestamp_at` is as for [`unreachable_timepoints`].
+pub fn overwrites_a_kept_timepoint(
+    new_index: u16,
+    new_timestamp: u32,
+    timestamp_at: impl Fn(u16) -> Option<u32>,
+) -> bool {
+    WrittenRing::new(new_index, new_timestamp, timestamp_at).is_some_and(|ring| {
+        ring.search(ring.prev_timestamp.wrapping_sub(WINDOW))
+            .is_none()
+    })
+}
+
+/// The ring right after the write of `new_index` at `new_timestamp`, by position from its
+/// oldest entry. `timestamp_at` reads a written timepoint's timestamp by ring index.
+struct WrittenRing<F> {
+    new_timestamp: u32,
+    prev_timestamp: u32,
+    oldest: u16,
+    last_position: u32,
+    timestamp_at: F,
+}
+
+impl<F: Fn(u16) -> Option<u32>> WrittenRing<F> {
+    /// `None` when no timepoint precedes the write.
+    fn new(new_index: u16, new_timestamp: u32, timestamp_at: F) -> Option<Self> {
+        let prev_timestamp = timestamp_at(new_index.wrapping_sub(1))?;
+        // The slot after the newest one is initialized only once the ring has wrapped, and is
+        // then the oldest entry.
+        let oldest = if timestamp_at(new_index.wrapping_add(1)).is_some() {
+            new_index.wrapping_add(1)
         } else {
-            timestamp_at(index_at(position))
+            0
+        };
+        let last_position =
+            (u32::from(new_index).wrapping_sub(u32::from(oldest))).rem_euclid(RING_SIZE);
+        Some(Self { new_timestamp, prev_timestamp, oldest, last_position, timestamp_at })
+    }
+
+    fn index_at(&self, position: u32) -> u16 {
+        (u32::from(self.oldest) + position).rem_euclid(RING_SIZE) as u16
+    }
+
+    fn timestamp_at_position(&self, position: u32) -> Option<u32> {
+        if position == self.last_position {
+            Some(self.new_timestamp)
+        } else {
+            (self.timestamp_at)(self.index_at(position))
         }
-    };
-    // Largest position whose timestamp is at or before `target`, if any.
-    let search = |target: u32| -> Option<u32> {
-        let (mut low, mut high) = (0u32, last_position);
+    }
+
+    /// Largest position whose timestamp is at or before `target`, if any.
+    fn search(&self, target: u32) -> Option<u32> {
+        let (mut low, mut high) = (0u32, self.last_position);
         let mut found = None;
         while low <= high {
             let mid = low + (high - low) / 2;
-            let before =
-                timestamp_at_position(mid).is_some_and(|ts| lte(ts, target, new_timestamp));
+            let before = self
+                .timestamp_at_position(mid)
+                .is_some_and(|ts| lte(ts, target, self.new_timestamp));
             if before {
                 found = Some(mid);
                 low = mid + 1;
@@ -401,17 +450,7 @@ pub fn unreachable_timepoints(
             }
         }
         found
-    };
-    let keep_start = |timestamp: u32, before_last: u32| -> u32 {
-        search(timestamp.wrapping_sub(WINDOW))
-            .unwrap_or(0)
-            .min(before_last)
-    };
-    let new_start = keep_start(new_timestamp, last_position.saturating_sub(1));
-    let prev_start = keep_start(prev_timestamp, last_position.saturating_sub(2));
-    (prev_start..new_start)
-        .map(index_at)
-        .collect()
+    }
 }
 
 #[cfg(test)]

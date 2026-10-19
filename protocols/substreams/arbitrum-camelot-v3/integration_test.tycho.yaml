@@ -20,7 +20,10 @@ tests:
         # June 2023 predates Cancun support on Arbitrum One; TychoRouterV3 needs transient storage.
         skip_execution: true
 
-  # A recent pool (SUSHI / PEPE) at a block where the router's opcodes are available.
+  # A recent pool (SUSHI / PEPE) at a block where the router's opcodes are available. The range
+  # ends after `initialize` and the first mint (block 280865283) and before any swap, so the pool
+  # is simulated with a ring that holds only its first write, the one shape in which a write has
+  # no previous timepoint to read.
   - name: test_sushi_pepe_pool_creation
     start_block: 280865282
     stop_block: 280865383
