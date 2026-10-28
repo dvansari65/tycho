@@ -52,7 +52,11 @@ Recovery worker reads finalized Pending rows
   pools. Partial blocks retain the existing completed-block snapshot boundary and delta
   catch-up.
 - Metadata still uses `latest`; hot-path analysis uses the incoming block and recovery
-  analysis uses `latest`. This does not introduce historical token-metadata versioning.
+  analysis uses `latest`. The token row is unversioned and read as current state, and a
+  `latest` read needs no historical state while the indexer catches up. Analysis keeps the
+  incoming block because its owner balances come from that block. A deferred token therefore
+  stores the same metadata as one fetched on time. This does not introduce historical
+  token-metadata versioning.
 
 This bounds token enrichment, **not the whole block pipeline**. Database writes, DCI,
 gRPC/WebSocket outages and runtime scheduling can still delay publication. A universal

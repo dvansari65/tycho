@@ -1,6 +1,11 @@
 use std::{
+    collections::HashMap,
     future::pending,
-    sync::atomic::{AtomicUsize, Ordering},
+    str::FromStr,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Mutex,
+    },
 };
 
 use alloy::sol_types::SolValue;
@@ -54,9 +59,15 @@ fn per_field_mock(
     }
 }
 
-#[derive(Debug)]
+/// Finds no owner for any token, promptly for most and never for the `hanging` ones, which
+/// hold their concurrency slot until the caller drops the analysis.
+#[derive(Debug, Default)]
 struct HangingOwnerFinder {
+    hanging: HashSet<Bytes>,
+    /// Analyses started for a hanging token and not yet dropped.
     active: Arc<AtomicUsize>,
+    /// Every `find_owner` call, hanging or not: only tokens that got a slot make one.
+    calls: AtomicUsize,
 }
 
 struct ActiveAttempt(Arc<AtomicUsize>);
@@ -70,8 +81,9 @@ impl Drop for ActiveAttempt {
 #[async_trait]
 impl TokenOwnerFinding for HangingOwnerFinder {
     async fn find_owner(&self, token: Bytes, _: Bytes) -> Result<Option<(Bytes, Bytes)>, String> {
-        // One token completes; every other token holds its concurrency slot until cancelled.
-        if token == Address::repeat_byte(1).to_bytes() {
+        self.calls
+            .fetch_add(1, Ordering::SeqCst);
+        if !self.hanging.contains(&token) {
             return Ok(None);
         }
         self.active
@@ -125,20 +137,20 @@ async fn collection_deadline_preserves_completed_tokens_and_cancels_queued_work(
     let rpc = EthereumRpcClient::new(&server.url()).unwrap();
     let processor = EthereumTokenPreProcessor::new(&rpc, Chain::Ethereum, Address::ZERO)
         .with_enrichment_budget(Duration::from_secs(1));
-    let active = Arc::new(AtomicUsize::new(0));
     let addresses: Vec<_> = (1..=12)
         .map(|id| Address::repeat_byte(id).to_bytes())
         .collect();
     let mut duplicated = addresses.clone();
     duplicated.push(addresses[0].clone());
+    // One token completes; every other token holds its concurrency slot until cancelled.
+    let finder = Arc::new(HangingOwnerFinder {
+        hanging: addresses[1..].iter().cloned().collect(),
+        ..Default::default()
+    });
     // A per-token timeout would need three waves of 1 s each, exceeding this 2.5 s bound.
     let tokens = tokio::time::timeout(
         Duration::from_millis(2_500),
-        processor.get_tokens(
-            duplicated,
-            Arc::new(HangingOwnerFinder { active: active.clone() }),
-            BlockTag::Latest,
-        ),
+        processor.get_tokens(duplicated, finder.clone(), BlockTag::Latest),
     )
     .await
     .expect("the entire collection must share a deadline");
@@ -154,7 +166,7 @@ async fn collection_deadline_preserves_completed_tokens_and_cancels_queued_work(
     assert!(tokens[1..]
         .iter()
         .all(|t| t.metadata_status == TokenMetadataStatus::Pending));
-    assert_eq!(active.load(Ordering::SeqCst), 0, "unfinished analyses must be dropped");
+    assert_eq!(finder.active.load(Ordering::SeqCst), 0, "unfinished analyses must be dropped");
 }
 
 #[tokio::test]
@@ -425,4 +437,336 @@ async fn deadline_covers_retry_backoff() {
     .expect("budget must bound retry backoff");
     assert_eq!(tokens[0].metadata_status, TokenMetadataStatus::Pending);
     unavailable.assert_async().await;
+}
+
+/// SplitMix64: small enough to inline and deterministic per seed, so an assertion that names
+/// its seed reproduces exactly. No external property-testing dependency needed.
+struct SplitMix64(u64);
+
+impl SplitMix64 {
+    fn new(seed: u64) -> Self {
+        Self(seed)
+    }
+
+    fn next_u64(&mut self) -> u64 {
+        self.0 = self
+            .0
+            .wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+
+    /// A value in `0..n`; modulo bias is irrelevant for picking test cases.
+    fn below(&mut self, n: u64) -> u64 {
+        self.next_u64() % n
+    }
+
+    fn one_in(&mut self, n: u64) -> bool {
+        self.below(n) == 0
+    }
+}
+
+/// What the RPC answers to a token's batched `symbol`/`decimals` calls.
+#[derive(Debug, Clone, PartialEq)]
+enum MetadataAnswer {
+    Answers {
+        symbol: String,
+        decimals: u8,
+    },
+    /// Both calls revert: the legacy fallbacks apply.
+    Reverts,
+    /// Only `symbol` reverts; `decimals` answers.
+    SymbolReverts {
+        decimals: u8,
+    },
+    /// `symbol` answers; `decimals` gets a provider error that is not a revert.
+    NoDecimals {
+        symbol: String,
+    },
+}
+
+#[derive(Debug, Clone)]
+struct TokenScript {
+    address: Address,
+    metadata: MetadataAnswer,
+    analysis_hangs: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum RpcBehaviour {
+    /// Every metadata call is answered per token script.
+    Scripted,
+    /// A bound socket nobody accepts: every metadata call stalls until the budget cuts it.
+    NeverAnswers,
+}
+
+#[derive(Debug)]
+struct Scenario {
+    seed: u64,
+    rpc: RpcBehaviour,
+    scripts: Vec<TokenScript>,
+    /// Scripts in random order, with random duplicates appended.
+    input: Vec<Bytes>,
+}
+
+fn scenario(seed: u64, rpc: RpcBehaviour) -> Scenario {
+    let mut rng = SplitMix64::new(seed);
+    let count = 1 + rng.below(12) as u8;
+    let scripts: Vec<_> = (1..=count)
+        .map(|index| {
+            // The seed is part of the address so concurrently running seeds never share a
+            // token on the shared mock server.
+            let mut bytes = [0u8; 20];
+            bytes[..8].copy_from_slice(&seed.to_be_bytes());
+            bytes[19] = index;
+            let symbol = format!("T{index}");
+            let decimals = rng.below(31) as u8;
+            let metadata = match rng.below(4) {
+                0 => MetadataAnswer::Answers { symbol, decimals },
+                1 => MetadataAnswer::Reverts,
+                2 => MetadataAnswer::SymbolReverts { decimals },
+                _ => MetadataAnswer::NoDecimals { symbol },
+            };
+            TokenScript { address: Address::from(bytes), metadata, analysis_hangs: rng.one_in(4) }
+        })
+        .collect();
+    let mut input: Vec<_> = scripts
+        .iter()
+        .map(|script| script.address.to_bytes())
+        .collect();
+    for i in (1..input.len()).rev() {
+        input.swap(i, rng.below(i as u64 + 1) as usize);
+    }
+    for _ in 0..rng.below(4) {
+        let duplicate = input[rng.below(count as u64) as usize].clone();
+        input.push(duplicate);
+    }
+    Scenario { seed, rpc, scripts, input }
+}
+
+type Scripts = Arc<Mutex<HashMap<Bytes, MetadataAnswer>>>;
+
+fn scripted_answer(scripts: &Scripts, call: &Value) -> Option<MetadataAnswer> {
+    let address = Bytes::from_str(call["params"][0]["to"].as_str()?).ok()?;
+    scripts
+        .lock()
+        .unwrap()
+        .get(&address)
+        .cloned()
+}
+
+fn rpc_result(call: &Value, result: Vec<u8>) -> Value {
+    json!({"jsonrpc": "2.0", "id": call["id"], "result": Bytes::from(result)})
+}
+
+/// Routes every batch item by the token it targets (`params[0].to`) to that token's script.
+/// An unscripted token gets a provider error so the failure shows up as an unexpected
+/// pending token rather than a hung request.
+fn scripted_mock(scripts: Scripts) -> impl Fn(&mockito::Request) -> Vec<u8> {
+    let symbol_scripts = scripts.clone();
+    per_field_mock(
+        move |call| match scripted_answer(&symbol_scripts, call) {
+            Some(MetadataAnswer::Answers { symbol, .. }) |
+            Some(MetadataAnswer::NoDecimals { symbol }) => {
+                rpc_result(call, symbol.as_str().abi_encode())
+            }
+            Some(MetadataAnswer::Reverts) | Some(MetadataAnswer::SymbolReverts { .. }) => {
+                rpc_error(&call["id"], 3, "execution reverted")
+            }
+            None => rpc_error(&call["id"], -32000, "unscripted token"),
+        },
+        move |call| match scripted_answer(&scripts, call) {
+            Some(MetadataAnswer::Answers { decimals, .. }) |
+            Some(MetadataAnswer::SymbolReverts { decimals }) => {
+                rpc_result(call, decimalsCall::abi_encode_returns(&decimals))
+            }
+            Some(MetadataAnswer::Reverts) => rpc_error(&call["id"], 3, "execution reverted"),
+            Some(MetadataAnswer::NoDecimals { .. }) => {
+                rpc_error(&call["id"], -32601, "method not found")
+            }
+            None => rpc_error(&call["id"], -32000, "unscripted token"),
+        },
+    )
+}
+
+#[derive(Debug, PartialEq)]
+enum Expected {
+    Pending,
+    Ready { symbol: String, decimals: u32 },
+}
+
+/// A token only runs once it gets one of the `MAX_CONCURRENT_TOKENS` slots, which hanging
+/// tokens ahead of it in input order never release; a stalled RPC leaves everything pending.
+fn expected_outcome(scenario: &Scenario, script: &TokenScript, has_slot: bool) -> Expected {
+    if scenario.rpc == RpcBehaviour::NeverAnswers || !has_slot || script.analysis_hangs {
+        return Expected::Pending;
+    }
+    let fallback = format!("0x{:x}", script.address);
+    match &script.metadata {
+        MetadataAnswer::Answers { symbol, decimals } => {
+            Expected::Ready { symbol: symbol.clone(), decimals: u32::from(*decimals) }
+        }
+        MetadataAnswer::Reverts => Expected::Ready { symbol: fallback, decimals: 18 },
+        MetadataAnswer::SymbolReverts { decimals } => {
+            Expected::Ready { symbol: fallback, decimals: u32::from(*decimals) }
+        }
+        MetadataAnswer::NoDecimals { .. } => Expected::Pending,
+    }
+}
+
+async fn get_tokens_for(
+    scenario: &Scenario,
+    processor: &EthereumTokenPreProcessor,
+    outer_timeout: Duration,
+) -> (Vec<Token>, Arc<HangingOwnerFinder>) {
+    let finder = Arc::new(HangingOwnerFinder {
+        hanging: scenario
+            .scripts
+            .iter()
+            .filter(|script| script.analysis_hangs)
+            .map(|script| script.address.to_bytes())
+            .collect(),
+        ..Default::default()
+    });
+    let tokens = tokio::time::timeout(
+        outer_timeout,
+        processor.get_tokens(scenario.input.clone(), finder.clone(), BlockTag::Latest),
+    )
+    .await
+    .unwrap_or_else(|_| {
+        panic!("seed {}: get_tokens exceeded {outer_timeout:?}: {scenario:?}", scenario.seed)
+    });
+    (tokens, finder)
+}
+
+fn check_invariants(scenario: &Scenario, tokens: &[Token], finder: &HangingOwnerFinder) {
+    let seed = scenario.seed;
+    let mut seen = HashSet::new();
+    let expected_order: Vec<_> = scenario
+        .input
+        .iter()
+        .filter(|address| seen.insert((*address).clone()))
+        .cloned()
+        .collect();
+    let actual_order: Vec<_> = tokens
+        .iter()
+        .map(|token| token.address.clone())
+        .collect();
+    assert_eq!(
+        actual_order, expected_order,
+        "seed {seed}: one token per unique input, in first-occurrence order: {scenario:?}"
+    );
+    let by_address: HashMap<_, _> = scenario
+        .scripts
+        .iter()
+        .map(|script| (script.address.to_bytes(), script))
+        .collect();
+    let mut blocked_ahead = 0;
+    let mut slots = 0;
+    for token in tokens {
+        let script = by_address[&token.address];
+        let has_slot = blocked_ahead < MAX_CONCURRENT_TOKENS;
+        slots += usize::from(has_slot);
+        // A slot is held until both metadata and analysis finish: forever if the RPC never
+        // answers, or if this token's analysis hangs.
+        let holds_slot_forever =
+            scenario.rpc == RpcBehaviour::NeverAnswers || script.analysis_hangs;
+        blocked_ahead += usize::from(holds_slot_forever);
+        let context =
+            format!("seed {seed} ({:?}, slot: {has_slot}): {script:?} -> {token:?}", scenario.rpc);
+        match expected_outcome(scenario, script, has_slot) {
+            Expected::Pending => {
+                let placeholder = Token::pending(&token.address, Chain::Ethereum);
+                assert_eq!(
+                    serde_json::to_value(token).unwrap(),
+                    serde_json::to_value(&placeholder).unwrap(),
+                    "{context}: must stay the untouched pending placeholder"
+                );
+            }
+            Expected::Ready { symbol, decimals } => {
+                assert_eq!(token.metadata_status, TokenMetadataStatus::Ready, "{context}");
+                assert_eq!((&token.symbol, token.decimals), (&symbol, decimals), "{context}");
+                assert!(
+                    !(token.symbol == token.address.to_string() &&
+                        token.decimals == 0 &&
+                        token.quality == 0),
+                    "{context}: a ready token must never carry the pending placeholder"
+                );
+            }
+        }
+    }
+    assert_eq!(
+        finder.calls.load(Ordering::SeqCst),
+        slots,
+        "seed {seed}: exactly the tokens that got a concurrency slot start analysis: {scenario:?}"
+    );
+    assert_eq!(
+        finder.active.load(Ordering::SeqCst),
+        0,
+        "seed {seed}: every unfinished analysis must be dropped on return: {scenario:?}"
+    );
+}
+
+#[tokio::test]
+async fn get_tokens_invariants_hold_under_random_stalls() {
+    // Each seed draws 1..=12 tokens with a random metadata answer and a random analysis hang,
+    // shuffles them and appends duplicates. Scripted seeds share one mock server that routes
+    // by token address; never-answering seeds each bind their own silent socket. Any hanging
+    // token costs the full budget, so seeds run a few at a time to keep the test short.
+    const SCRIPTED_SEEDS: u64 = 150;
+    const NEVER_ANSWERING_SEEDS: u64 = 40;
+    const BUDGET: Duration = Duration::from_millis(300);
+    const OUTER_TIMEOUT: Duration = Duration::from_millis(1_500);
+    const CONCURRENT_SEEDS: usize = 8;
+
+    let scripts: Scripts = Default::default();
+    let mut server = Server::new_async().await;
+    let _metadata = server
+        .mock("POST", "/")
+        .with_body_from_request(scripted_mock(scripts.clone()))
+        .create_async()
+        .await;
+    let rpc = EthereumRpcClient::new(&server.url()).unwrap();
+    let scripted = EthereumTokenPreProcessor::new(&rpc, Chain::Ethereum, Address::ZERO)
+        .with_enrichment_budget(BUDGET);
+
+    let scenarios = (0..SCRIPTED_SEEDS)
+        .map(|seed| scenario(seed, RpcBehaviour::Scripted))
+        .chain(
+            (SCRIPTED_SEEDS..SCRIPTED_SEEDS + NEVER_ANSWERING_SEEDS)
+                .map(|seed| scenario(seed, RpcBehaviour::NeverAnswers)),
+        );
+    stream::iter(scenarios)
+        .for_each_concurrent(CONCURRENT_SEEDS, |scenario| {
+            let scripted = &scripted;
+            let scripts = &scripts;
+            async move {
+                let (tokens, finder) = match scenario.rpc {
+                    RpcBehaviour::Scripted => {
+                        scripts.lock().unwrap().extend(
+                            scenario
+                                .scripts
+                                .iter()
+                                .map(|script| (script.address.to_bytes(), script.metadata.clone())),
+                        );
+                        get_tokens_for(&scenario, scripted, OUTER_TIMEOUT).await
+                    }
+                    RpcBehaviour::NeverAnswers => {
+                        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                            .await
+                            .unwrap();
+                        let url = format!("http://{}", listener.local_addr().unwrap());
+                        let rpc = EthereumRpcClient::new(&url).unwrap();
+                        let processor =
+                            EthereumTokenPreProcessor::new(&rpc, Chain::Ethereum, Address::ZERO)
+                                .with_enrichment_budget(BUDGET);
+                        get_tokens_for(&scenario, &processor, OUTER_TIMEOUT).await
+                    }
+                };
+                check_invariants(&scenario, &tokens, &finder);
+            }
+        })
+        .await;
 }

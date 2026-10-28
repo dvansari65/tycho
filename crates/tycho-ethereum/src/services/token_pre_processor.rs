@@ -137,6 +137,12 @@ impl EthereumTokenPreProcessor {
             call_request(None, token, symbolCall {}.abi_encode()),
             call_request(None, token, decimalsCall {}.abi_encode()),
         ];
+        // Metadata is read at `latest`, not at the analysis block. The token table keeps one
+        // unversioned row per token that consumers read as current state. A latest read also
+        // needs no historical state: while the indexer catches up, a node without the processed
+        // block's state would fail a block-scoped read, and without a deadline the fallback below
+        // would store default decimals that nothing later repairs. Analysis keeps the requested
+        // block because its owner balances come from that block.
         match self
             .rpc
             .eth_call_pair(requests, BlockNumberOrTag::Latest)
@@ -386,6 +392,61 @@ mod tests {
             vec![Token::new(&address, "TEST", 6, 0, &[Some(27_500)], Chain::Ethereum, 100)];
         assert_eq!(serde_json::to_value(tokens).unwrap(), serde_json::to_value(expected).unwrap());
         response.assert_async().await;
+    }
+
+    /// A proxy can return different `decimals` at the processed block and at `latest`. Both the
+    /// hot path and recovery store the `latest` answer, so a deferred token ends up with the same
+    /// metadata as a token fetched on time.
+    #[tokio::test]
+    async fn test_metadata_follows_latest_when_it_differs_from_the_requested_block() {
+        let mut server = Server::new_async().await;
+        let metadata = server
+            .mock("POST", "/")
+            .with_header("content-type", "application/json")
+            .with_body_from_request(|request| {
+                let calls: Vec<Value> = serde_json::from_slice(request.body().unwrap()).unwrap();
+                let responses: Vec<Value> = calls
+                    .iter()
+                    .map(|call| {
+                        let at_latest = call["params"][1] == "latest";
+                        let input = call["params"][0]["input"]
+                            .as_str()
+                            .unwrap();
+                        let result = if input == Bytes::from(symbolCall {}.abi_encode()).to_string()
+                        {
+                            (if at_latest { "NEW" } else { "OLD" }).abi_encode()
+                        } else {
+                            decimalsCall::abi_encode_returns(&if at_latest { 18 } else { 6 })
+                        };
+                        json!({"jsonrpc": "2.0", "id": call["id"], "result": Bytes::from(result)})
+                    })
+                    .collect();
+                serde_json::to_vec(&responses).unwrap()
+            })
+            .expect(2)
+            .create_async()
+            .await;
+        let rpc = EthereumRpcClient::new(&server.url()).unwrap();
+        let processor = EthereumTokenPreProcessor::new(&rpc, Chain::Ethereum, COWSWAP_SETTLEMENT);
+        let address = Address::repeat_byte(1).to_bytes();
+        // Without an owner, analysis returns a Bad verdict without an RPC call, so the mock only
+        // ever sees metadata requests.
+        let no_owners = || Arc::new(TokenOwnerStore::new(Default::default()));
+
+        let on_time = processor
+            .get_tokens(vec![address.clone()], no_owners(), BlockTag::Number(100))
+            .await
+            .remove(0);
+        // The recovery worker always passes `latest`.
+        let recovered = processor
+            .recover_token(address, no_owners(), BlockTag::Latest)
+            .await
+            .expect("metadata answered");
+
+        for token in [on_time, recovered] {
+            assert_eq!((token.symbol.as_str(), token.decimals), ("NEW", 18));
+        }
+        metadata.assert_async().await;
     }
 
     #[derive(Debug)]
