@@ -1191,8 +1191,11 @@ where
                         extractor = %self.extractor_id.name,
                         "Background snapshot task dropped before sending result"
                     );
+                    // The pool leaves the state machine entirely, so its backoff count must go
+                    // too; otherwise a later park of the same pool starts from a doubled wait.
                     for id in &p.component_ids {
                         self.snapshot_queue.remove(id);
+                        self.token_retry_attempts.remove(id);
                     }
                 }
             }
@@ -4173,6 +4176,664 @@ mod test {
             (retry_at(&sync.snapshot_queue) - now).as_secs(),
             TOKEN_METADATA_RETRY_DELAY.as_secs()
         );
+    }
+
+    #[tokio::test]
+    async fn dropped_snapshot_task_clears_token_retry_attempts() {
+        // A parked pool becomes due, is re-spawned, and its background task ends without
+        // sending, as it does when the fetch panics. The pool leaves the snapshot queue, so
+        // nothing owns its retry count any more.
+        let mut sync = with_mocked_clients(true, false, None, None);
+        sync.park_for_tokens("pool".into());
+        let due = tokio::time::Instant::now() + TOKEN_METADATA_MAX_RETRY_DELAY;
+        assert_eq!(sync.take_snapshot_retries(due), vec!["pool"]);
+        let (sender, receiver) = oneshot::channel();
+        sync.snapshot_queue
+            .insert("pool".into(), SnapshotStatus::InFlight);
+        sync.snapshot_tasks.push(SnapshotTask {
+            component_ids: vec!["pool".into()],
+            snapshot_block: 10,
+            receiver,
+        });
+        drop(sender);
+        sync.drain_completed_snapshots();
+        assert!(!sync.snapshot_queue.contains_key("pool"));
+        assert!(
+            !sync
+                .token_retry_attempts
+                .contains_key("pool"),
+            "a pool that left the snapshot queue must not keep a retry count: {:?}",
+            sync.token_retry_attempts
+        );
+    }
+
+    /// SplitMix64: small enough to inline and deterministic per seed, so an assertion that
+    /// names its seed reproduces exactly. No external property-testing dependency needed.
+    struct SplitMix64(u64);
+
+    impl SplitMix64 {
+        fn new(seed: u64) -> Self {
+            Self(seed)
+        }
+
+        fn next_u64(&mut self) -> u64 {
+            self.0 = self
+                .0
+                .wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = self.0;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^ (z >> 31)
+        }
+
+        /// A value in `0..n`; modulo bias is irrelevant for picking test cases.
+        fn below(&mut self, n: u64) -> u64 {
+            self.next_u64() % n
+        }
+
+        fn one_in(&mut self, n: u64) -> bool {
+            self.below(n) == 0
+        }
+
+        fn pick<'a, T>(&mut self, items: &'a [T]) -> Option<&'a T> {
+            if items.is_empty() {
+                return None;
+            }
+            Some(&items[self.below(items.len() as u64) as usize])
+        }
+    }
+
+    type MockedSynchronizer =
+        ProtocolStateSynchronizer<ArcRPCClient<MockRPCClient>, ArcDeltasClient<MockDeltasClient>>;
+
+    /// Few pools on purpose: the bookkeeping can only go wrong where operations collide.
+    const POOLS: [&str; 8] = ["p0", "p1", "p2", "p3", "p4", "p5", "p6", "p7"];
+
+    /// Added to the real clock when harvesting retries, straddling every backoff step.
+    const RETRY_CLOCK_OFFSETS: [Duration; 8] = [
+        Duration::ZERO,
+        Duration::from_secs(4),
+        Duration::from_secs(6),
+        Duration::from_secs(11),
+        Duration::from_secs(41),
+        Duration::from_secs(161),
+        Duration::from_secs(301),
+        Duration::from_secs(1_000),
+    ];
+
+    #[derive(Debug)]
+    enum Outcome {
+        Fetched { pending: Vec<String>, admitted: Vec<String> },
+        Transient,
+        Permanent,
+    }
+
+    enum StagedResult {
+        Open(oneshot::Sender<Result<SnapshotFetchResult, SynchronizerError>>),
+        Sent(Outcome),
+    }
+
+    /// The driver's copy of one entry of `snapshot_tasks`, kept in the same order.
+    struct StagedTask {
+        ids: Vec<String>,
+        block: u64,
+        result: StagedResult,
+    }
+
+    /// The operation window in which a pool was parked with `due`.
+    struct ParkRecord {
+        due: tokio::time::Instant,
+        op_start: tokio::time::Instant,
+        op_end: tokio::time::Instant,
+    }
+
+    #[derive(Default)]
+    struct Driver {
+        tasks: Vec<StagedTask>,
+        parked: HashMap<String, ParkRecord>,
+        block: u64,
+    }
+
+    struct Step {
+        description: String,
+        removed: HashSet<String>,
+    }
+
+    impl Step {
+        fn plain(description: String) -> Self {
+            Self { description, removed: HashSet::new() }
+        }
+    }
+
+    /// Mirrors `spawn_snapshot_task` without the RPC work; the driver delivers the result.
+    fn stage_task(sync: &mut MockedSynchronizer, driver: &mut Driver, ids: Vec<String>) {
+        if sync.snapshot_tasks.is_empty() {
+            sync.buffered_deltas
+                .push(make_block_changes(driver.block, None));
+        }
+        let (sender, receiver) = oneshot::channel();
+        for id in &ids {
+            sync.snapshot_queue
+                .insert(id.clone(), SnapshotStatus::InFlight);
+        }
+        sync.snapshot_tasks.push(SnapshotTask {
+            component_ids: ids.clone(),
+            snapshot_block: driver.block,
+            receiver,
+        });
+        driver.tasks.push(StagedTask {
+            ids,
+            block: driver.block,
+            result: StagedResult::Open(sender),
+        });
+    }
+
+    fn staged_ids(sync: &MockedSynchronizer) -> HashSet<String> {
+        sync.snapshot_tasks
+            .iter()
+            .flat_map(|task| task.component_ids.iter().cloned())
+            .collect()
+    }
+
+    /// Only what a snapshot task can report pending gets parked: never a tracked pool, never
+    /// one still in flight, never a blacklisted one.
+    fn park_step(sync: &mut MockedSynchronizer, rng: &mut SplitMix64, ctx: &str) -> Option<Step> {
+        let staged = staged_ids(sync);
+        let candidates: Vec<String> = POOLS
+            .iter()
+            .map(|id| id.to_string())
+            .filter(|id| {
+                !sync
+                    .component_tracker
+                    .components
+                    .contains_key(id) &&
+                    !staged.contains(id) &&
+                    !matches!(sync.snapshot_queue.get(id), Some(SnapshotStatus::Blacklisted))
+            })
+            .collect();
+        let id = rng.pick(&candidates)?.clone();
+        let attempts_before = sync
+            .token_retry_attempts
+            .get(&id)
+            .copied()
+            .unwrap_or(0);
+        sync.park_for_tokens(id.clone());
+        assert!(
+            matches!(sync.snapshot_queue.get(&id), Some(SnapshotStatus::WaitingForTokens(_))),
+            "{ctx}: park({id}) must leave the pool waiting for tokens: {:?}",
+            sync.snapshot_queue
+        );
+        assert_eq!(
+            sync.token_retry_attempts.get(&id),
+            Some(&(attempts_before + 1)),
+            "{ctx}: park({id}) must count one more attempt"
+        );
+        Some(Step::plain(format!("park({id})")))
+    }
+
+    /// Harvests due retries and, as `state_sync` does in the same iteration, stages them
+    /// again as one in-flight task.
+    fn take_step(
+        sync: &mut MockedSynchronizer,
+        driver: &mut Driver,
+        rng: &mut SplitMix64,
+        ctx: &str,
+    ) -> Step {
+        let offset = RETRY_CLOCK_OFFSETS[rng.below(RETRY_CLOCK_OFFSETS.len() as u64) as usize];
+        let now = tokio::time::Instant::now() + offset;
+        let before = sync.snapshot_queue.clone();
+        let taken = sync.take_snapshot_retries(now);
+        let due: HashSet<&String> = before
+            .iter()
+            .filter(|(_, status)| {
+                matches!(status, SnapshotStatus::RetryNext) ||
+                    matches!(status, SnapshotStatus::WaitingForTokens(at) if *at <= now)
+            })
+            .map(|(id, _)| id)
+            .collect();
+        assert_eq!(
+            taken.iter().collect::<HashSet<_>>(),
+            due,
+            "{ctx}: take_snapshot_retries(now + {offset:?}) must return exactly the due pools; \
+             queue before: {before:?}"
+        );
+        for (id, status) in &before {
+            let after = sync.snapshot_queue.get(id);
+            if due.contains(id) {
+                assert_eq!(after, None, "{ctx}: taken {id} must leave the queue");
+            } else {
+                assert_eq!(after, Some(status), "{ctx}: take must not touch {id}");
+            }
+        }
+        let description = format!("take(now + {offset:?}) -> {taken:?}");
+        if !taken.is_empty() {
+            stage_task(sync, driver, taken);
+        }
+        Step::plain(description)
+    }
+
+    /// One delta iteration of `state_sync` around `invalidate_pending_snapshots`: the delta is
+    /// buffered while tasks are in flight, removed pools stop being tracked and pools whose TVL
+    /// crossed the add threshold are staged unless already known.
+    fn delta_step(
+        sync: &mut MockedSynchronizer,
+        driver: &mut Driver,
+        rng: &mut SplitMix64,
+        ctx: &str,
+    ) -> Step {
+        driver.block += 1;
+        let mut delta = make_block_changes(driver.block, None);
+        delta.revert = rng.one_in(4);
+        let mut removed = HashSet::new();
+        let mut to_add = Vec::new();
+        for id in POOLS {
+            match rng.below(8) {
+                0 => {
+                    delta
+                        .deleted_protocol_components
+                        .insert(id.into(), ProtocolComponent::default());
+                    removed.insert(id.to_string());
+                }
+                1 => {
+                    delta.new_protocol_components.insert(
+                        id.into(),
+                        ProtocolComponent {
+                            id: id.into(),
+                            change: ChangeType::Deletion,
+                            ..Default::default()
+                        },
+                    );
+                    removed.insert(id.to_string());
+                }
+                2 => {
+                    // Below the 50.0 removal threshold of `with_mocked_clients`.
+                    delta
+                        .component_tvl
+                        .insert(id.into(), rng.below(50) as f64);
+                    removed.insert(id.to_string());
+                }
+                3 => {
+                    delta
+                        .component_tvl
+                        .insert(id.into(), 50.0);
+                }
+                4 => {
+                    delta
+                        .component_tvl
+                        .insert(id.into(), 51.0 + rng.below(100) as f64);
+                    to_add.push(id.to_string());
+                }
+                _ => {}
+            }
+        }
+        let description = format!(
+            "delta(block {}, revert: {}, removed: {removed:?}, tvl_add: {to_add:?})",
+            driver.block, delta.revert
+        );
+        // The driver applies the documented cancellation rule to its own list so the checks
+        // compare the synchronizer against an independent expectation.
+        let (cancelled, kept): (Vec<_>, Vec<_>) = driver
+            .tasks
+            .drain(..)
+            .partition(|task| {
+                delta.revert ||
+                    task.ids
+                        .iter()
+                        .any(|id| removed.contains(id))
+            });
+        driver.tasks = kept;
+        sync.invalidate_pending_snapshots(&delta);
+        for task in cancelled {
+            for id in task.ids {
+                if !removed.contains(&id) {
+                    assert_eq!(
+                        sync.snapshot_queue.get(&id),
+                        Some(&SnapshotStatus::RetryNext),
+                        "{ctx} {description}: survivor {id} of a cancelled task must be retried"
+                    );
+                }
+            }
+        }
+        if delta.revert {
+            assert!(
+                sync.snapshot_tasks.is_empty(),
+                "{ctx} {description}: a revert must cancel every in-flight snapshot"
+            );
+            assert!(
+                sync.buffered_deltas.is_empty(),
+                "{ctx} {description}: a revert must drop every buffered delta"
+            );
+        }
+        if !sync.snapshot_tasks.is_empty() {
+            sync.buffered_deltas.push(delta.clone());
+        }
+        let to_remove: Vec<String> = removed.iter().cloned().collect();
+        sync.component_tracker
+            .stop_tracking(&to_remove);
+        let truly_new: Vec<String> = to_add
+            .into_iter()
+            .filter(|id| {
+                !removed.contains(id) &&
+                    !sync
+                        .component_tracker
+                        .components
+                        .contains_key(id) &&
+                    !sync.snapshot_queue.contains_key(id)
+            })
+            .collect();
+        if !truly_new.is_empty() {
+            stage_task(sync, driver, truly_new);
+        }
+        Step { description, removed }
+    }
+
+    /// Stages a task for pools that are neither tracked nor queued, as `truly_new` selects.
+    fn push_step(
+        sync: &mut MockedSynchronizer,
+        driver: &mut Driver,
+        rng: &mut SplitMix64,
+    ) -> Option<Step> {
+        let mut ids: Vec<String> = POOLS
+            .iter()
+            .map(|id| id.to_string())
+            .filter(|id| {
+                !sync
+                    .component_tracker
+                    .components
+                    .contains_key(id) &&
+                    !sync.snapshot_queue.contains_key(id)
+            })
+            .collect();
+        if ids.is_empty() {
+            return None;
+        }
+        for i in (1..ids.len()).rev() {
+            ids.swap(i, rng.below(i as u64 + 1) as usize);
+        }
+        ids.truncate(1 + rng.below(ids.len().min(3) as u64) as usize);
+        let description = format!("push({ids:?})");
+        stage_task(sync, driver, ids);
+        Some(Step::plain(description))
+    }
+
+    /// Delivers a random result to one open task: a fetch that parks some pools and admits the
+    /// rest, or a transient or permanent failure. Every requested pool comes back in one of the
+    /// two lists, as `fetch_snapshot_background` guarantees.
+    fn resolve_step(driver: &mut Driver, rng: &mut SplitMix64, ctx: &str) -> Option<Step> {
+        let open: Vec<usize> = driver
+            .tasks
+            .iter()
+            .enumerate()
+            .filter(|(_, task)| matches!(task.result, StagedResult::Open(_)))
+            .map(|(index, _)| index)
+            .collect();
+        let task = &mut driver.tasks[*rng.pick(&open)?];
+        let outcome = match rng.below(5) {
+            0..=2 => {
+                let (pending, admitted) = task
+                    .ids
+                    .iter()
+                    .cloned()
+                    .partition(|_| rng.one_in(2));
+                Outcome::Fetched { pending, admitted }
+            }
+            3 => Outcome::Transient,
+            _ => Outcome::Permanent,
+        };
+        let result = match &outcome {
+            Outcome::Fetched { pending, admitted } => Ok(SnapshotFetchResult {
+                pending_components: pending.clone(),
+                components: admitted
+                    .iter()
+                    .map(|id| {
+                        (id.clone(), ProtocolComponent { id: id.clone(), ..Default::default() })
+                    })
+                    .collect(),
+                contract_ids: HashSet::new(),
+                dci_update: DCIUpdate::default(),
+                snapshot: Snapshot::default(),
+                snapshot_block: task.block,
+            }),
+            Outcome::Transient => Err(SynchronizerError::Timeout("synthetic".into())),
+            Outcome::Permanent => Err(SynchronizerError::Internal("synthetic".into())),
+        };
+        let description = format!("resolve({:?} -> {outcome:?})", task.ids);
+        let StagedResult::Open(sender) =
+            std::mem::replace(&mut task.result, StagedResult::Sent(outcome))
+        else {
+            unreachable!("only open tasks are picked");
+        };
+        assert!(
+            sender.send(result).is_ok(),
+            "{ctx} {description}: the task is still staged, so its receiver must be alive"
+        );
+        Some(Step::plain(description))
+    }
+
+    fn drain_step(sync: &mut MockedSynchronizer, driver: &mut Driver, ctx: &str) -> Step {
+        let attempts_before = sync.token_retry_attempts.clone();
+        sync.drain_completed_snapshots();
+        let mut description = String::from("drain(");
+        let mut still_open = Vec::new();
+        for task in driver.tasks.drain(..) {
+            match task.result {
+                StagedResult::Open(_) => still_open.push(task),
+                StagedResult::Sent(outcome) => {
+                    description += &format!("{:?} -> {outcome:?}; ", task.ids);
+                    check_drained(sync, &task.ids, &outcome, &attempts_before, ctx);
+                }
+            }
+        }
+        driver.tasks = still_open;
+        description.push(')');
+        Step::plain(description)
+    }
+
+    fn check_drained(
+        sync: &MockedSynchronizer,
+        ids: &[String],
+        outcome: &Outcome,
+        attempts_before: &HashMap<String, u32>,
+        ctx: &str,
+    ) {
+        let queue = &sync.snapshot_queue;
+        let attempts = &sync.token_retry_attempts;
+        let components = &sync.component_tracker.components;
+        match outcome {
+            Outcome::Fetched { pending, admitted } => {
+                for id in pending {
+                    assert!(
+                        matches!(queue.get(id), Some(SnapshotStatus::WaitingForTokens(_))),
+                        "{ctx}: drained pending {id} must be parked; queue: {queue:?}"
+                    );
+                    assert_eq!(
+                        attempts.get(id),
+                        Some(
+                            &(attempts_before
+                                .get(id)
+                                .copied()
+                                .unwrap_or(0) +
+                                1)
+                        ),
+                        "{ctx}: parking {id} must count one more attempt"
+                    );
+                }
+                for id in admitted {
+                    assert!(components.contains_key(id), "{ctx}: admitted {id} must be tracked");
+                    assert!(!queue.contains_key(id), "{ctx}: admitted {id} must leave the queue");
+                    assert!(
+                        !attempts.contains_key(id),
+                        "{ctx}: admission of {id} must reset its backoff"
+                    );
+                }
+            }
+            Outcome::Transient | Outcome::Permanent => {
+                let expected = match outcome {
+                    Outcome::Transient => SnapshotStatus::RetryNext,
+                    _ => SnapshotStatus::Blacklisted,
+                };
+                for id in ids {
+                    assert_eq!(
+                        queue.get(id),
+                        Some(&expected),
+                        "{ctx}: {id} after a failed fetch; queue: {queue:?}"
+                    );
+                    assert_eq!(
+                        attempts.get(id),
+                        attempts_before.get(id),
+                        "{ctx}: a failed fetch must not touch the backoff of {id}"
+                    );
+                }
+            }
+        }
+    }
+
+    fn record_parks(
+        sync: &MockedSynchronizer,
+        driver: &mut Driver,
+        op_start: tokio::time::Instant,
+        op_end: tokio::time::Instant,
+    ) {
+        for (id, status) in &sync.snapshot_queue {
+            let SnapshotStatus::WaitingForTokens(due) = status else {
+                continue;
+            };
+            if driver
+                .parked
+                .get(id)
+                .is_none_or(|record| record.due != *due)
+            {
+                driver
+                    .parked
+                    .insert(id.clone(), ParkRecord { due: *due, op_start, op_end });
+            }
+        }
+    }
+
+    fn check_invariants(sync: &MockedSynchronizer, driver: &Driver, step: &Step, ctx: &str) {
+        let ctx = format!("{ctx} after {}", step.description);
+        let queue = &sync.snapshot_queue;
+        let attempts = &sync.token_retry_attempts;
+        let components = &sync.component_tracker.components;
+        let staged: Vec<&Vec<String>> = sync
+            .snapshot_tasks
+            .iter()
+            .map(|task| &task.component_ids)
+            .collect();
+        let state = format!(
+            "queue: {queue:?}, attempts: {attempts:?}, tracked: {:?}, staged: {staged:?}",
+            components.keys().collect::<Vec<_>>()
+        );
+        // A retry count belongs to a queued pool: parked, in flight again, retried after a
+        // cancelled task, or blacklisted. Only admission and removal clear it, and both also
+        // clear the queue entry.
+        for (id, count) in attempts {
+            assert!(
+                queue.contains_key(id),
+                "{ctx}: token_retry_attempts[{id}] = {count} outlived its queue entry; {state}"
+            );
+        }
+        for (id, status) in queue {
+            if matches!(status, SnapshotStatus::WaitingForTokens(_)) {
+                assert!(
+                    attempts
+                        .get(id)
+                        .is_some_and(|count| *count > 0),
+                    "{ctx}: {id} is parked without a retry count; {state}"
+                );
+            }
+            assert!(!components.contains_key(id), "{ctx}: {id} is tracked and queued; {state}");
+        }
+        for (id, status) in queue {
+            let SnapshotStatus::WaitingForTokens(due) = status else {
+                continue;
+            };
+            let record = &driver.parked[id];
+            let earliest = record.op_start + TOKEN_METADATA_RETRY_DELAY;
+            let latest = record.op_end + TOKEN_METADATA_MAX_RETRY_DELAY;
+            assert!(
+                (earliest..=latest).contains(due),
+                "{ctx}: {id} is due {:?} after its park, outside [{:?}, {:?}]; {state}",
+                due.saturating_duration_since(record.op_start),
+                TOKEN_METADATA_RETRY_DELAY,
+                TOKEN_METADATA_MAX_RETRY_DELAY +
+                    record
+                        .op_end
+                        .saturating_duration_since(record.op_start),
+            );
+        }
+        for id in &step.removed {
+            assert!(
+                !queue.contains_key(id) &&
+                    !attempts.contains_key(id) &&
+                    !staged
+                        .iter()
+                        .any(|ids| ids.contains(id)) &&
+                    !components.contains_key(id),
+                "{ctx}: removed {id} is still referenced; {state}"
+            );
+        }
+        let modelled: Vec<&Vec<String>> = driver
+            .tasks
+            .iter()
+            .map(|task| &task.ids)
+            .collect();
+        assert_eq!(staged, modelled, "{ctx}: staged tasks diverged from the driver; {state}");
+        let mut staged_count: HashMap<&String, usize> = HashMap::new();
+        for id in staged.iter().flat_map(|ids| ids.iter()) {
+            *staged_count.entry(id).or_default() += 1;
+        }
+        for (id, count) in &staged_count {
+            assert_eq!(*count, 1, "{ctx}: {id} is staged {count} times; {state}");
+            assert_eq!(
+                queue.get(*id),
+                Some(&SnapshotStatus::InFlight),
+                "{ctx}: staged {id} must be in flight; {state}"
+            );
+        }
+        for (id, status) in queue {
+            if *status == SnapshotStatus::InFlight {
+                assert!(
+                    staged_count.contains_key(id),
+                    "{ctx}: {id} is in flight without a task; {state}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn parking_state_machine_invariants_hold_under_random_operations() {
+        // Each seed interleaves the in-memory transitions of the snapshot state machine in a
+        // random order; time only matters for due checks, so retries are harvested at explicit
+        // future instants instead of sleeping. A failure names its seed and step.
+        const SEEDS: u64 = 300;
+        const STEPS: usize = 20;
+
+        for seed in 0..SEEDS {
+            let mut rng = SplitMix64::new(seed);
+            let mut sync = with_mocked_clients(true, false, None, None);
+            let mut driver = Driver::default();
+            for index in 0..STEPS {
+                let ctx = format!("seed {seed} step {index}");
+                let op_start = tokio::time::Instant::now();
+                let step = match rng.below(6) {
+                    0 => park_step(&mut sync, &mut rng, &ctx),
+                    1 => Some(take_step(&mut sync, &mut driver, &mut rng, &ctx)),
+                    2 => Some(delta_step(&mut sync, &mut driver, &mut rng, &ctx)),
+                    3 => push_step(&mut sync, &mut driver, &mut rng),
+                    4 => resolve_step(&mut driver, &mut rng, &ctx),
+                    _ => None,
+                };
+                // Operations without a valid target fall back to a drain, which always is.
+                let step = match step {
+                    Some(step) => step,
+                    None => drain_step(&mut sync, &mut driver, &ctx),
+                };
+                let op_end = tokio::time::Instant::now();
+                record_parks(&sync, &mut driver, op_start, op_end);
+                check_invariants(&sync, &driver, &step, &ctx);
+            }
+        }
     }
 
     #[tokio::test]
